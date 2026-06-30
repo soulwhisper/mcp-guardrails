@@ -5,7 +5,7 @@ import warnings
 
 import ext_mcp_pb2 as ext__mcp__pb2
 
-GRPC_GENERATED_VERSION = '1.81.0'
+GRPC_GENERATED_VERSION = '1.71.2'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -18,14 +18,14 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in ext_mcp_pb2_grpc.py depends on'
+        + f' but the generated code in ext_mcp_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
     )
 
 
-class ExtMcpStub:
+class ExtMcpStub(object):
     """ExtMcp is implemented by the guardrail sidecar. Both RPCs MUST be
     non-blocking and SHOULD complete well under the gateway-side processor
     timeout (recommended sidecar deadline 500ms, gateway 800-1000ms).
@@ -49,7 +49,7 @@ class ExtMcpStub:
                 _registered_method=True)
 
 
-class ExtMcpServicer:
+class ExtMcpServicer(object):
     """ExtMcp is implemented by the guardrail sidecar. Both RPCs MUST be
     non-blocking and SHOULD complete well under the gateway-side processor
     timeout (recommended sidecar deadline 500ms, gateway 800-1000ms).
@@ -93,7 +93,7 @@ def add_ExtMcpServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class ExtMcp:
+class ExtMcp(object):
     """ExtMcp is implemented by the guardrail sidecar. Both RPCs MUST be
     non-blocking and SHOULD complete well under the gateway-side processor
     timeout (recommended sidecar deadline 500ms, gateway 800-1000ms).

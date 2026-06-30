@@ -41,21 +41,51 @@ def _validate(rules: object) -> list[Rule]:
 
 
 def _load_from_path(path: str) -> list[Rule]:
-    # Use an explicit SourceFileLoader so operators can ship rule packs under
-    # arbitrary extensions (e.g. ``rules.policy``) without having to pretend
-    # they are ``.py`` modules. ``spec_from_file_location`` alone refuses to
-    # invent a loader for extensions it does not recognise.
-    from importlib.machinery import SourceFileLoader
-
-    loader = SourceFileLoader("guardrails_rules_user", path)
-    spec = importlib.util.spec_from_loader("guardrails_rules_user", loader)
-    if spec is None:
-        raise ImportError(f"Cannot load rules module from {path!r}")
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    if not hasattr(module, "RULES"):
+    # Read the source fresh from disk and exec it in an isolated namespace on
+    # every call. We deliberately AVOID importlib's module-loader machinery
+    # (SourceFileLoader / spec_from_file_location) here for two reasons:
+    #
+    #   1. SourceFileLoader persists a __pycache__/<name>.cpython-XY.pyc next
+    #      to the source and validates it by comparing the stored source mtime
+    #      to the on-disk source mtime. mtime has 1-second resolution on many
+    #      filesystems (including GitHub Actions runners), so a rule pack
+    #      rewritten within the same second is served from the STALE .pyc —
+    #      which breaks hot-reload (SIGHUP) semantics and is exactly the bug
+    #      that made test_rule_pack_reload flaky in CI.
+    #
+    #   2. spec_from_file_location refuses to invent a loader for extensions
+    #      it does not recognise (e.g. ``rules.policy``), requiring extra
+    #      plumbing. Reading + compile() + exec() works for any extension.
+    #
+    # Reading the file fresh on every load is the correct contract for a
+    # policy/config file: the on-disk bytes are the source of truth, always.
+    #
+    # We open with os.open() + os.read() rather than the buffered open() +
+    # fh.read() to bypass Python's userspace I/O buffering layer entirely.
+    # On some CI filesystems (overlayfs with writeback) a write_text() can
+    # be held in the page cache such that a buffered read() immediately
+    # afterward returns the OLD content; going straight to the raw fd forces
+    # a real read syscall that sees the post-write bytes.
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        source = b""
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            source += chunk
+    finally:
+        os.close(fd)
+    source_text = source.decode("utf-8")
+    namespace: dict[str, object] = {
+        "__name__": "guardrails_rules_user",
+        "__file__": path,
+    }
+    code = compile(source_text, path, "exec")
+    exec(code, namespace)
+    if "RULES" not in namespace:
         raise AttributeError(f"{path!r} does not expose a RULES attribute")
-    return _validate(module.RULES)
+    return _validate(namespace["RULES"])  # type: ignore[arg-type]
 
 
 def _load_from_module(dotted: str) -> list[Rule]:
@@ -114,7 +144,12 @@ class RulePack:
         return self._rules
 
     def reload(self) -> int:
-        """Re-read the rule pack from the configured source. Returns new version."""
+        """Re-read the rule pack from the configured source. Returns new version.
+
+        Re-resolves ``INVARIANT_RULES_PATH`` / ``INVARIANT_RULES_MODULE`` from
+        the environment on every call so a SIGHUP-triggered reload picks up
+        the latest on-disk bytes (the whole point of hot-reload).
+        """
         new_rules = tuple(load_rules())
         with self._lock:
             self._rules = new_rules

@@ -13,7 +13,6 @@ gated on first-stage `HUMAN_REVIEW`.
 
 [LlamaFirewall]: https://github.com/meta-llama/PurpleLlama-LlamaFirewall
 
-[![CI](https://github.com/soulwhisper/extmcp-guardrail/actions/workflows/ci.yml/badge.svg)](https://github.com/soulwhisper/extmcp-guardrail/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Image](https://img.shields.io/badge/image-ghcr.io%2Fsoulwhisper%2Fextmcp--guardrail%3A0.1.0-blue)](https://github.com/soulwhisper/extmcp-guardrail/pkgs/container/extmcp-guardrail)
 
@@ -108,10 +107,10 @@ flowchart TD
 agentgateway invokes the sidecar twice per MCP exchange through the
 `ExtMcp` gRPC service:
 
-| RPC             | When agentgateway calls it                          | Sidecar's job                                                                  |
-| --------------- | --------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `CheckRequest`  | Before forwarding the agent's request upstream      | Scan params as `TOOL` role; record + evaluate the toxic-flow trace             |
-| `CheckResponse` | Before returning the upstream response to the agent | Scan tool output / tool descriptions as `ASSISTANT` role (indirect injection)  |
+| RPC             | When agentgateway calls it                          | Sidecar's job                                                                 |
+| --------------- | --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `CheckRequest`  | Before forwarding the agent's request upstream      | Scan params as `TOOL` role; record + evaluate the toxic-flow trace            |
+| `CheckResponse` | Before returning the upstream response to the agent | Scan tool output / tool descriptions as `ASSISTANT` role (indirect injection) |
 
 Both RPCs return one of three states via a protobuf `oneof`:
 
@@ -243,25 +242,25 @@ homelab, and (with resource bumps) production. Defaults encode the
 opt-in second stage, fail-closed, 32KiB content budget, 500ms scanner
 deadline.
 
-| Group          | Env var                       | Default                | Description                                                                                                                                              |
-| -------------- | ----------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Policy         | `FAILURE_MODE`                | `failClosed`           | `failClosed` denies on scanner failure/timeout (recommended for write-capable agents). `failOpen` allows with a review flag.                       |
-| Policy         | `HUMAN_REVIEW_MODE`           | `pass`                 | How `HUMAN_REVIEW` outcomes are resolved. `pass` forwards + emits an audit warning; `deny` escalates to a hard deny.                              |
-| Scanners       | `MAX_CONTENT_BYTES`           | `32768`                | Max bytes of text fed to any scanner. Beyond this the payload is truncated (UTF-8-safe) and the decision is flagged `truncated=true` in audit.     |
-| Scanners       | `ENABLE_REGEX_SCANNER`        | `true`                 | Deterministic pattern scanner (hidden ASCII / PII / secrets). Zero ML deps.                                                                       |
-| Scanners       | `ENABLE_LLAMAFIREWALL`        | `true`                 | LlamaFirewall semantic scanners (PromptGuard-2 + CodeShield). Falls back to regex-only if the package is absent.                                  |
-| Scanners       | `ENABLE_AGENT_ALIGNMENT`      | `false`                | LLM-based AgentAlignment. Off by default; only triggered as a second stage when PromptGuard flags `HUMAN_REVIEW` on a response.                   |
-| Invariant      | `INVARIANT_WINDOW`            | `64`                   | Sliding-window size for the cross-call toxic-flow trace. Covers a typical homelab agent tool-use chain; bump for long multi-step plans.           |
-| Invariant      | `INVARIANT_RULES_PATH`        | *(unset)*              | Filesystem path to a rule pack (`.py` / `.policy`). Hot-reloadable via `SIGHUP`. Takes precedence over `INVARIANT_RULES_MODULE`.                  |
-| Invariant      | `INVARIANT_RULES_MODULE`      | `guardrails.rules.default` | Dotted Python module path to a rule pack. Used when `INVARIANT_RULES_PATH` is unset.                                                          |
-| Timing         | `SCANNER_TIMEOUT_MS`          | `500`                  | Per-scanner deadline in milliseconds. Exceeded -> treated per `FAILURE_MODE`. Keep sidecar < gateway so the sidecar decides first.                |
-| Networking     | `LISTEN_ADDR`                 | `[::]:9001`            | gRPC bind address. `127.0.0.1:9001` for loopback-only (e.g. sidecar-on-localhost).                                                                |
-| Networking     | `SERVER_MAX_WORKERS`          | `8`                    | `grpc.aio` ThreadPoolExecutor size. Each in-flight RPC occupies one worker; raise for high-concurrency deployments.                                |
-| Observability  | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(unset)*              | OTLP/gRPC endpoint (e.g. `http://otel-collector.observability.svc:4317`). When unset or OTel SDK absent, the sidecar degrades to audit-only.       |
-| Observability  | `OTEL_SERVICE_NAME`           | `extmcp-guardrail`     | Service name reported on OTel spans/metrics.                                                                                                     |
-| Observability  | `AUDIT_LOG_PATH`              | *(unset)*              | Append-only JSONL audit log path. `-` or unset -> stdout. Always on; survives OTel outages.                                                       |
-| Misc           | `GUARDRAIL_DRY_RUN`           | `false`                | Replace all real scanners with allow-stubs. Use to validate wiring without loading ML models.                                                    |
-| Misc           | `LOG_LEVEL`                   | `INFO`                 | Python logging level (`DEBUG` / `INFO` / `WARNING` / `ERROR`).                                                                                  |
+| Group         | Env var                       | Default                    | Description                                                                                                                                    |
+| ------------- | ----------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Policy        | `FAILURE_MODE`                | `failClosed`               | `failClosed` denies on scanner failure/timeout (recommended for write-capable agents). `failOpen` allows with a review flag.                   |
+| Policy        | `HUMAN_REVIEW_MODE`           | `pass`                     | How `HUMAN_REVIEW` outcomes are resolved. `pass` forwards + emits an audit warning; `deny` escalates to a hard deny.                           |
+| Scanners      | `MAX_CONTENT_BYTES`           | `32768`                    | Max bytes of text fed to any scanner. Beyond this the payload is truncated (UTF-8-safe) and the decision is flagged `truncated=true` in audit. |
+| Scanners      | `ENABLE_REGEX_SCANNER`        | `true`                     | Deterministic pattern scanner (hidden ASCII / PII / secrets). Zero ML deps.                                                                    |
+| Scanners      | `ENABLE_LLAMAFIREWALL`        | `true`                     | LlamaFirewall semantic scanners (PromptGuard-2 + CodeShield). Falls back to regex-only if the package is absent.                               |
+| Scanners      | `ENABLE_AGENT_ALIGNMENT`      | `false`                    | LLM-based AgentAlignment. Off by default; only triggered as a second stage when PromptGuard flags `HUMAN_REVIEW` on a response.                |
+| Invariant     | `INVARIANT_WINDOW`            | `64`                       | Sliding-window size for the cross-call toxic-flow trace. Covers a typical homelab agent tool-use chain; bump for long multi-step plans.        |
+| Invariant     | `INVARIANT_RULES_PATH`        | _(unset)_                  | Filesystem path to a rule pack (`.py` / `.policy`). Hot-reloadable via `SIGHUP`. Takes precedence over `INVARIANT_RULES_MODULE`.               |
+| Invariant     | `INVARIANT_RULES_MODULE`      | `guardrails.rules.default` | Dotted Python module path to a rule pack. Used when `INVARIANT_RULES_PATH` is unset.                                                           |
+| Timing        | `SCANNER_TIMEOUT_MS`          | `500`                      | Per-scanner deadline in milliseconds. Exceeded -> treated per `FAILURE_MODE`. Keep sidecar < gateway so the sidecar decides first.             |
+| Networking    | `LISTEN_ADDR`                 | `[::]:9001`                | gRPC bind address. `127.0.0.1:9001` for loopback-only (e.g. sidecar-on-localhost).                                                             |
+| Networking    | `SERVER_MAX_WORKERS`          | `8`                        | `grpc.aio` ThreadPoolExecutor size. Each in-flight RPC occupies one worker; raise for high-concurrency deployments.                            |
+| Observability | `OTEL_EXPORTER_OTLP_ENDPOINT` | _(unset)_                  | OTLP/gRPC endpoint (e.g. `http://otel-collector.observability.svc:4317`). When unset or OTel SDK absent, the sidecar degrades to audit-only.   |
+| Observability | `OTEL_SERVICE_NAME`           | `extmcp-guardrail`         | Service name reported on OTel spans/metrics.                                                                                                   |
+| Observability | `AUDIT_LOG_PATH`              | _(unset)_                  | Append-only JSONL audit log path. `-` or unset -> stdout. Always on; survives OTel outages.                                                    |
+| Misc          | `GUARDRAIL_DRY_RUN`           | `false`                    | Replace all real scanners with allow-stubs. Use to validate wiring without loading ML models.                                                  |
+| Misc          | `LOG_LEVEL`                   | `INFO`                     | Python logging level (`DEBUG` / `INFO` / `WARNING` / `ERROR`).                                                                                 |
 
 > The table above is the source of truth for runtime configuration and is
 > kept in sync with `guardrails/config.py`. (The two `INVARIANT_RULES_*`
@@ -276,11 +275,11 @@ when the same `(tool, args)` fingerprint repeats `threshold` times).
 
 ### ToxicFlowRule vs LoopRule
 
-- **`ToxicFlowRule`** — *ordered subsequence* matcher. Steps need not be
+- **`ToxicFlowRule`** — _ordered subsequence_ matcher. Steps need not be
   contiguous in the trace; intervening calls are allowed. Use for
   "X then Y" exfiltration / escalation patterns
   (e.g. `inbox_read` -> `email_send` to an external recipient).
-- **`LoopRule`** — *fingerprint repetition* matcher. The fingerprint is
+- **`LoopRule`** — _fingerprint repetition_ matcher. The fingerprint is
   `tool + sorted_args_json`, so a parameterised search (args differ each
   call) does **not** fire — only an identical retry loop does. Use for
   prompt-injection retry storms hammering a denied tool.
@@ -388,14 +387,14 @@ All 71 unit tests and the e2e smoke are green on a fresh clone.
 
 ## Security model and failure modes
 
-| Failure                         | Behaviour                                                                                                                                                              |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Failure                                       | Behaviour                                                                                                                                                              |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Scanner raises / exceeds `SCANNER_TIMEOUT_MS` | `failClosed` -> `BLOCK` -> aggregator denies -> `error` oneof -> agentgateway returns JSON-RPC `-32001`. `failOpen` -> `HUMAN_REVIEW` -> forwarded with audit warning. |
-| Sidecar Pod unreachable         | agentgateway's mcp-guardrails processor fails closed -> MCP exchange denied -> JSON-RPC `-32001` returned to the agent.                                                |
-| Model load failure (PromptGuard-2)         | Pod readiness probe stays `NOT_SERVING`; the Pod is removed from the Service endpoints. No traffic reaches a half-initialised sidecar.                                  |
-| Malformed JSON-RPC payload      | Servicer returns `AuthorizationError{INVALID_ARGUMENT}` (fail-closed on parse failure).                                                                                |
-| Tool output > `MAX_CONTENT_BYTES`          | Text is truncated on a UTF-8 boundary; the decision is flagged `truncated=true` in the audit span. 32KiB default covers the attacker-relevant head of any payload.       |
-| stdio upstream                  | agentgateway forwards an empty header set for stdio upstreams. Do **not** rely on headers for authn/authz when `metadata_context.upstream_transport == "stdio"`.         |
+| Sidecar Pod unreachable                       | agentgateway's mcp-guardrails processor fails closed -> MCP exchange denied -> JSON-RPC `-32001` returned to the agent.                                                |
+| Model load failure (PromptGuard-2)            | Pod readiness probe stays `NOT_SERVING`; the Pod is removed from the Service endpoints. No traffic reaches a half-initialised sidecar.                                 |
+| Malformed JSON-RPC payload                    | Servicer returns `AuthorizationError{INVALID_ARGUMENT}` (fail-closed on parse failure).                                                                                |
+| Tool output > `MAX_CONTENT_BYTES`             | Text is truncated on a UTF-8 boundary; the decision is flagged `truncated=true` in the audit span. 32KiB default covers the attacker-relevant head of any payload.     |
+| stdio upstream                                | agentgateway forwards an empty header set for stdio upstreams. Do **not** rely on headers for authn/authz when `metadata_context.upstream_transport == "stdio"`.       |
 
 The fail-closed posture is deliberate: an agent that can call real tools
 (write files, send email, apply k8s manifests) is far more dangerous when a
