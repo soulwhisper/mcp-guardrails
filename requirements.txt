@@ -21,7 +21,7 @@ torch==2.4.0
 # Invariant Guardrails SDK (optional; the bundled rule engine in
 # guardrails/invariant.py is the primary implementation, but invariant-ai
 # provides richer rule DSLs if a deployment wants them).
-invariant-ai>=0.0.4
+invariant-ai>=0.3.5
 
 # OpenTelemetry — only the SDK + OTLP exporter; the sidecar degrades to
 # stdout-audit-only if these are absent.
