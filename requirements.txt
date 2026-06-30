@@ -8,7 +8,7 @@
 grpcio==1.81.0
 grpcio-tools==1.81.0
 grpcio-health-checking==1.81.0
-protobuf>=4.25,<6
+protobuf>=4.25,<8
 
 # LlamaFirewall — semantic scanners (PromptGuard 2, AgentAlignment, CodeShield).
 # Imported lazily; the package boots without it (regex-only mode) if absent.

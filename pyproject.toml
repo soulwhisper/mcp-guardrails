@@ -21,7 +21,7 @@ classifiers = [
 dependencies = [
     "grpcio>=1.62,<2",
     "grpcio-health-checking>=1.62,<2",
-    "protobuf>=4.25,<6",
+    "protobuf>=4.25,<8",
 ]
 
 [project.optional-dependencies]
