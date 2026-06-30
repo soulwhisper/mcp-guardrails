@@ -80,7 +80,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             PY_VERSION=3.11-slim
-            HF_TOKEN=${{ secrets.HF_TOKEN }}
           # HF_TOKEN is passed as a BuildKit secret (not a build-arg) so it
           # never appears in the image layers or build history. The Dockerfile
           # mounts it at /run/secrets/hf_token and uses it to pre-download the
@@ -91,6 +90,8 @@ jobs:
           # https://huggingface.co/settings/tokens, accept the PromptGuard-2
           # license at https://huggingface.co/meta-llama/Prompt-Guard-2-86M,
           # and add it as the HF_TOKEN secret in the repo's GitHub settings.
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
