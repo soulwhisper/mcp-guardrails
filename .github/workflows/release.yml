@@ -31,7 +31,7 @@ jobs:
         # The container image for this tag is published by docker-publish.yml
         # (same `v*` tag trigger, parallel workflow). This step only creates
         # the GitHub Release object with auto-generated notes.
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           draft: false
