@@ -84,7 +84,7 @@ jobs:
       - name: Run pytest with coverage
         # The committed proto stubs are used as-is (no regeneration). The
         # proto-check job verifies they are in sync with the .proto.
-        # Generates: coverage.xml (Codecov), coverage.json (badge), term report.
+        # Generates: coverage.xml (Codecov), term report.
         run: |
           python -m pytest tests/ -q \
               --cov=guardrails --cov=server \
@@ -133,16 +133,6 @@ jobs:
           path: coverage.xml
           if-no-files-found: warn
 
-      - name: Upload coverage JSON
-        # Used by the README coverage badge (shields.io endpoint reads this
-        # artifact via the GitHub Actions badge API) and by downstream tools.
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-json
-          path: coverage.json
-          if-no-files-found: warn
-
       - name: Upload to Codecov
         # Best-effort: skip when the token is not available (forks / dependabot).
         if: ${{ env.CODECOV_TOKEN != '' }}
@@ -183,69 +173,6 @@ jobs:
         # class style, and f-string formatting) against the committed stubs.
         # Fails only on real proto contract drift, not patch-version bumps.
         run: python scripts/proto_check.py
-
-  # Generates a shields.io-compatible JSON badge from the coverage report and
-  # commits it to .github/coverage-badge.json on main. The README coverage
-  # badge reads this file via the raw.githubusercontent.com endpoint, so the
-  # badge stays current without any third-party service (Codecov etc.).
-  # Only runs on push to main (not PRs) to avoid churning the badge on every PR.
-  coverage-badge:
-    name: Update coverage badge
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.test.result == 'success'
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download coverage JSON artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: coverage-json
-          path: coverage-artifact
-
-      - name: Generate shields.io badge JSON
-        run: |
-          python - <<'PY'
-          import json
-          data = json.load(open("coverage-artifact/coverage.json"))
-          pct = data["totals"]["percent_covered"]
-          # shields.io endpoint schema: { schemaVersion, label, message, color }
-          if pct >= 90:
-              color = "brightgreen"
-          elif pct >= 80:
-              color = "green"
-          elif pct >= 70:
-              color = "yellow"
-          elif pct >= 60:
-              color = "orange"
-          else:
-              color = "red"
-          badge = {
-              "schemaVersion": 1,
-              "label": "coverage",
-              "message": f"{pct:.0f}%",
-              "color": color,
-          }
-          with open(".github/coverage-badge.json", "w", encoding="utf-8") as fh:
-              json.dump(badge, fh, indent=2)
-              fh.write("\n")
-          print(f"badge: {badge}")
-          PY
-
-      - name: Commit badge
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/coverage-badge.json
-          if git diff --cached --quiet; then
-            echo "badge unchanged, no commit"
-          else
-            git commit -m "chore: update coverage badge [skip ci]"
-            git push
-          fi
 
   # Single required-status-check target for branch protection. Branch
   # protection can be configured to require only `ci-pass` instead of naming

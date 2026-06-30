@@ -13,9 +13,6 @@ gated on first-stage `HUMAN_REVIEW`.
 
 [LlamaFirewall]: https://github.com/meta-llama/PurpleLlama-LlamaFirewall
 
-[![CI](https://github.com/soulwhisper/extmcp-guardrails/actions/workflows/ci.yml/badge.svg)](https://github.com/soulwhisper/extmcp-guardrails/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/soulwhisper/extmcp-guardrails/actions/workflows/codeql.yml/badge.svg)](https://github.com/soulwhisper/extmcp-guardrails/actions/workflows/codeql.yml)
-[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/soulwhisper/extmcp-guardrails/main/.github/coverage-badge.json)](https://github.com/soulwhisper/extmcp-guardrails/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Image](https://img.shields.io/badge/image-ghcr.io%2Fsoulwhisper%2Fextmcp--guardrail%3A0.1.0-blue)](https://github.com/soulwhisper/extmcp-guardrails/pkgs/container/extmcp-guardrails)
 
@@ -390,8 +387,6 @@ All 72 unit tests and the e2e smoke are green on a fresh clone.
 
 CI runs the unit suite with coverage on every push/PR. The coverage
 percentage is published as a [job summary](https://github.com/soulwhisper/extmcp-guardrails/actions/workflows/ci.yml)
-markdown table and as the README coverage badge (auto-updated on every push
-to `main` via the `coverage-badge` CI job).
 
 ## Security model and failure modes
 
