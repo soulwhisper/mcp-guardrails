@@ -215,8 +215,10 @@ docker run --rm -p 9001:9001 \
 The `PROMPT_GUARD` scanner uses the **public, non-gated** ONNX model
 [`gravitee-io/Llama-Prompt-Guard-2-86M-onnx`](https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-86M-onnx)
 via ONNX Runtime (CPU inference). No HuggingFace token needed — the model
-repo is public and non-gated. No torch dependency, smaller image (~600MB vs
-~2GB for the torch path).
+repo is public and non-gated. The `.onnx` graph is loaded with `onnxruntime`
+directly (no `optimum`, no `torch`) — `onnxruntime` (~15MB) + `transformers`
+(tokenizer-only) is the full ML dependency surface, so the image stays small
+(~600MB) and truly torch-free.
 
 ```bash
 # No HF_TOKEN needed — ONNX model is public
@@ -229,6 +231,23 @@ docker run --rm -p 9001:9001 \
 The Dockerfile pre-downloads the ONNX model at build time (`model.onnx`,
 full-precision, ~350MB, accuracy 98.01%), so the image is self-contained and
 air-gappable.
+
+##### Building behind the GFW / on a slow network
+
+The model download from `huggingface.co` can be slow or blocked behind the GFW.
+Pass the `HF_ENDPOINT` build-arg (defaults to off) to use a mirror:
+
+```bash
+# Use the hf-mirror.com mirror (works WITH hf_transfer, reachable from CI)
+docker build --build-arg HF_ENDPOINT=https://hf-mirror.com -t mcp-guardrails .
+```
+
+For CI (`docker-publish.yml`), set `HF_ENDPOINT=https://hf-mirror.com` as a
+repository **Variable** (not a secret — it must be readable in the build-args).
+
+The model-download layer is cached across builds (decoupled `models` stage +
+`cache-from: type=gha`), so the download only runs when the model actually
+changes.
 
 #### AgentAlignment LLM (second-stage, opt-in)
 
@@ -256,10 +275,10 @@ docker run --rm -p 9001:9001 \
 
 #### Fallback: regex-only mode
 
-If `optimum[onnxruntime]` is not installed, the build still succeeds (models
-stage skipped) and the sidecar boots in **regex-only mode** — the ONNX scanner
-import fails gracefully and only the `RegexScanner` + `InvariantEngine` are
-active. This is the default for CI (the test job doesn't install onnxruntime).
+If `onnxruntime`/`transformers` is not installed, the build still succeeds
+(models stage skipped) and the sidecar boots in **regex-only mode** — the ONNX
+scanner import fails gracefully and only the `RegexScanner` + `InvariantEngine`
+are active. This is the default for CI (the test job doesn't install onnxruntime).
 
 ### Dry-run mode
 
@@ -300,10 +319,11 @@ deadline.
 | Policy         | `HUMAN_REVIEW_MODE`              | `pass`                        | How `HUMAN_REVIEW` outcomes are resolved. `pass` forwards + emits an audit warning; `deny` escalates to a hard deny.                           |
 | Scanners       | `MAX_CONTENT_BYTES`              | `32768`                       | Max bytes of text fed to any scanner. Beyond this the payload is truncated (UTF-8-safe) and the decision is flagged `truncated=true` in audit. |
 | Scanners       | `ENABLE_REGEX_SCANNER`           | `true`                        | Deterministic pattern scanner (hidden ASCII / PII / secrets). Zero ML deps.                                                                    |
-| Scanners       | `ENABLE_PROMPTGUARD`             | `true`                        | ONNX PromptGuard semantic scanner. Falls back to regex-only if `optimum[onnxruntime]` is absent.                                               |
+| Scanners       | `ENABLE_PROMPTGUARD`             | `true`                        | ONNX PromptGuard semantic scanner. Falls back to regex-only if `onnxruntime`/`transformers` is absent.                                               |
 | Scanners       | `ENABLE_AGENT_ALIGNMENT`         | `false`                       | LLM-based AgentAlignment. Off by default; only triggered as a second stage when PromptGuard flags `HUMAN_REVIEW` on a response.                |
 | PromptGuard    | `LF_ONNX_MODEL`                  | `gravitee-io/...-onnx`        | ONNX model repo ID. Public, non-gated — no HF_TOKEN needed.                                                                                    |
 | PromptGuard    | `LF_ONNX_FILE`                   | `model.onnx`                  | Which `.onnx` file to load. `model.onnx` = full-precision (98.01% accuracy). `model.quant.onnx` = quantized (89.89%, ~90MB).                   |
+| PromptGuard    | `LF_ONNX_LOCAL_DIR`              | _(unset; `/models/hf/pg2` in container)_ | Local dir of a pre-baked model. When set, load tokenizer + `.onnx` from disk (air-gapped, no hub access). |
 | PromptGuard    | `LF_PROMPTGUARD_BLOCK_THRESHOLD` | `0.9`                         | Block threshold (0.0-1.0). PromptGuard score >= threshold -> BLOCK.                                                                            |
 | AgentAlignment | `LF_ALIGNMENT_MODEL`             | `meta-llama/...-FP8`          | LLM model name for AgentAlignment (only when `ENABLE_AGENT_ALIGNMENT=true`). Default: Llama-4-Maverick via Together AI.                        |
 | AgentAlignment | `LF_ALIGNMENT_API_BASE`          | `https://api.together.xyz/v1` | LLM API base URL (OpenAI-compatible). Override for OpenAI, Azure, vLLM, Ollama, etc.                                                           |
@@ -410,7 +430,7 @@ agentgateway. Key points:
 - **Readiness probe**: the gRPC `grpc.health.v1` check goes `SERVING` only
   after the engine warms up (PromptGuard-2 model load). This keeps the Pod
   out of the Service endpoints during cold start.
-- **Resources**: 2Gi memory budget covers torch CPU + PromptGuard-2-86M
+- **Resources**: 2Gi memory budget covers onnxruntime CPU + PromptGuard-2-86M
   (~350MB weights). Bump to 4Gi for `ENABLE_AGENT_ALIGNMENT=1` (LLM-based
   alignment holds an extra model in memory).
 

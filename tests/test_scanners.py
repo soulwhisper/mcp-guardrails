@@ -190,28 +190,38 @@ def test_truncate_utf8_boundary_safe():
 # ---------------------------------------------------------------------------
 # OnnxPromptGuardScanner scoring math
 # ---------------------------------------------------------------------------
-# These tests inject a fake tokenizer + model so the softmax scoring logic is
-# exercised without the ~1GB optimum/onnxruntime stack. Skipped in CI (which
-# is ML-free) via the numpy importorskip — _score imports numpy at call time.
+# These tests inject a fake tokenizer + ONNX session so the softmax scoring
+# logic is exercised without onnxruntime/transformers installed. Skipped in CI
+# (which is ML-free) via the numpy importorskip — _score imports numpy at call
+# time. The fake session mimics onnxruntime.InferenceSession: get_inputs()
+# declares the feed keys, run() returns the logits array.
 
 
-class _FakeOutput:
-    def __init__(self, logits):
-        self.logits = logits
+class _FakeInput:
+    def __init__(self, name):
+        self.name = name
 
 
-class _FakeModel:
-    def __init__(self, logits):
+class _FakeSession:
+    def __init__(self, logits, input_names=("input_ids", "token_type_ids", "attention_mask")):
         self._logits = logits
+        self._inputs = [_FakeInput(n) for n in input_names]
 
-    def __call__(self, **kwargs):
-        return _FakeOutput(self._logits)
+    def get_inputs(self):
+        return self._inputs
+
+    def run(self, _targets, _feed):
+        return [self._logits]
 
 
 class _FakeTokenizer:
     def __call__(self, text, **kwargs):
         # Mimic transformers' return value: a dict of input tensors.
-        return {"input_ids": [[0, 1, 2]]}
+        return {
+            "input_ids": [[0, 1, 2]],
+            "token_type_ids": [[0, 0, 0]],
+            "attention_mask": [[1, 1, 1]],
+        }
 
 
 def _scanner_with_logits(logits):
@@ -223,7 +233,7 @@ def _scanner_with_logits(logits):
     # Bypass the lazy model load by pre-injecting fakes.
     scanner._loaded = True
     scanner._tokenizer = _FakeTokenizer()
-    scanner._model = _FakeModel(np.array([logits], dtype=np.float64))
+    scanner._sess = _FakeSession(np.array([logits], dtype=np.float64))
     return scanner
 
 
@@ -260,3 +270,42 @@ async def test_onnx_scan_allows_when_safe():
     scanner = _scanner_with_logits([5.0, 0.0, 0.0])
     res = await scanner.scan("ok", "tool")
     assert res.outcome is ScanOutcome.ALLOW
+
+
+def test_onnx_load_prefers_local_dir(tmp_path, monkeypatch):
+    """When local_dir is set and exists, _load reads the .onnx + tokenizer from
+    there (no HF hub access). Monkeypatches onnxruntime + AutoTokenizer so no
+    real model is needed. Skipped in CI (no onnxruntime/transformers)."""
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("transformers")
+    import onnxruntime as ort
+    from transformers import AutoTokenizer
+
+    from guardrails.scanners import OnnxPromptGuardScanner
+
+    (tmp_path / "model.onnx").write_bytes(b"\x00not-a-real-onnx")
+    calls: dict[str, object] = {}
+
+    class FakeSess:
+        def __init__(self, path, **_kw):
+            calls["model_path"] = path
+
+        def get_inputs(self):
+            return []
+
+        def run(self, *_a):
+            return [[[0.0, 0.0, 0.1]]]
+
+    monkeypatch.setattr(ort, "InferenceSession", FakeSess)
+    monkeypatch.setattr(
+        AutoTokenizer, "from_pretrained", lambda src: calls.setdefault("tok_src", src)
+    )
+
+    scanner = OnnxPromptGuardScanner(local_dir=str(tmp_path), file_name="model.onnx")
+    scanner._load()
+    import os
+
+    assert calls["model_path"] == os.path.join(str(tmp_path), "model.onnx")
+    assert calls["tok_src"] == str(tmp_path)
+    assert scanner._loaded is True
+    assert scanner._sess is not None

@@ -103,20 +103,24 @@ class GuardrailEngine:
                 response_scanners.append(RegexScanner())
             if config.enable_promptguard:
                 # ONNX PromptGuard — public, non-gated model. No HF_TOKEN needed.
-                # Uses optimum[onnxruntime] for CPU inference (no torch dependency).
+                # Loads the .onnx graph with onnxruntime directly (no optimum,
+                # no torch). When lf_onnx_local_dir is set (container pre-bakes
+                # the model there), the scanner loads from disk — air-gappable.
                 try:
                     onnx_scanner = OnnxPromptGuardScanner(
                         model_id=config.lf_onnx_model,
                         file_name=config.lf_onnx_file,
                         block_threshold=config.lf_promptguard_block_threshold,
+                        local_dir=config.lf_onnx_local_dir,
                     )
                     request_scanners.append(onnx_scanner)
                     response_scanners.append(onnx_scanner)
                     logger.info(
-                        "ONNX PromptGuard enabled (model=%s, file=%s, threshold=%.2f) — "
-                        "public model, no HF_TOKEN required",
+                        "ONNX PromptGuard enabled (model=%s, file=%s, local_dir=%s, "
+                        "threshold=%.2f) — public model, no HF_TOKEN required",
                         config.lf_onnx_model,
                         config.lf_onnx_file,
+                        config.lf_onnx_local_dir or "(hub)",
                         config.lf_promptguard_block_threshold,
                     )
                 except ImportError as exc:

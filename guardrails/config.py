@@ -23,6 +23,11 @@ LlamaFirewall ships with, avoiding the 401 Unauthorized build failure.
                                image at the cost of recall.
   LF_PROMPTGUARD_BLOCK_THRESHOLD  Block threshold (0.0-1.0). Score >= threshold
                                -> BLOCK. Default: 0.9.
+  LF_ONNX_LOCAL_DIR            Local directory of a pre-baked model. When set
+                               (the container pre-downloads to /models/hf/pg2),
+                               the scanner loads the tokenizer + .onnx from
+                               disk — no HF hub access at runtime. Default:
+                               unset (resolve via the HF hub cache).
   HF_HOME                      HuggingFace cache directory. Default: /models/hf
                                (set in Dockerfile).
   HF_TOKEN                     HuggingFace token. NOT required for the ONNX
@@ -102,6 +107,11 @@ class GuardrailConfig:
     # Default: model.onnx (full-precision, ~350MB, accuracy 98.01%).
     lf_onnx_model: str = "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
     lf_onnx_file: str = "model.onnx"
+    # Local directory of a pre-baked model (Dockerfile pre-downloads to
+    # /models/hf/pg2). When set, the scanner loads the tokenizer + .onnx from
+    # this dir instead of hitting the HF hub — enables air-gapped runs and
+    # skips the runtime download. None -> resolve via the HF hub cache.
+    lf_onnx_local_dir: str | None = None
     lf_promptguard_block_threshold: float = 0.9
 
     # --- AgentAlignment LLM (second-stage, opt-in) ---
@@ -156,6 +166,7 @@ class GuardrailConfig:
                 "LF_ONNX_MODEL", "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
             ),
             lf_onnx_file=os.environ.get("LF_ONNX_FILE", "model.onnx"),
+            lf_onnx_local_dir=os.environ.get("LF_ONNX_LOCAL_DIR") or None,
             lf_promptguard_block_threshold=_env_float(
                 "LF_PROMPTGUARD_BLOCK_THRESHOLD", 0.9
             ),

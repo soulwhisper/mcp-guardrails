@@ -17,6 +17,25 @@ PYTHONPATH = "{{ config_root }}"
 description = "Install dev/test deps into the active Python (no ML stack)"
 run = "pip install -e \".[dev]\""
 
+[tasks.install-onnx]
+description = "Install the ONNX PromptGuard stack (onnxruntime + transformers, NO torch)"
+run = "pip install -e \".[onnx]\""
+
+[tasks.download-model]
+description = "Pre-download the ONNX PromptGuard model into the HF cache (reused by runs/tests). Fast via hf_transfer."
+run = """
+python - <<'PY'
+import os
+os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+from huggingface_hub import snapshot_download
+p = snapshot_download(
+    repo_id=os.environ.get("LF_ONNX_MODEL", "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"),
+    allow_patterns=[os.environ.get("LF_ONNX_FILE", "model.onnx"), "config.json", "tokenizer*", "special_tokens_map.json", "vocab*"],
+)
+print(f"model cached at {p}")
+PY
+"""
+
 [tasks.test]
 description = "Run the unit test suite"
 run = "python -m pytest tests/ -q"

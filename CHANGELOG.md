@@ -9,12 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ONNX PromptGuard is now truly torch-free.** Dropped `optimum` (which
+  hard-requires `torch>=1.11`, ~750MB) — the scanner loads the `.onnx` graph
+  with `onnxruntime.InferenceSession` directly and tokenises with
+  `transformers.AutoTokenizer` (tokenizer-only, no torch extra). The image is
+  ~700MB smaller and `pip install` is minutes faster; the "no torch" design
+  claim is now actually true. Scoring (stable softmax over the 3-class logits)
+  is unchanged.
+- **Faster Docker builds.** The `models` stage is now self-contained (installs
+  only `huggingface-hub` + `hf_transfer`, decoupled from the builder) so a
+  `requirements.txt` bump no longer invalidates the ~350MB model-download
+  layer cache. A BuildKit cache mount (`/hf-cache`) persists the HF download
+  across builds, and `HF_HUB_ENABLE_HF_TRANSFER=1` parallelises the LFS
+  download (2-5x faster). The model is materialised as real flat files under
+  `/models/hf/pg2` (copy, not symlink) so the runtime image is independent of
+  the cache mount.
 - **`docker-publish.yml`** now triggers on bare version tags (`0.2.0`) as well
   as `v`-prefixed ones (`v0.2.0`) — previously only `v*` matched, so a
   bare-semver tag push did not build the image. The `push: tags` event covers
   both tag creation and tag force-update (re-point). The Trivy scan step's
   image-ref now keys off `github.ref_type == 'tag'` instead of a `v` prefix
   check, so bare tags scan the just-built `latest` image.
+
+### Added
+
+- **GFW / slow-network build-arg** for the model download: `HF_ENDPOINT`
+  (HuggingFace mirror, e.g. `https://hf-mirror.com` — the recommended fix,
+  works with `hf_transfer`, reachable from CI). `docker-publish.yml` reads it
+  from the repository **Variable** `vars.HF_ENDPOINT` so CI can use the mirror
+  without code changes.
+- **`LF_ONNX_LOCAL_DIR`** config knob + `OnnxPromptGuardScanner(local_dir=...)`:
+  when set (the container pre-bakes the model at `/models/hf/pg2`), the scanner
+  loads the tokenizer + `.onnx` from disk — no HF hub access at runtime
+  (air-gappable, `HF_HUB_OFFLINE=1`).
+- **`.mise.toml`**: `install-onnx` task (torch-free ONNX stack) and
+  `download-model` task (pre-fetches the model into the HF cache via
+  `hf_transfer` for fast local test runs).
+
+### Removed
+
+- **`optimum[onnxruntime]`** dependency (pulled torch). Replaced by direct
+  `onnxruntime` usage.
+- **`release.yml` workflow** — GitHub Releases are now created manually via the
+  GitHub UI (tag → Draft a new release) with the `CHANGELOG.md` section pasted
+  as the description. `docker-publish.yml` is the only workflow that fires on
+  version tags. `CONTRIBUTING.md` release process updated accordingly.
 
 ### Removed
 

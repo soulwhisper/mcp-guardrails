@@ -28,12 +28,15 @@ dependencies = [
 [project.optional-dependencies]
 # ONNX PromptGuard — the primary semantic scanner. Uses the public, non-gated
 # ONNX model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) via ONNX Runtime.
-# No torch dependency, no HF_TOKEN required.
+# Truly torch-free: we load the .onnx graph with onnxruntime directly and
+# tokenise with transformers (tokenizer-only — no torch extra). optimum is
+# intentionally NOT used because it hard-requires torch (~750MB).
+# hf_transfer enables parallel chunked downloads (HF_HUB_ENABLE_HF_TRANSFER=1).
 onnx = [
     "transformers>=4.51.3",
-    "optimum[onnxruntime]>=1.23.0",
     "onnxruntime>=1.20.0",
     "huggingface-hub>=0.30.2",
+    "hf_transfer>=0.1.6",
 ]
 # AgentAlignment LLM — opt-in second-stage deep inspection. Calls an
 # OpenAI-compatible LLM API when PromptGuard flags HUMAN_REVIEW.
