@@ -54,19 +54,12 @@ FROM base AS models
 ARG SKIP_MODEL_DOWNLOAD=0
 ARG LF_ONNX_MODEL=gravitee-io/Llama-Prompt-Guard-2-86M-onnx
 ARG LF_ONNX_FILE=model.onnx
-# GFW / slow-network knobs (all optional, default to none/1):
+# GFW / slow-network knob (optional, default to none):
 #   HF_ENDPOINT            HuggingFace mirror URL, e.g. https://hf-mirror.com
-#                          (the recommended fix for GFW — works WITH hf_transfer).
-#   HTTPS_PROXY            HTTP(S) proxy URL. NOTE: hf_transfer ignores proxy env
-#                          vars, so when HTTPS_PROXY is set, also pass
-#                          HF_HUB_ENABLE_HF_TRANSFER=0 (requests/urllib3 then
-#                          honours the proxy). Don't commit a private proxy IP —
-#                          pass it at build time / via a repo variable.
-#   HF_HUB_ENABLE_HF_TRANSFER  1 (default) for parallel chunked downloads; 0 when
-#                          using a proxy.
+#                          (the recommended fix for GFW — works WITH hf_transfer,
+#                          reachable from CI). hf_transfer (parallel chunked
+#                          download) is always on.
 ARG HF_ENDPOINT=""
-ARG HTTPS_PROXY=""
-ARG HF_HUB_ENABLE_HF_TRANSFER="1"
 # Install ONLY what the download needs (huggingface_hub + hf_transfer) — NOT the
 # full runtime deps. This decouples the model-download layer from the builder
 # stage, so a requirements.txt bump does NOT invalidate the (slow, ~350MB) model
@@ -81,11 +74,9 @@ RUN --mount=type=cache,target=/hf-cache,sharing=locked \
         mkdir -p /models/hf/pg2; \
         exit 0; \
     fi; \
-    export HF_HOME=/hf-cache; \
-    export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER}"; \
+    export HF_HOME=/hf-cache HF_HUB_ENABLE_HF_TRANSFER=1; \
     if [ -n "${HF_ENDPOINT}" ]; then export HF_ENDPOINT="${HF_ENDPOINT}"; fi; \
-    if [ -n "${HTTPS_PROXY}" ]; then export HTTPS_PROXY="${HTTPS_PROXY}" HTTP_PROXY="${HTTPS_PROXY}"; fi; \
-    echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE}) — endpoint=${HF_ENDPOINT:-default}, hf_transfer=${HF_HUB_ENABLE_HF_TRANSFER}"; \
+    echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE}) — endpoint=${HF_ENDPOINT:-default}"; \
     python - <<PYEOF
 from huggingface_hub import snapshot_download
 import os, shutil
