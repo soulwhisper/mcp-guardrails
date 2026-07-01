@@ -251,6 +251,21 @@ Releases are tag-driven. The flow is:
 There is no separate "release branch" — releases are tags on `main`. Hotfix
 releases follow the same flow with a `0.2.1` tag.
 
+### Image tags: immutable vs floating
+
+- **`x.y.z` (e.g. `0.2.0`) is immutable.** Never force-push a version tag to a
+  different commit — consumers pin `0.2.0` expecting the exact image. To ship a
+  change, cut a **new** tag (`0.2.1`).
+- **`latest` and `x.y` (e.g. `0.2`) float** by design — they move to the newest
+  tag on the next release. Don't manually re-point them.
+- **Rebuild the *same* tag** (e.g. a build that failed and you want to retry the
+  same commit) without changing it:
+  ```bash
+  gh workflow run docker-publish.yml --ref 0.2.0
+  ```
+  (`docker-publish.yml` has a `workflow_dispatch` trigger; it rebuilds the
+  selected ref and re-pushes the same image tags.)
+
 ## Security-sensitive paths
 
 The following paths get extra scrutiny in review (see
