@@ -16,11 +16,11 @@ grpcio-health-checking>=1.81,<1.82
 protobuf>=5.29,<7
 
 # --- Transformers + ONNX Runtime for PromptGuard-2-86M inference ---
-# The ONNX model is public + non-gated, so no HF_TOKEN is needed. Uses
-# optimum[onnxruntime] for CPU inference (no torch dependency, ~400MB smaller
-# image than the torch path).
+# The ONNX model is public + non-gated, so no HF_TOKEN is needed. We load the
+# .onnx graph with onnxruntime directly and tokenise with transformers
+# (tokenizer-only). optimum is NOT used — it hard-requires torch (~750MB),
+# which would defeat the ONNX path's size advantage. Truly torch-free.
 transformers>=4.51.3
-optimum[onnxruntime]>=1.23.0
 onnxruntime>=1.20.0
 
 # --- OpenAI client for AgentAlignment LLM (second-stage, opt-in) ---
@@ -31,6 +31,11 @@ openai>=1.76.0
 # --- HuggingFace Hub (transitive via transformers, but listed for clarity) ---
 # Used by the Dockerfile models stage to snapshot_download the ONNX model.
 huggingface-hub>=0.30.2
+
+# --- hf_transfer: parallel chunked HF downloads (2-5x faster for the ~350MB
+#     model). Enabled by HF_HUB_ENABLE_HF_TRANSFER=1 in the Dockerfile build
+#     and the local download-model task. ---
+hf_transfer>=0.1.6
 
 # --- OpenTelemetry (optional at runtime; sidecar degrades to stdout audit
 #     if these are absent). Lower-bound only; the 1.x line is stable. ---
