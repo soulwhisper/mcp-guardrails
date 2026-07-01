@@ -86,6 +86,16 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             PY_VERSION=3.11-slim
+            # Optional GFW / slow-network knobs — set as repository VARIABLES
+            # (Settings → Secrets and variables → Actions → Variables), not
+            # secrets, so they're readable here. Defaults (empty / 1) keep the
+            # build working unchanged when unset.
+            #   HF_ENDPOINT       e.g. https://hf-mirror.com  (mirror; works w/ hf_transfer)
+            #   HTTPS_PROXY        e.g. http://host:port        (disables hf_transfer below)
+            #   HF_HUB_ENABLE_HF_TRANSFER  set 0 when using HTTPS_PROXY
+            HF_ENDPOINT=${{ vars.HF_ENDPOINT || '' }}
+            HTTPS_PROXY=${{ vars.HTTPS_PROXY || '' }}
+            HF_HUB_ENABLE_HF_TRANSFER=${{ vars.HF_HUB_ENABLE_HF_TRANSFER || '1' }}
           # The ONNX model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) is
           # public and non-gated — NO HF_TOKEN needed. The Dockerfile's models
           # stage downloads it directly.
