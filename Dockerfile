@@ -75,7 +75,11 @@ RUN --mount=type=cache,target=/hf-cache,sharing=locked \
         exit 0; \
     fi; \
     export HF_HOME=/hf-cache HF_HUB_ENABLE_HF_TRANSFER=1; \
-    if [ -n "${HF_ENDPOINT}" ]; then export HF_ENDPOINT="${HF_ENDPOINT}"; fi; \
+    # An empty HF_ENDPOINT build-arg (the default, when no mirror is configured)
+    # would leak into the env as "" and make huggingface_hub build scheme-less
+    # URLs (httpx UnsupportedProtocol). unset it so the hub falls back to its
+    # built-in default (https://huggingface.co); only honour a real mirror.
+    if [ -n "${HF_ENDPOINT}" ]; then export HF_ENDPOINT="${HF_ENDPOINT}"; else unset HF_ENDPOINT; fi; \
     echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE}) — endpoint=${HF_ENDPOINT:-default}"; \
     python - <<PYEOF
 from huggingface_hub import snapshot_download
