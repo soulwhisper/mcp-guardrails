@@ -300,7 +300,7 @@ class AgentAlignmentScanner:
 
 # ---------------------------------------------------------------------------
 # ONNX PromptGuard scanner — public, non-gated model via ONNX Runtime.
-# LlamaFirewall PromptGuard. Uses optimum[onnxruntime] for CPU inference.
+# Loads the .onnx graph directly with onnxruntime (no optimum, no torch).
 # ---------------------------------------------------------------------------
 
 
@@ -312,10 +312,17 @@ class OnnxPromptGuardScanner:
     model ``gravitee-io/Llama-Prompt-Guard-2-86M-onnx`` instead of the gated
     ``meta-llama/Llama-Prompt-Guard-2-86M`` torch model.
 
+    Implementation note: we load the ONNX graph with **``onnxruntime`` directly**
+    (``ort.InferenceSession``) and tokenise with **``transformers.AutoTokenizer``**.
+    We deliberately avoid ``optimum`` — ``optimum`` hard-requires ``torch``
+    (~750MB), which would defeat the whole point of the ONNX path. ``onnxruntime``
+    (~15MB) + ``transformers`` (tokenizer-only, no torch extra) is the full
+    dependency surface for this scanner.
+
     Advantages:
       * **No HF_TOKEN required** — the ONNX repo is public and non-gated.
-      * **Smaller image** — onnxruntime (~50MB) replaces torch (~900MB);
-        the quantized model is ~90MB vs ~350MB for the torch weights.
+      * **Truly torch-free** — onnxruntime (~15MB) replaces torch (~750MB);
+        the full-precision model is ~350MB, the quantized variant ~90MB.
       * **Faster CPU inference** — ONNX Runtime is tuned for CPU; typical
         P95 is 10-20ms vs 15-30ms for torch CPU.
 
@@ -323,40 +330,57 @@ class OnnxPromptGuardScanner:
     tokenizer, same softmax over the 3-class logits: safe / injection / jailbreak).
     A score >= ``block_threshold`` -> BLOCK.
 
-    ``optimum`` and ``onnxruntime`` are imported lazily so the package remains
-    importable without them installed (the regex-only path still works).
+    ``onnxruntime`` and ``transformers`` are imported lazily so the package
+    remains importable without them installed (the regex-only path still works).
     """
 
     model_id: str = "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
     file_name: str = "model.onnx"
+    # Pre-baked model directory (Dockerfile pre-downloads to /models/hf/pg2).
+    # When set and present, the tokenizer + .onnx load from here — no HF hub
+    # access at runtime (air-gappable). None -> resolve via the HF hub cache.
+    local_dir: str | None = None
     block_threshold: float = 0.9
     name: str = "onnx-promptguard"
 
     def __post_init__(self) -> None:
-        self._model: Any = None
+        self._sess: Any = None
         self._tokenizer: Any = None
         self._loaded = False
 
     def _load(self) -> None:
-        """Lazy-load the ONNX model + tokenizer (called on first scan)."""
+        """Lazy-load the ONNX session + tokenizer (called on first scan)."""
         if self._loaded:
             return
         try:
-            from optimum.onnxruntime import ORTModelForSequenceClassification
+            import onnxruntime as ort
             from transformers import AutoTokenizer
         except ImportError as exc:
             raise ImportError(
-                "optimum[onnxruntime] is not installed; install with "
-                "`pip install 'optimum[onnxruntime]'` to enable ONNX "
-                "PromptGuard, or set ENABLE_PROMPTGUARD=0 for regex-only mode"
+                "onnxruntime/transformers not installed; install with "
+                "`pip install onnxruntime transformers huggingface-hub` to "
+                "enable ONNX PromptGuard, or set ENABLE_PROMPTGUARD=0 for "
+                "regex-only mode"
             ) from exc
 
+        import os
+
+        # Prefer a pre-baked local dir (container pre-downloads the model);
+        # fall back to the HF hub cache (hf_hub_download honours HF_HOME).
+        if self.local_dir and os.path.isdir(self.local_dir):
+            tok_src = self.local_dir
+            model_path = os.path.join(self.local_dir, self.file_name)
+        else:
+            from huggingface_hub import hf_hub_download
+
+            tok_src = self.model_id
+            model_path = hf_hub_download(repo_id=self.model_id, filename=self.file_name)
+        self._tokenizer = AutoTokenizer.from_pretrained(tok_src)
         # Model load is blocking. This is called from scan() via
         # asyncio.to_thread, so it's safe to do the load synchronously here.
-        self._model = ORTModelForSequenceClassification.from_pretrained(
-            self.model_id, file_name=self.file_name
+        self._sess = ort.InferenceSession(
+            model_path, providers=["CPUExecutionProvider"]
         )
-        self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self._loaded = True
 
     async def scan(
@@ -394,8 +418,11 @@ class OnnxPromptGuardScanner:
         inputs = self._tokenizer(
             text, return_tensors="np", padding=True, truncation=True, max_length=512
         )
-        outputs = self._model(**inputs)
-        logits = np.asarray(outputs.logits, dtype=np.float64)
+        # Feed only the inputs the ONNX graph declares — some exports omit
+        # token_type_ids, and onnxruntime errors on unexpected feed keys.
+        expected = {i.name for i in self._sess.get_inputs()}
+        feed = {k: v for k, v in inputs.items() if k in expected}
+        logits = np.asarray(self._sess.run(None, feed)[0], dtype=np.float64)
         # softmax over the class dimension (numerically stable).
         shifted = logits - logits.max(axis=-1, keepdims=True)
         exp = np.exp(shifted)
