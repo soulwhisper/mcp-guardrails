@@ -62,20 +62,7 @@ async def serve() -> None:
     # SIGHUP -> reload Invariant rules without dropping the server.
     def _reload_rules(*_: object) -> None:
         try:
-            # The engine owns its InvariantEngine -> RulePack; reload there.
-            inv = engine._c.invariant  # type: ignore[attr-defined]
-            if inv is not None:
-                # RulePack reload reads the same env path.
-                from guardrails.rules import RulePack
-
-                # The engine built its own RulePack in from_config; reconstruct
-                # a fresh one and swap the invariant engine's rule list.
-                fresh = RulePack.from_env()
-                # InvariantEngine stores rules in a list; swap atomically.
-                inv._rules = list(fresh.rules)  # type: ignore[attr-defined]
-                logger.info(
-                    "invariant rules reloaded (v%s, %d rules)", fresh.version, len(fresh.rules)
-                )
+            engine.reload_rules()
         except Exception as exc:  # pragma: no cover
             logger.warning("rule reload failed: %s", exc)
 

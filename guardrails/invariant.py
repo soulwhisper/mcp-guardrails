@@ -241,6 +241,16 @@ class InvariantEngine:
     def window(self) -> int:
         return self._window
 
+    def set_rules(self, rules: Iterable[ToxicFlowRule]) -> None:
+        """Atomically swap the active rule list.
+
+        Replaces the ``self._rules`` reference wholesale rather than mutating
+        it in place, so an in-flight :meth:`evaluate` (which captured the old
+        list reference when building its iterator) is unaffected. Used by the
+        engine's hot-reload path (SIGHUP).
+        """
+        self._rules = list(rules)
+
     def reset(self) -> None:
         self._trace.clear()
 

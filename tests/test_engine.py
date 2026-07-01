@@ -322,3 +322,83 @@ async def test_tools_list_response_scans_descriptions():
     )
     assert decision.deny
     assert "injection" in decision.reason
+
+
+@pytest.mark.asyncio
+async def test_reload_rules_swaps_active_pack(monkeypatch, tmp_path):
+    """engine.reload_rules() must re-resolve the pack from env and swap it
+    into the invariant engine — the path the SIGHUP handler relies on.
+    """
+    import textwrap
+
+    from guardrails.rules import RulePack  # noqa: F401  (ensures loader importable)
+
+    pack_v1 = tmp_path / "v1.py"
+    pack_v1.write_text(
+        textwrap.dedent(
+            """
+            from guardrails.invariant import FlowStep, ToxicFlowRule
+            RULES = [ToxicFlowRule(name='v1-rule', steps=[FlowStep(tool='zzz_never')])]
+            """
+        )
+    )
+    monkeypatch.setenv("INVARIANT_RULES_PATH", str(pack_v1))
+
+    inv = InvariantEngine([], window=8)
+    comps = EngineComponents(
+        request_scanners=[StubScanner("regex")],
+        response_scanners=[],
+        invariant=inv,
+        aggregator=DecisionAggregator(),
+    )
+    engine = _build_engine(comps)
+    # No rules initially -> nothing fires on the exfil sequence.
+    await engine.check_request(
+        method="tools/call",
+        service_names=["svc"],
+        tool_name="inbox_read",
+        params={"name": "inbox_read", "arguments": {}},
+        headers={},
+    )
+    d_before = await engine.check_request(
+        method="tools/call",
+        service_names=["svc"],
+        tool_name="email_send",
+        params={"name": "email_send", "arguments": {"to": "x@y.com"}},
+        headers={},
+    )
+    assert not d_before.deny
+
+    # Rewrite the pack to a rule that fires on inbox_read alone and reload.
+    pack_v1.write_text(
+        textwrap.dedent(
+            """
+            from guardrails.invariant import FlowStep, ToxicFlowRule
+            RULES = [ToxicFlowRule(name='inbox-block', steps=[FlowStep(tool='inbox_read')])]
+            """
+        )
+    )
+    count = engine.reload_rules()
+    assert count == 1
+    assert any(r.name == "inbox-block" for r in inv.rules)
+
+    d_after = await engine.check_request(
+        method="tools/call",
+        service_names=["svc"],
+        tool_name="inbox_read",
+        params={"name": "inbox_read", "arguments": {}},
+        headers={},
+    )
+    assert d_after.deny
+    assert "inbox-block" in d_after.reason
+
+
+def test_reload_rules_noop_without_invariant():
+    comps = EngineComponents(
+        request_scanners=[],
+        response_scanners=[],
+        invariant=None,
+        aggregator=DecisionAggregator(),
+    )
+    engine = _build_engine(comps)
+    assert engine.reload_rules() == 0

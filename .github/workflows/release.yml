@@ -1,0 +1,153 @@
+# Tag-driven GitHub Release.
+#
+# Fires on `v*` tag pushes (the release flow in CONTRIBUTING.md). Creates the
+# GitHub Release object with the matching CHANGELOG.md section as the body —
+# runs alongside docker-publish.yml (which builds/pushes the container image
+# on the same tag).
+#
+# Release body resolution:
+#   1. Verify the tag (minus the leading `v`) matches the `version` in
+#      pyproject.toml — a mismatch aborts the release so a forgotten
+#      version bump can't ship an image tagged 0.2.0 from a 0.1.0 codebase.
+#   2. Extract the `## [x.y.z] - YYYY-MM-DD` section from CHANGELOG.md.
+#   3. If found, use it verbatim as the release body; otherwise fall back to
+#      GitHub's auto-generated notes (PRs/commits since the last release).
+#   4. Mark the Release as a prerelease when the tag contains a hyphen
+#      (e.g. v0.2.0-rc1).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish a release for (must already exist)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # For workflow_dispatch, check out the tag the operator named
+          # (defaults to the default branch otherwise). For tag-push triggers
+          # `github.ref` is already the tag ref.
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          # Full history so the changelog + tag context resolve correctly.
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            ref="refs/tags/${{ inputs.tag }}"
+          else
+            ref="${GITHUB_REF}"
+          fi
+          tag_name="${ref#refs/tags/}"
+          echo "name=${tag_name}" >> "$GITHUB_OUTPUT"
+          # version without the leading 'v'
+          ver="${tag_name#v}"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          # prerelease if the tag contains a hyphen (e.g. v0.2.0-rc1)
+          if [[ "$tag_name" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify tag matches pyproject version
+        # Pin the release: the tag MUST match the declared version, so a
+        # forgotten version bump fails loudly instead of mis-tagging the image.
+        run: |
+          python - <<'PY'
+          import os, re, sys
+          tag_ver = os.environ["TAG_VERSION"]
+          src = open("pyproject.toml", encoding="utf-8").read()
+          m = re.search(r'^version\s*=\s*"([^"]+)"', src, re.MULTILINE)
+          if not m:
+              print("::error::could not find version in pyproject.toml")
+              sys.exit(1)
+          py_ver = m.group(1)
+          if tag_ver != py_ver:
+              print(f"::error::tag version {tag_ver!r} != pyproject version {py_ver!r}")
+              print("Bump version in pyproject.toml + guardrails/__init__.py, "
+                    "update CHANGELOG.md, then re-tag.")
+              sys.exit(1)
+          print(f"OK: tag {tag_ver} matches pyproject {py_ver}")
+          PY
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+
+      - name: Extract changelog section for ${{ steps.tag.outputs.version }}
+        id: changelog
+        run: |
+          python - <<'PY'
+          import os, re, sys
+          ver = os.environ["REL_VERSION"]
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          # Match:  ## [x.y.z] - date  ...up to the next  ## [  header or EOF.
+          pattern = re.compile(
+              r"(?ms)^## \[" + re.escape(ver) + r"\][^\n]*\n(?P<body>.*?)(?=^## \[|\Z)"
+          )
+          m = pattern.search(text)
+          body = m.group("body").strip() if m else ""
+          if not body:
+              print(f"::warning::no '## [{ver}]' section found in CHANGELOG.md; "
+                    "falling back to auto-generated release notes")
+          # Write to a file to preserve newlines/blank lines through GITHUB_OUTPUT.
+          with open("release_body.md", "w", encoding="utf-8") as fh:
+              fh.write(body)
+          print("changelog section extracted" if body else "no changelog section")
+          PY
+        env:
+          REL_VERSION: ${{ steps.tag.outputs.version }}
+
+      - name: Build release body
+        id: body
+        run: |
+          if [ -s release_body.md ]; then
+            {
+              cat release_body.md
+              echo ""
+              echo "---"
+              echo ""
+              echo "**Full changelog:** https://github.com/${{ github.repository }}/releases"
+            } > final_body.md
+            echo "use_generated=false" >> "$GITHUB_OUTPUT"
+          else
+            : > final_body.md
+            echo "use_generated=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (changelog body)
+        if: steps.body.outputs.use_generated == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          body_path: final_body.md
+          prerelease: ${{ steps.tag.outputs.prerelease }}
+          draft: false
+
+      - name: Create GitHub Release (auto-generated notes)
+        if: steps.body.outputs.use_generated == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          generate_release_notes: true
+          prerelease: ${{ steps.tag.outputs.prerelease }}
+          draft: false

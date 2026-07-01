@@ -15,7 +15,7 @@ cost-bounded AgentAlignment LLM as a second stage gated on first-stage
 [gravitee-io/Llama-Prompt-Guard-2-86M-onnx]: https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-86M-onnx
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Image](https://img.shields.io/badge/image-ghcr.io%2Fsoulwhisper%2Fmcp--guardrails%3A0.1.0-blue)](https://github.com/soulwhisper/mcp-guardrails/pkgs/container/mcp-guardrails)
+[![Image](https://img.shields.io/badge/image-ghcr.io%2Fsoulwhisper%2Fmcp--guardrails%3A0.2.0-blue)](https://github.com/soulwhisper/mcp-guardrails/pkgs/container/mcp-guardrails)
 
 ---
 
@@ -207,7 +207,7 @@ make run
 docker run --rm -p 9001:9001 \
   --env-file examples/docker-run.env \
   -v $(pwd)/examples/rules.policy:/etc/guardrails/rules.policy:ro \
-  ghcr.io/soulwhisper/mcp-guardrails:0.1.0
+  ghcr.io/soulwhisper/mcp-guardrails:0.2.0
 ```
 
 ### PromptGuard-2 model (ONNX, public, no token required)
@@ -223,7 +223,7 @@ repo is public and non-gated. No torch dependency, smaller image (~600MB vs
 docker run --rm -p 9001:9001 \
   -e ENABLE_REGEX_SCANNER=1 \
   -e ENABLE_PROMPTGUARD=1 \
-  ghcr.io/soulwhisper/mcp-guardrails:0.1.0
+  ghcr.io/soulwhisper/mcp-guardrails:0.2.0
 ```
 
 The Dockerfile pre-downloads the ONNX model at build time (`model.onnx`,
@@ -245,7 +245,7 @@ docker run --rm -p 9001:9001 \
   -e LF_ALIGNMENT_MODEL=gpt-4o \
   -e LF_ALIGNMENT_API_BASE=https://api.openai.com/v1 \
   -e LF_ALIGNMENT_API_KEY=sk-xxx \
-  ghcr.io/soulwhisper/mcp-guardrails:0.1.0
+  ghcr.io/soulwhisper/mcp-guardrails:0.2.0
 ```
 
 | Env var                 | Default                                             | Description                                                                         |
@@ -272,7 +272,7 @@ docker run --rm -p 9001:9001 \
   -e GUARDRAIL_DRY_RUN=1 \
   -e ENABLE_REGEX_SCANNER=0 \
   -e ENABLE_PROMPTGUARD=0 \
-  ghcr.io/soulwhisper/mcp-guardrails:0.1.0
+  ghcr.io/soulwhisper/mcp-guardrails:0.2.0
 ```
 
 ### End-to-end smoke test
