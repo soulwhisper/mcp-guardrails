@@ -242,10 +242,11 @@ Releases are tag-driven. The flow is:
      `ghcr.io/soulwhisper/mcp-guardrails` with four tags:
      `0.1.0`, `0.1`, `latest`, and `main` (only `0.1.0` / `0.1` / `latest`
      on tag pushes).
-   - **`release.yml`** — creates the GitHub Release with
-     `generate_release_notes: true` (auto-summarises PRs since the last
-     release). Draft if the tag contains a hyphen (pre-release), else
-     published.
+   - **`release.yml`** — creates the GitHub Release. It verifies the tag
+     matches the `pyproject.toml` version, then uses the matching
+     `## [x.y.z]` section from `CHANGELOG.md` as the release body (falling
+     back to auto-generated notes if the section is absent). Marks the
+     release as a pre-release if the tag contains a hyphen (e.g. `v0.2.0-rc1`).
 5. Sanity-check the release: pull the image, run
    `docker run --rm -p 9001:9001 ghcr.io/soulwhisper/mcp-guardrails:0.1.0`,
    hit the health check, run `tests/e2e_smoke.py` against it.
