@@ -2,21 +2,25 @@
 #
 # Triggers:
 #   - push to main            -> tag "main"
-#   - push of v* tags         -> tag the semver (e.g. 0.1.0, 0.1) + "latest"
+#   - push of version tags    -> tag the semver (e.g. 0.2.0, 0.2) + "latest"
 #   - workflow_dispatch       -> manual run (tags from metadata-action)
+#
+# Version tags match BOTH conventions: `v0.2.0` (leading v) and bare `0.2.0`.
+# The `push: tags` event fires on tag creation AND on tag force-update
+# (re-pointing an existing tag); the `concurrency` group below cancels the
+# superseded run so an updated tag rebuilds cleanly.
 #
 # The image is ghcr.io/soulwhisper/mcp-guardrails. Build args pass through
 # PY_VERSION (defaults to 3.11-slim in the Dockerfile).
 #
-# NOTE: this workflow is independent of release.yml — both fire on `v*` tag
-# pushes. release.yml creates the GitHub Release object; this workflow builds
-# and pushes the container image. They run in parallel.
+# GitHub Releases are created manually via the GitHub UI (tag → Draft a new
+# release); this workflow only builds/pushes the container image.
 name: Docker publish
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["v*", "[0-9]*"]
   workflow_dispatch:
 
 permissions:
@@ -56,12 +60,14 @@ jobs:
         with:
           images: ghcr.io/soulwhisper/mcp-guardrails
           # On push to main:    tag "main"
-          # On push of v1.2.3:  tag "1.2.3", "1.2", "latest"
+          # On push of 1.2.3:   tag "1.2.3", "1.2", "latest"  (v1.2.3 also works)
           # On workflow_dispatch: tag from the ref the run was dispatched on.
           #
-          # `latest` is enabled ONLY on semver tag pushes so a `v0.1.0` tag-push
-          # produces `0.1.0` + `0.1` + `latest`, while a main-branch push does
-          # NOT retag `latest` (main is a moving target, not a release).
+          # `type=semver` accepts a leading `v` OR a bare version, so both
+          # `v0.2.0` and `0.2.0` produce `0.2.0` + `0.2`.
+          # `latest` is enabled ONLY on tag pushes so a version tag-push produces
+          # `0.2.0` + `0.2` + `latest`, while a main-branch push does NOT retag
+          # `latest` (main is a moving target, not a release).
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -118,8 +124,9 @@ jobs:
         with:
           # Scan a deterministic tag: `latest` on tag pushes (just built), `main`
           # on main-branch pushes (just built). Both exist immediately after the
-          # build-push step above.
-          image-ref: ghcr.io/soulwhisper/mcp-guardrails:${{ startsWith(github.ref, 'refs/tags/v') && 'latest' || 'main' }}
+          # build-push step above. Uses ref_type (not a `v` prefix check) so bare
+          # version tags like `0.2.0` also scan `latest`.
+          image-ref: ghcr.io/soulwhisper/mcp-guardrails:${{ github.ref_type == 'tag' && 'latest' || 'main' }}
           format: table
           exit-code: "0" # 0 = print findings but never fail (advisory)
           ignore-unfixed: true

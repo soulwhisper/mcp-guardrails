@@ -229,30 +229,27 @@ Releases are tag-driven. The flow is:
    `## [Unreleased]` section in [`CHANGELOG.md`](CHANGELOG.md) to
    `## [x.y.z] - YYYY-MM-DD`.
 2. Open a PR with those changes. CI runs on the PR.
-3. After merge, tag the merge commit on `main`:
+3. After merge, tag the merge commit on `main`. Tags are bare semver (no
+   leading `v`); `docker-publish.yml` matches both `0.2.0` and `v0.2.0`:
 
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag 0.2.0
+   git push origin 0.2.0
    ```
 
-4. Two workflows fire on `v*` tags (see `.github/workflows/):
-   - **`docker-publish.yml`** — builds and pushes the multi-arch
-     (linux/amd64, linux/arm64) image to
-     `ghcr.io/soulwhisper/mcp-guardrails` with four tags:
-     `0.1.0`, `0.1`, `latest`, and `main` (only `0.1.0` / `0.1` / `latest`
-     on tag pushes).
-   - **`release.yml`** — creates the GitHub Release. It verifies the tag
-     matches the `pyproject.toml` version, then uses the matching
-     `## [x.y.z]` section from `CHANGELOG.md` as the release body (falling
-     back to auto-generated notes if the section is absent). Marks the
-     release as a pre-release if the tag contains a hyphen (e.g. `v0.2.0-rc1`).
-5. Sanity-check the release: pull the image, run
-   `docker run --rm -p 9001:9001 ghcr.io/soulwhisper/mcp-guardrails:0.1.0`,
+4. **`docker-publish.yml`** fires on the tag push (create or force-update) and
+   builds/pushes the multi-arch (linux/amd64, linux/arm64) image to
+   `ghcr.io/soulwhisper/mcp-guardrails` tagged `0.2.0`, `0.2`, and `latest`.
+5. Create the **GitHub Release** via the GitHub UI: Releases → Draft a new
+   release → select the tag → paste the `## [x.y.z]` section from
+   `CHANGELOG.md` as the description. (There is no release-creation workflow;
+   releases are authored manually so the changelog body is curated.)
+6. Sanity-check the release: pull the image, run
+   `docker run --rm -p 9001:9001 ghcr.io/soulwhisper/mcp-guardrails:0.2.0`,
    hit the health check, run `tests/e2e_smoke.py` against it.
 
 There is no separate "release branch" — releases are tags on `main`. Hotfix
-releases follow the same flow with a `v0.1.1` tag.
+releases follow the same flow with a `0.2.1` tag.
 
 ## Security-sensitive paths
 
