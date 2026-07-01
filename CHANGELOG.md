@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.2.0] - 2026-07-01
+
+ONNX PromptGuard migration follow-up: correctness fix to the semantic scanner,
+dead-code cleanup in the hot-reload path, a tag-driven release workflow, and a
+pinned developer environment.
+
+### Fixed
+
+- **ONNX PromptGuard scoring** (`guardrails/scanners.py`): the scorer applied
+  a per-logit sigmoid despite its docstring claiming a softmax. PromptGuard-2
+  is a 3-class (`safe` / `injection` / `jailbreak`) classifier, so the
+  jailbreak probability must come from a softmax over the class dimension —
+  matching LlamaFirewall's `promptguard_utils`. Sigmoid produced miscalibrated
+  scores (a single confident `safe` logit could still yield a high
+  "jailbreak" probability). Now computes a numerically-stable softmax and
+  takes the last class. Tokenizer switched to `return_tensors="np"` so the
+  scanner truly needs no torch (previously `"pt"` would have required torch
+  to materialise tensors).
+- **`OnnxPromptGuardScanner` default `file_name`** aligned to `model.onnx`
+  (full-precision, the same default `GuardrailConfig` ships), replacing the
+  divergent `model.quant.onnx` scanner default.
+- **Dead `GuardrailEngine.reload_rules`** was a stub that always returned 0.
+  Reimplemented to re-resolve the rule pack from the configured source and
+  atomically swap it into the `InvariantEngine` via a new public
+  `InvariantEngine.set_rules()` (replaces the rule-list reference, so an
+  in-flight evaluation keeps iterating the old list).
+- **`server.py` SIGHUP handler** no longer reaches into
+  `engine._c.invariant._rules` (private internals) and no longer discards the
+  `RulePack` it constructed — it calls `engine.reload_rules()`.
+- **Stale docstrings** in `guardrails/__init__.py`, `engine.awarm`, and the
+  ONNX scanner that still referenced the removed `LlamaFirewallScanner` /
+  torch path after the ONNX migration.
+- **`pr.yml`** comment referenced the non-existent `ENABLE_LLAMAFIREWALL`
+  env var; corrected to `ENABLE_PROMPTGUARD`.
+
+### Added
+
+- **`release.yml` workflow** (`.github/workflows/release.yml`): tag-driven
+  (`v*`) GitHub Release creation. Verifies the tag matches the `pyproject.toml`
+  version, extracts the matching `## [x.y.z]` section from `CHANGELOG.md` as
+  the release body (falling back to auto-generated notes), and marks
+  pre-releases when the tag contains a hyphen. Fills the gap left by
+  `docker-publish.yml` and `CONTRIBUTING.md`, which both already referenced it.
+- **`.mise.toml`** — pinned developer environment (Python 3.11 via
+  python-build-standalone, no compilation) with `install` / `test` / `lint` /
+  `proto-check` / `ci` tasks.
+
+### Changed
+
+- Version bump `0.1.0` → `0.2.0` in `pyproject.toml` and
+  `guardrails/__init__.py.__version__`.
+
 ## [0.1.0] - 2025
 
 First release. Wraps LlamaFirewall (Meta's semantic content scanners —
@@ -178,5 +230,6 @@ McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
   not rely on headers for authn/authz when
   `metadata_context.upstream_transport == "stdio"`.
 
-[Unreleased]: https://github.com/soulwhisper/mcp-guardrails/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/soulwhisper/mcp-guardrails/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/soulwhisper/mcp-guardrails/releases/tag/v0.2.0
 [0.1.0]: https://github.com/soulwhisper/mcp-guardrails/releases/tag/v0.1.0
