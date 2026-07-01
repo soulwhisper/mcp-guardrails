@@ -173,9 +173,9 @@ class GuardrailEngine:
     async def awarm(self) -> None:
         """Preload model weights / warm caches so the first request is fast.
 
-        For the LlamaFirewall-backed engine this triggers the transformers
-        model load (PromptGuard-2-86M ~350MB). With dry-run / regex-only
-        configs this is a no-op.
+        For the ONNX PromptGuard-backed engine this triggers the ONNX model
+        load (PromptGuard-2-86M, ~350MB full-precision / ~90MB quantized).
+        With dry-run / regex-only configs this is a no-op.
         """
         # Touch each scanner once to force lazy init in a thread.
         for scanner in self._c.request_scanners + self._c.response_scanners:
@@ -196,12 +196,21 @@ class GuardrailEngine:
         return self._ready
 
     def reload_rules(self) -> int:
-        """Hot-reload the Invariant rule pack (SIGHUP handler)."""
+        """Hot-reload the Invariant rule pack (SIGHUP handler).
+
+        Re-resolves the rule pack from the configured source (env-driven, see
+        :func:`guardrails.rules.load_rules`) and atomically swaps it into the
+        invariant engine. Returns the new rule count, or 0 if no invariant
+        engine is configured. Safe to call while requests are in flight:
+        :meth:`InvariantEngine.set_rules` replaces the rule-list reference, so
+        an evaluation already in progress keeps iterating the old list.
+        """
         if self._c.invariant is None:
             return 0
-        # RulePack.reload swaps the tuple atomically; the engine re-reads it on
-        # the next evaluate via the rules property.
-        return 0  # RulePack is owned externally in from_config; reload via SIGHUP below
+        fresh = RulePack.from_env()
+        self._c.invariant.set_rules(fresh.rules)
+        logger.info("invariant rules reloaded (v%s, %d rules)", fresh.version, len(fresh.rules))
+        return len(fresh.rules)
 
     # ------------------------------------------------------------------
     # Public API
