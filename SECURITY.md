@@ -3,9 +3,9 @@
 ## Reporting a vulnerability
 
 Do **not** open a public GitHub issue for security vulnerabilities in
-ExtMcp Guardrail.
+MCP Guardrails.
 
-Email the maintainer privately at **`security@soulwhisper.dev`** with:
+Email the maintainer privately at **`soulwhisper@outlook.com`** with:
 
 - a description of the issue,
 - the version / image tag you are running
