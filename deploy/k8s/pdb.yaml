@@ -18,12 +18,10 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: extmcp-guardrails
+  name: mcp-guardrails
   namespace: agent-system
   labels:
-    app: extmcp-guardrails
-    component: guardrail
-    app.kubernetes.io/name: extmcp-guardrails
+    app.kubernetes.io/name: mcp-guardrails
     app.kubernetes.io/component: pdb
     app.kubernetes.io/part-of: agentgateway
     app.kubernetes.io/managed-by: kustomize
@@ -31,4 +29,4 @@ spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: extmcp-guardrails
+      app: mcp-guardrails

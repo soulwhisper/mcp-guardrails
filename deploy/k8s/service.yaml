@@ -20,19 +20,17 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: extmcp-guardrails
+  name: mcp-guardrails
   namespace: agent-system
   labels:
-    app: extmcp-guardrails
-    component: guardrail
-    app.kubernetes.io/name: extmcp-guardrails
+    app.kubernetes.io/name: mcp-guardrails
     app.kubernetes.io/component: service
     app.kubernetes.io/part-of: agentgateway
     app.kubernetes.io/managed-by: kustomize
 spec:
   type: ClusterIP
   selector:
-    app: extmcp-guardrails
+    app: mcp-guardrails
   ports:
     - name: grpc-h2c
       port: 4445

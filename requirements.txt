@@ -1,54 +1,38 @@
-# Runtime dependencies for the ExtMcp guardrail sidecar.
+# Runtime dependencies for the mcp-guardrails sidecar.
 #
 # Design principle: pin ONLY where stability or wire-compat matters, otherwise
 # use lower bounds + upper major caps so the resolver can pick the newest
-# compatible release. All constraints below have been verified conflict-free
-# against each transitive package's declared Requires-Dist as of 2025-12.
+# compatible release.
 #
-# The container image installs this file plus the [ml] and [otel] extras from
-# pyproject.toml. The pure-Python policy core (regex scanner + invariant
-# engine + gRPC servicer) runs with just this file alone.
+# The ONNX PromptGuard model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) is
+# public and non-gated — NO HF_TOKEN required.
 
 # --- gRPC stack (wire-compat critical: stubs generated with grpcio 1.81.x) ---
-# Pin the 1.81.x line: the committed proto stubs were generated with
-# grpcio-tools 1.81.0 and carry a runtime version check. Staying on the same
-# minor avoids the generated-code vs runtime version guard firing.
 grpcio>=1.81,<1.82
 grpcio-health-checking>=1.81,<1.82
-# grpcio-tools is a BUILD-TIME / DEV dependency only (generates proto stubs).
-# It is NOT imported at runtime — do NOT list it here. See pyproject [dev].
+# grpcio-tools is a BUILD-TIME / DEV dependency only — NOT listed here.
 
-# protobuf 5.x and 6.x are both runtime-compatible for our generated stubs
-# (committed stubs generated with protobuf 6.33.x via grpcio-tools 1.81.0).
-# Allow both major lines so deployments aren't forced onto 6.x.
+# protobuf 5.x and 6.x are both runtime-compatible for our generated stubs.
 protobuf>=5.29,<7
 
-# --- LlamaFirewall (semantic scanners: PromptGuard 2, AgentAlignment, CodeShield) ---
-# Imported lazily; the package boots in regex-only mode if this is absent.
-# llamafirewall 1.0.3 requires torch>=2.4.1 and transformers>=4.51.3, so the
-# torch/transformers lower bounds below track llamafirewall's requirements
-# (not arbitrary choices) to keep the resolver conflict-free.
-llamafirewall>=1.0.0
-
-# --- Transformers + CPU torch for PromptGuard-2-86M inference ---
-# Lower bounds track llamafirewall's own requirements (torch>=2.4.1,
-# transformers>=4.51.3). No exact pin: CPU torch wheels are published for
-# each minor and the resolver picks the newest compatible one.
+# --- Transformers + ONNX Runtime for PromptGuard-2-86M inference ---
+# The ONNX model is public + non-gated, so no HF_TOKEN is needed. Uses
+# optimum[onnxruntime] for CPU inference (no torch dependency, ~400MB smaller
+# image than the torch path).
 transformers>=4.51.3
-torch>=2.4.1
+optimum[onnxruntime]>=1.23.0
+onnxruntime>=1.20.0
+
+# --- OpenAI client for AgentAlignment LLM (second-stage, opt-in) ---
+# Only needed when ENABLE_AGENT_ALIGNMENT=1. The LLM client reads the API key
+# directly from LF_ALIGNMENT_API_KEY.
+openai>=1.76.0
+
+# --- HuggingFace Hub (transitive via transformers, but listed for clarity) ---
+# Used by the Dockerfile models stage to snapshot_download the ONNX model.
+huggingface-hub>=0.30.2
 
 # --- OpenTelemetry (optional at runtime; sidecar degrades to stdout audit
 #     if these are absent). Lower-bound only; the 1.x line is stable. ---
 opentelemetry-sdk>=1.28.0
 opentelemetry-exporter-otlp>=1.28.0
-
-# NOTE: the following were previously listed but removed:
-#   - httpx          — not imported anywhere in the codebase (dead dep).
-#   - invariant-ai   — not imported; the bundled guardrails/invariant.py is
-#                      the primary implementation. invariant-ai also drags
-#                      pytest + nltk + beautifulsoup4 into the runtime image,
-#                      which is undesirable for a sidecar. Install separately
-#                      with `pip install invariant-ai` only if you want its
-#                      richer rule DSL.
-#   - grpcio-tools   — build/dev only; never imported at runtime. Lives in
-#                      pyproject.toml [dev] extra.

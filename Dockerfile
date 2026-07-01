@@ -1,29 +1,18 @@
 # syntax=docker/dockerfile:1.7
 #
-# ExtMcp Guardrail sidecar image.
+# mcp-guardrails sidecar image.
 #
 # Multi-stage build:
 #   1. base       — shared system deps (ca-certs, curl for healthcheck)
 #   2. builder    — pip install into a clean prefix (no build tools leak)
-#   3. models     — pre-download Llama-Prompt-Guard-2-86M so runtime never hits HF
+#   3. models     — pre-download ONNX PromptGuard-2-86M so runtime never hits HF
 #   4. runtime    — nonroot (65532), copy install + models + app, expose :9001
 #
-# Llama-Prompt-Guard-2-86M is a GATED model on HuggingFace. To pre-download it
-# at build time you MUST:
-#   1. Accept the license at https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M
-#   2. Create a HuggingFace access token (read permission) at
-#      https://huggingface.co/settings/tokens
-#   3. Pass the token as a BuildKit secret named `hf_token`:
-#        docker build --secret id=hf_token,env=HF_TOKEN .
-#      or in GitHub Actions via `secrets:` in docker/build-push-action.
+# The ONNX model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) is PUBLIC and
+# non-gated — no HuggingFace token required. Uses ONNX Runtime for CPU
+# inference (no torch dependency, ~400MB smaller image than the torch path).
 #
-# If the token is absent the build still succeeds — the models stage is
-# skipped and the runtime lazy-fetches on first scan (which also needs
-# HF_TOKEN set as an env var, see below).
-#
-# Final image ~1.8-2.2GB (torch CPU + model weights). For a slimmer image swap
-# to ONNX PromptGuard + onnxruntime and drop torch entirely (see ARCHITECTURE.md
-# "Slim image" variant).
+# Final image ~600-800MB (onnxruntime + transformers + model weights).
 
 ARG PY_VERSION=3.11-slim
 
@@ -47,39 +36,42 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --prefix=/install -r requirements.txt
 
 # ---------- models ----------
-# Pre-download the Llama-Prompt-Guard-2 model into the image. This keeps runtime
-# cold-start fast (no 5-10s HF download) and makes the image air-gappable.
+# Pre-download the ONNX PromptGuard-2 model into the image. The model is
+# PUBLIC and non-gated, so NO HF_TOKEN is needed. This keeps runtime cold-start
+# fast (no download on first scan) and makes the image air-gappable.
 #
-# The model is GATED — the token is passed as a BuildKit secret (mounted at
-# /run/secrets/hf_token) so it never appears in the image layers or build
-# history. If the secret is absent or SKIP_MODEL_DOWNLOAD=1, the step is
-# skipped and the runtime lazy-fetches on first scan.
+# Default: model.onnx (full-precision, ~350MB, accuracy 98.01%).
+# Override with --build-arg LF_ONNX_FILE=model.quant.onnx for the quantized
+# variant (~90MB, accuracy 89.89%) if you want a smaller image.
 FROM base AS models
 ARG SKIP_MODEL_DOWNLOAD=0
+ARG LF_ONNX_MODEL=gravitee-io/Llama-Prompt-Guard-2-86M-onnx
+ARG LF_ONNX_FILE=model.onnx
 COPY --from=builder /install /usr/local
-RUN --mount=type=secret,id=hf_token,required=false \
-    set -e; \
-    TOKEN=""; \
-    if [ -f /run/secrets/hf_token ]; then \
-        TOKEN="$(cat /run/secrets/hf_token)"; \
-        echo "HF_TOKEN length: ${#TOKEN}"; \
-    else \
-        echo "Secret file not found"; \
-    fi; \
-    if [ "${SKIP_MODEL_DOWNLOAD}" = "1" ] || [ -z "${TOKEN}" ]; then \
-        echo "SKIP: Llama-Prompt-Guard-2 pre-download (SKIP_MODEL_DOWNLOAD=${SKIP_MODEL_DOWNLOAD}, HF_TOKEN set=$([ -n "${TOKEN}" ] && echo yes || echo no))"; \
-        echo "      Runtime will lazy-fetch on first scan (requires HF_TOKEN env var)."; \
+RUN set -e; \
+    if [ "${SKIP_MODEL_DOWNLOAD}" = "1" ]; then \
+        echo "SKIP: model pre-download (SKIP_MODEL_DOWNLOAD=1)"; \
+        echo "      Runtime will lazy-fetch on first scan."; \
         exit 0; \
     fi; \
-    export HF_TOKEN="${TOKEN}"; \
-    python - <<'PY'
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-m = "meta-llama/Llama-Prompt-Guard-2-86M"
-# token=True picks up HF_TOKEN from the environment.
-AutoTokenizer.from_pretrained(m, token=True).save_pretrained("/models/hf/pg2")
-AutoModelForSequenceClassification.from_pretrained(m, token=True).save_pretrained("/models/hf/pg2")
-print("Llama-Prompt-Guard-2 model cached at /models/hf/pg2")
-PY
+    echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE}) — public, no token needed"; \
+    python - <<PYEOF
+from huggingface_hub import snapshot_download
+import os, shutil
+m = "${LF_ONNX_MODEL}"
+f = "${LF_ONNX_FILE}"
+# Download the ONNX model + tokenizer files (not the full snapshot).
+path = snapshot_download(repo_id=m, allow_patterns=[f, "config.json", "tokenizer*", "special_tokens_map.json", "vocab*"])
+# Symlink into /models/hf/pg2 so runtime finds it via HF_HOME.
+os.makedirs("/models/hf/pg2", exist_ok=True)
+for item in os.listdir(path):
+    src = os.path.join(path, item)
+    dst = os.path.join("/models/hf/pg2", item)
+    if os.path.exists(dst):
+        os.remove(dst) if os.path.islink(dst) else shutil.rmtree(dst)
+    os.symlink(src, dst)
+print(f"ONNX model cached at /models/hf/pg2 (from {path})")
+PYEOF
 
 # ---------- runtime ----------
 FROM base AS runtime
@@ -101,10 +93,6 @@ COPY server.py /app/server.py
 ENV HF_HOME=/models/hf \
     PYTHONPATH=/app \
     LISTEN_ADDR="[::]:9001"
-# HF_TOKEN is NOT baked in — operators set it at runtime (K8s secret env,
-# docker run -e HF_TOKEN=...) so the token never lives in the image. It is
-# needed for lazy-fetch if the model wasn't pre-downloaded at build time, and
-# for any model LlamaFirewall loads at runtime.
 
 USER 65532:65532
 EXPOSE 9001

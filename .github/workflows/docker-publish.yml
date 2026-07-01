@@ -5,7 +5,7 @@
 #   - push of v* tags         -> tag the semver (e.g. 0.1.0, 0.1) + "latest"
 #   - workflow_dispatch       -> manual run (tags from metadata-action)
 #
-# The image is ghcr.io/soulwhisper/extmcp-guardrails. Build args pass through
+# The image is ghcr.io/soulwhisper/mcp-guardrails. Build args pass through
 # PY_VERSION (defaults to 3.11-slim in the Dockerfile).
 #
 # NOTE: this workflow is independent of release.yml — both fire on `v*` tag
@@ -47,14 +47,14 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
+          username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Derive image tags & labels
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/soulwhisper/extmcp-guardrails
+          images: ghcr.io/soulwhisper/mcp-guardrails
           # On push to main:    tag "main"
           # On push of v1.2.3:  tag "1.2.3", "1.2", "latest"
           # On workflow_dispatch: tag from the ref the run was dispatched on.
@@ -80,18 +80,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             PY_VERSION=3.11-slim
-          # HF_TOKEN is passed as a BuildKit secret (not a build-arg) so it
-          # never appears in the image layers or build history. The Dockerfile
-          # mounts it at /run/secrets/hf_token and uses it to pre-download the
-          # gated PromptGuard-2-86M model. If the secret is absent the models
-          # stage is skipped and the runtime lazy-fetches on first scan.
+          # The ONNX model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) is
+          # public and non-gated — NO HF_TOKEN needed. The Dockerfile's models
+          # stage downloads it directly.
           #
-          # To enable: create a HuggingFace access token (read permission) at
-          # https://huggingface.co/settings/tokens, accept the PromptGuard-2
-          # license at https://huggingface.co/meta-llama/Prompt-Guard-2-86M,
-          # and add it as the HF_TOKEN secret in the repo's GitHub settings.
-          secrets: |
-            hf_token=${{ secrets.HF_TOKEN }}
+          # To override the ONNX model file (e.g. use the quantized variant),
+          # add LF_ONNX_FILE=model.quant.onnx to build-args above.
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
@@ -125,7 +119,7 @@ jobs:
           # Scan a deterministic tag: `latest` on tag pushes (just built), `main`
           # on main-branch pushes (just built). Both exist immediately after the
           # build-push step above.
-          image-ref: ghcr.io/soulwhisper/extmcp-guardrails:${{ startsWith(github.ref, 'refs/tags/v') && 'latest' || 'main' }}
+          image-ref: ghcr.io/soulwhisper/mcp-guardrails:${{ startsWith(github.ref, 'refs/tags/v') && 'latest' || 'main' }}
           format: table
           exit-code: "0" # 0 = print findings but never fail (advisory)
           ignore-unfixed: true

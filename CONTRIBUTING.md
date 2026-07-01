@@ -28,8 +28,8 @@ three packages leaks back in).
 ## Clone and first run
 
 ```bash
-git clone https://github.com/soulwhisper/extmcp-guardrails.git
-cd extmcp-guardrails
+git clone https://github.com/soulwhisper/mcp-guardrails.git
+cd mcp-guardrails
 make dev          # pip install -e ".[dev]" — pytest, ruff, grpcio-tools
 make proto        # regenerate stubs (no-op if proto/ext_mcp.proto is unchanged)
 make test         # 71 unit tests, ~0.3s
@@ -239,7 +239,7 @@ Releases are tag-driven. The flow is:
 4. Two workflows fire on `v*` tags (see `.github/workflows/):
    - **`docker-publish.yml`** — builds and pushes the multi-arch
      (linux/amd64, linux/arm64) image to
-     `ghcr.io/soulwhisper/extmcp-guardrails` with four tags:
+     `ghcr.io/soulwhisper/mcp-guardrails` with four tags:
      `0.1.0`, `0.1`, `latest`, and `main` (only `0.1.0` / `0.1` / `latest`
      on tag pushes).
    - **`release.yml`** — creates the GitHub Release with
@@ -247,7 +247,7 @@ Releases are tag-driven. The flow is:
      release). Draft if the tag contains a hyphen (pre-release), else
      published.
 5. Sanity-check the release: pull the image, run
-   `docker run --rm -p 9001:9001 ghcr.io/soulwhisper/extmcp-guardrails:0.1.0`,
+   `docker run --rm -p 9001:9001 ghcr.io/soulwhisper/mcp-guardrails:0.1.0`,
    hit the health check, run `tests/e2e_smoke.py` against it.
 
 There is no separate "release branch" — releases are tags on `main`. Hotfix

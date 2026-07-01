@@ -21,9 +21,9 @@ metadata:
   name: guardrail-rules
   namespace: agent-system
   labels:
-    app: extmcp-guardrails
+    app: mcp-guardrails
     component: guardrail
-    app.kubernetes.io/name: extmcp-guardrails
+    app.kubernetes.io/name: mcp-guardrails
     app.kubernetes.io/component: rules
     app.kubernetes.io/part-of: agentgateway
     app.kubernetes.io/managed-by: kustomize
@@ -156,7 +156,7 @@ data:
     #
     # Relevant env vars (set on the Deployment):
     #   ENABLE_REGEX_SCANNER   - toggle the regex-based secrets/PII/hidden-ascii scanner
-    #   ENABLE_LLAMAFIREWALL   - toggle the PromptGuard-2 semantic scanner
+    #   ENABLE_PROMPTGUARD   - toggle the PromptGuard-2 semantic scanner
     #   ENABLE_AGENT_ALIGNMENT - toggle the LLM-based AgentAlignment second stage
     #                            (only runs when PromptGuard returns HUMAN_REVIEW;
     #                            default off for homelab latency budget)

@@ -14,12 +14,10 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: extmcp-guardrails
+  name: mcp-guardrails
   namespace: agent-system
   labels:
-    app: extmcp-guardrails
-    component: guardrail
-    app.kubernetes.io/name: extmcp-guardrails
+    app.kubernetes.io/name: mcp-guardrails
     app.kubernetes.io/component: autoscaler
     app.kubernetes.io/part-of: agentgateway
     app.kubernetes.io/managed-by: kustomize
@@ -27,7 +25,7 @@ spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: extmcp-guardrails
+    name: mcp-guardrails
   minReplicas: 2
   maxReplicas: 4
   metrics:

@@ -28,7 +28,7 @@ from .engine import GuardrailEngine
 from .models import Decision
 from .proto_bridge import pb, pbg
 
-logger = logging.getLogger("extmcp.guardrail.servicer")
+logger = logging.getLogger("mcp.guardrails.servicer")
 
 
 def _safe_json_loads(raw: bytes) -> tuple[Any, str]:

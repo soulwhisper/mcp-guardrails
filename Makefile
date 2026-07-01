@@ -3,7 +3,7 @@
 
 PY ?= python3
 PORT ?= 9001
-IMAGE ?= ghcr.io/soulwhisper/extmcp-guardrails
+IMAGE ?= ghcr.io/soulwhisper/mcp-guardrails
 TAG ?= 0.1.0
 
 .PHONY: help proto proto-check install dev test lint format clean docker run ci

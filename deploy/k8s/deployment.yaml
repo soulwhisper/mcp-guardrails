@@ -27,12 +27,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: extmcp-guardrails
+  name: mcp-guardrails
   namespace: agent-system
   labels:
-    app: extmcp-guardrails
-    component: guardrail
-    app.kubernetes.io/name: extmcp-guardrails
+    app.kubernetes.io/name: mcp-guardrails
     app.kubernetes.io/component: sidecar
     app.kubernetes.io/part-of: agentgateway
     app.kubernetes.io/managed-by: kustomize
@@ -40,7 +38,7 @@ spec:
   replicas: 2
   selector:
     matchLabels:
-      app: extmcp-guardrails
+      app: mcp-guardrails
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -49,9 +47,7 @@ spec:
   template:
     metadata:
       labels:
-        app: extmcp-guardrails
-        component: guardrail
-        app.kubernetes.io/name: extmcp-guardrails
+        app.kubernetes.io/name: mcp-guardrails
         app.kubernetes.io/component: sidecar
         app.kubernetes.io/part-of: agentgateway
     spec:
@@ -67,7 +63,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: guardrail
-          image: ghcr.io/soulwhisper/extmcp-guardrails:0.1.0
+          image: ghcr.io/soulwhisper/mcp-guardrails:0.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: grpc-h2c
@@ -85,7 +81,7 @@ spec:
               value: "32768"
             - name: ENABLE_REGEX_SCANNER
               value: "true"
-            - name: ENABLE_LLAMAFIREWALL
+            - name: ENABLE_PROMPTGUARD
               value: "true"
             - name: ENABLE_AGENT_ALIGNMENT
               value: "false"
@@ -98,16 +94,44 @@ spec:
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector.observability.svc:4317"
             - name: OTEL_SERVICE_NAME
-              value: "extmcp-guardrails"
+              value: "mcp-guardrails"
             - name: AUDIT_LOG_PATH
               value: "/dev/stdout"
             - name: LOG_LEVEL
               value: "INFO"
             - name: LISTEN_ADDR
               value: "[::]:9001"
+            # --- PromptGuard (ONNX, always on) ---
+            # The ONNX model is public + non-gated — NO HF_TOKEN required.
+            # Default: model.onnx (full-precision, ~350MB, accuracy 98.01%).
+            - name: LF_ONNX_MODEL
+              value: "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
+            - name: LF_ONNX_FILE
+              value: "model.onnx"
+            - name: LF_PROMPTGUARD_BLOCK_THRESHOLD
+              value: "0.9"
+            # --- AgentAlignment LLM (second-stage, opt-in) ---
+            # Only needed when ENABLE_AGENT_ALIGNMENT=1. The LLM client reads
+            # the API key directly from LF_ALIGNMENT_API_KEY.
+            - name: LF_ALIGNMENT_MODEL
+              value: "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+            - name: LF_ALIGNMENT_API_BASE
+              value: "https://api.together.xyz/v1"
+            # LF_ALIGNMENT_API_KEY: the API key for the LLM provider.
+            # Create a Kubernetes Secret:
+            #   kubectl create secret generic alignment-api-key -n agent-system \
+            #     --from-literal=LF_ALIGNMENT_API_KEY=xxx
+            # For OpenAI: also set LF_ALIGNMENT_API_BASE=https://api.openai.com/v1
+            # and LF_ALIGNMENT_MODEL=gpt-4o (or your model of choice).
+            - name: LF_ALIGNMENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: alignment-api-key
+                  key: LF_ALIGNMENT_API_KEY
+                  optional: true
           resources:
-            # PromptGuard-2 (86M params) + torch CPU + per-call regex scans.
-            # 2Gi request covers model load + steady-state; 4Gi limit absorbs
+            # PromptGuard-2 ONNX (86M params) + onnxruntime + per-call regex.
+            # 1Gi request covers model load + steady-state; 2Gi limit absorbs
             # burst traffic. CPU 500m / 2 keeps cold-start (model warmup)
             # under ~10s while leaving headroom for parallel scanner calls.
             requests:

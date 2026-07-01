@@ -84,7 +84,7 @@ McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
 - **Configuration** (`guardrails/config.py`): every knob
   environment-variable driven with homelab defaults. 17 vars total:
   `FAILURE_MODE`, `HUMAN_REVIEW_MODE`, `MAX_CONTENT_BYTES`,
-  `ENABLE_REGEX_SCANNER`, `ENABLE_LLAMAFIREWALL`,
+  `ENABLE_REGEX_SCANNER`, `ENABLE_PROMPTGUARD`,
   `ENABLE_AGENT_ALIGNMENT`, `INVARIANT_WINDOW`,
   `INVARIANT_RULES_PATH`, `INVARIANT_RULES_MODULE`,
   `SCANNER_TIMEOUT_MS`, `LISTEN_ADDR`, `SERVER_MAX_WORKERS`,
@@ -99,7 +99,7 @@ McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
     `OTEL_EXPORTER_OTLP_ENDPOINT` is set: per-decision spans on
     `guardrail.check_request` / `guardrail.check_response` with
     method / tool / outcome / reason / duration_ms / second_stage
-    attributes; counter `extmcp.guardrail.decisions{phase,outcome,method}`.
+    attributes; counter `mcp.guardrails.decisions{phase,outcome,method}`.
     Degrades to audit-only when the SDK is absent or the endpoint is
     unreachable.
 - **Server entrypoint** (`server.py`): `grpc.aio` server on
@@ -112,7 +112,7 @@ McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
   (air-gappable, fast cold-start), non-root UID/GID 65532, `EXPOSE 9001`,
   inline-Python `grpc.health.v1` healthcheck (zero extra system deps).
   Image published as
-  `ghcr.io/soulwhisper/extmcp-guardrails:0.1.0` (multi-arch
+  `ghcr.io/soulwhisper/mcp-guardrails:0.1.0` (multi-arch
   linux/amd64 + linux/arm64).
 - **Kubernetes manifests** (`deploy/k8s/`): Namespace, ConfigMap rule
   pack, 2-replica Deployment (fail-closed env, 500m/2Gi request,
@@ -178,5 +178,5 @@ McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
   not rely on headers for authn/authz when
   `metadata_context.upstream_transport == "stdio"`.
 
-[Unreleased]: https://github.com/soulwhisper/extmcp-guardrails/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/soulwhisper/extmcp-guardrails/releases/tag/v0.1.0
+[Unreleased]: https://github.com/soulwhisper/mcp-guardrails/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/soulwhisper/mcp-guardrails/releases/tag/v0.1.0
