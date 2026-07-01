@@ -308,9 +308,8 @@ class AgentAlignmentScanner:
 class OnnxPromptGuardScanner:
     """PromptGuard-2-86M inference via ONNX Runtime.
 
-    Drop-in replacement for :class:`LlamaFirewallScanner`'s PROMPT_GUARD role
-    that uses the public, non-gated ONNX model
-    ``gravitee-io/Llama-Prompt-Guard-2-86M-onnx`` instead of the gated
+    Semantic prompt-injection scanner that uses the public, non-gated ONNX
+    model ``gravitee-io/Llama-Prompt-Guard-2-86M-onnx`` instead of the gated
     ``meta-llama/Llama-Prompt-Guard-2-86M`` torch model.
 
     Advantages:
@@ -329,7 +328,7 @@ class OnnxPromptGuardScanner:
     """
 
     model_id: str = "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
-    file_name: str = "model.quant.onnx"
+    file_name: str = "model.onnx"
     block_threshold: float = 0.9
     name: str = "onnx-promptguard"
 
@@ -348,8 +347,8 @@ class OnnxPromptGuardScanner:
         except ImportError as exc:
             raise ImportError(
                 "optimum[onnxruntime] is not installed; install with "
-                "`pip install optimum[onnxruntime]` or use the torch-based "
-                "LlamaFirewallScanner"
+                "`pip install 'optimum[onnxruntime]'` to enable ONNX "
+                "PromptGuard, or set ENABLE_PROMPTGUARD=0 for regex-only mode"
             ) from exc
 
         # Model load is blocking. This is called from scan() via
@@ -383,16 +382,24 @@ class OnnxPromptGuardScanner:
         return ScanResult.allow(self.name)
 
     def _score(self, text: str) -> float:
-        """Return the jailbreak probability (last-class softmax)."""
+        """Return the jailbreak probability (last-class softmax).
+
+        PromptGuard-2 is a 3-class classifier ``[safe, injection, jailbreak]``;
+        we softmax over the logits and take the jailbreak (last) class — the
+        same computation LlamaFirewall's ``promptguard_utils`` performs. We use
+        ``return_tensors="np"`` so no torch dependency is required.
+        """
         import numpy as np
 
         inputs = self._tokenizer(
-            text, return_tensors="pt", padding=True, truncation=True, max_length=512
+            text, return_tensors="np", padding=True, truncation=True, max_length=512
         )
         outputs = self._model(**inputs)
-        logits = outputs.logits
-        # softmax over logits (same as LlamaFirewall's promptguard_utils)
-        probs = 1.0 / (1.0 + np.exp(-logits))  # sigmoid for single-class
+        logits = np.asarray(outputs.logits, dtype=np.float64)
+        # softmax over the class dimension (numerically stable).
+        shifted = logits - logits.max(axis=-1, keepdims=True)
+        exp = np.exp(shifted)
+        probs = exp / exp.sum(axis=-1, keepdims=True)
         # PromptGuard-2 outputs 3 logits: [safe, injection, jailbreak].
         # The jailbreak score is the last class. Some ONNX exports have
         # shape (1, 3); others (1, 1). Handle both.
