@@ -5,7 +5,7 @@
 # processors to invoke, on which MCP methods, and at which phase (Request,
 # Response, or both). This policy attaches to the `mcp-backend`
 # AgentgatewayBackend (defined elsewhere — typically in the agentgateway
-# install) and registers one processor: our extmcp-guardrails Service.
+# install) and registers one processor: our mcp-guardrails Service.
 #
 # Method-phase matrix and rationale:
 #
@@ -57,9 +57,7 @@ metadata:
   name: mcp-guardrails
   namespace: agent-system
   labels:
-    app: extmcp-guardrails
-    component: guardrail
-    app.kubernetes.io/name: extmcp-guardrails
+    app.kubernetes.io/name: mcp-guardrails
     app.kubernetes.io/component: policy
     app.kubernetes.io/part-of: agentgateway
     app.kubernetes.io/managed-by: kustomize
@@ -77,7 +75,7 @@ spec:
         processors:
           - remote:
               backendRef:
-                name: extmcp-guardrails
+                name: mcp-guardrails
                 port: 4445
             # If the guardrail is unreachable or returns an error, block the
             # MCP call. See file header for rationale.

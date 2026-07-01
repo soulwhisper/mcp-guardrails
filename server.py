@@ -25,7 +25,7 @@ from guardrails.engine import GuardrailEngine
 from guardrails.proto_bridge import pbg
 from guardrails.servicer import ExtMcpServicer
 
-logger = logging.getLogger("extmcp.guardrail.server")
+logger = logging.getLogger("mcp.guardrails.server")
 
 _LISTEN_ADDR_DEFAULT = "[::]:9001"
 _GRACE_SECS = 5.0

@@ -24,7 +24,7 @@ from typing import Any
 
 from .models import Decision, McpCallContext
 
-logger = logging.getLogger("extmcp.guardrail")
+logger = logging.getLogger("mcp.guardrails")
 
 
 class AuditSink:
@@ -52,7 +52,7 @@ class Observability:
     def __init__(
         self,
         *,
-        service_name: str = "extmcp-guardrails",
+        service_name: str = "mcp-guardrails",
         otel_endpoint: str | None = None,
         audit_path: str | None = None,
     ):
@@ -98,7 +98,7 @@ class Observability:
             self._meter = metrics.get_meter(service_name)
             self._counters = {
                 "decisions": self._meter.create_counter(
-                    "extmcp.guardrail.decisions",
+                    "mcp.guardrails.decisions",
                     unit="1",
                     description="Guardrail decisions by outcome",
                 ),

@@ -38,7 +38,8 @@ from .models import (
 from .otel import Observability, configure_logging
 from .rules import RulePack
 from .scanners import (
-    LlamaFirewallScanner,
+    AgentAlignmentScanner,
+    OnnxPromptGuardScanner,
     RegexScanner,
     Scanner,
     StubScanner,
@@ -46,7 +47,7 @@ from .scanners import (
     truncate,
 )
 
-logger = logging.getLogger("extmcp.guardrail.engine")
+logger = logging.getLogger("mcp.guardrails.engine")
 
 
 @dataclass
@@ -100,22 +101,49 @@ class GuardrailEngine:
             if config.enable_regex_scanner:
                 request_scanners.append(RegexScanner())
                 response_scanners.append(RegexScanner())
-            if config.enable_llamafirewall:
+            if config.enable_promptguard:
+                # ONNX PromptGuard — public, non-gated model. No HF_TOKEN needed.
+                # Uses optimum[onnxruntime] for CPU inference (no torch dependency).
                 try:
-                    lf = LlamaFirewallScanner.from_default()
-                    request_scanners.append(lf)
-                    response_scanners.append(lf)
+                    onnx_scanner = OnnxPromptGuardScanner(
+                        model_id=config.lf_onnx_model,
+                        file_name=config.lf_onnx_file,
+                        block_threshold=config.lf_promptguard_block_threshold,
+                    )
+                    request_scanners.append(onnx_scanner)
+                    response_scanners.append(onnx_scanner)
+                    logger.info(
+                        "ONNX PromptGuard enabled (model=%s, file=%s, threshold=%.2f) — "
+                        "public model, no HF_TOKEN required",
+                        config.lf_onnx_model,
+                        config.lf_onnx_file,
+                        config.lf_promptguard_block_threshold,
+                    )
                 except ImportError as exc:
                     logger.warning(
-                        "LlamaFirewall unavailable (%s); continuing with regex-only. "
-                        "Install llamafirewall>=0.9.0 to enable semantic scanners.",
+                        "ONNX PromptGuard unavailable (%s); continuing with regex-only. "
+                        "Install with: pip install 'optimum[onnxruntime]'",
                         exc,
                     )
             if config.enable_agent_alignment:
-                # AgentAlignment is bundled inside the LlamaFirewallScanner
-                # when its role config enables it; here we just keep a flag the
-                # engine consults to decide whether to run second-stage.
-                second_stage.append(StubScanner("stub.agent_alignment"))
+                # AgentAlignment (LLM-based second stage). The LLM client reads
+                # the API key directly from LF_ALIGNMENT_API_KEY. Configured via
+                # LF_ALIGNMENT_MODEL / LF_ALIGNMENT_API_BASE / LF_ALIGNMENT_API_KEY.
+                # Only triggered when PromptGuard flags HUMAN_REVIEW on a response.
+                second_stage.append(
+                    AgentAlignmentScanner(
+                        model=config.lf_alignment_model,
+                        api_base=config.lf_alignment_api_base,
+                        api_key=config.lf_alignment_api_key,
+                    )
+                )
+                logger.info(
+                    "AgentAlignment LLM enabled (model=%s, api_base=%s, key=%s) — "
+                    "second-stage, triggered on HUMAN_REVIEW",
+                    config.lf_alignment_model,
+                    config.lf_alignment_api_base,
+                    "set" if config.lf_alignment_api_key else "UNSET",
+                )
 
         rule_pack = RulePack.from_env()
         invariant = InvariantEngine(rule_pack.rules, window=config.invariant_window)

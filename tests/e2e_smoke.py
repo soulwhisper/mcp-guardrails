@@ -36,7 +36,7 @@ async def main() -> int:
             # is absent in this env -> engine falls back to regex-only gracefully.
             "GUARDRAIL_DRY_RUN": "0",
             "ENABLE_REGEX_SCANNER": "1",
-            "ENABLE_LLAMAFIREWALL": "0",
+            "ENABLE_PROMPTGUARD": "0",
             "LISTEN_ADDR": "127.0.0.1:19099",
             "LOG_LEVEL": "WARNING",
             "AUDIT_LOG_PATH": "-",

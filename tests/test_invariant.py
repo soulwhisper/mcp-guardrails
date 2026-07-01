@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -249,20 +251,36 @@ def test_load_from_path_env(tmp_path, monkeypatch):
     assert rules[0].name == "env-loaded"
 
 
+def _write_and_sync(path: Path, content: str) -> None:
+    """Write text and force-flush to disk so a subsequent read sees it.
+
+    ``Path.write_text`` uses a buffered write that may linger in the page
+    cache on some CI filesystems (overlayfs with writeback). For the
+    hot-reload test we need the on-disk bytes to be current before the next
+    read, so we open with O_SYNC semantics: write, flush, fsync, close.
+    """
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(content)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
 def test_rule_pack_reload(tmp_path, monkeypatch):
     rules_file = tmp_path / "pack.py"
-    rules_file.write_text(
+    _write_and_sync(
+        rules_file,
         "from guardrails.invariant import FlowStep, ToxicFlowRule\n"
-        "RULES = [ToxicFlowRule(name='v1', steps=[FlowStep(tool='a')])]\n"
+        "RULES = [ToxicFlowRule(name='v1', steps=[FlowStep(tool='a')])]\n",
     )
     monkeypatch.setenv("INVARIANT_RULES_PATH", str(rules_file))
     pack = RulePack.from_env()
     assert pack.version == 0
     assert pack.rules[0].name == "v1"
     # rewrite the file and reload
-    rules_file.write_text(
+    _write_and_sync(
+        rules_file,
         "from guardrails.invariant import FlowStep, ToxicFlowRule\n"
-        "RULES = [ToxicFlowRule(name='v2', steps=[FlowStep(tool='b')])]\n"
+        "RULES = [ToxicFlowRule(name='v2', steps=[FlowStep(tool='b')])]\n",
     )
     pack.reload()
     assert pack.version == 1

@@ -14,12 +14,12 @@
 
 listeners:
   - name: mcp-http
-    protocol: mcp/streamable_http      # agent front-door: Streamable HTTP MCP
+    protocol: mcp/streamable_http # agent front-door: Streamable HTTP MCP
     port: 8788
 
 routes:
   - name: filesystem-mcp
-    upstream:                          # the real MCP server you are protecting
+    upstream: # the real MCP server you are protecting
       stdio:
         command: npx
         args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]

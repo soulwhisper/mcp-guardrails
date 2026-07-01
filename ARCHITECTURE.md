@@ -40,7 +40,7 @@ The sidecar composes two complementary policy layers:
   secrets. This layer inspects the bytes of a single exchange.
 - A **stateful rule layer** inspired by
   [Invariant Labs](https://invariantlabs.ai/)' toxic-flow research. This
-  layer inspects the *sequence* of tool calls inside a sliding window and
+  layer inspects the _sequence_ of tool calls inside a sliding window and
   fires on dangerous ordered subsequences ("read inbox then email external")
   and on identical retry loops.
 
@@ -198,7 +198,7 @@ scan + invariant trace). The call graph, step by step:
    - Open an OTel span `guardrail.check_request` with `method`, `tool`,
      `transport` attributes.
 3. **Content scanners** — `_run_scanners(text, role="tool",
-   self._c.request_scanners)`:
+self._c.request_scanners)`:
    - `RegexScanner` (zero-dep, always on unless `ENABLE_REGEX_SCANNER=0`)
      — first-match-wins over `default_patterns()`: hidden ASCII, private
      keys, AWS / GitHub / GitLab / Slack tokens, high-entropy blobs,
@@ -223,7 +223,7 @@ scan + invariant trace). The call graph, step by step:
 6. **Observability** — set span outcome (`deny` / `mutated` / `allow`),
    `record_decision(phase="request", method, tool_name, ctx, decision)`
    emits the JSONL audit line and bumps the
-   `extmcp.guardrail.decisions{phase="request",outcome,method}` counter.
+   `mcp.guardrails.decisions{phase="request",outcome,method}` counter.
 7. **`ExtMcpServicer` maps the `Decision` to the proto oneof**:
    - `decision.deny` -> `McpRequestResult{error=PERMISSION_DENIED}`.
    - `decision.is_mutated` -> `McpRequestResult{mutated=Mutated{...}}`.
@@ -254,7 +254,7 @@ The call graph:
      `ensure_ascii=False`.
    - Open OTel span `guardrail.check_response`.
 3. **First-stage content scanners** — `_run_scanners(text, role="assistant",
-   self._c.response_scanners)`:
+self._c.response_scanners)`:
    - `RegexScanner` — same patterns as request side (a private key in tool
      output is just as bad as one in params).
    - `LlamaFirewallScanner` — PromptGuard with role `ASSISTANT`. The
@@ -264,13 +264,13 @@ The call graph:
    - `self._c.second_stage_scanners` is non-empty (i.e.
      `ENABLE_AGENT_ALIGNMENT=1`).
    - At least one first-stage scanner returned `ScanOutcome.HUMAN_REVIEW`.
-   When the gate fires, `_run_scanners(text, role="assistant",
-   self._c.second_stage_scanners)` runs and the results are appended to the
-   aggregator input. The span gets `second_stage=True`.
-   This is the cost-control knob from the original design: AgentAlignment
-   is LLM-based (~300-800ms per call). Running it on every response would
-   dominate sidecar latency and homelab cost; gating it on first-stage
-   suspicion bounds the alignment cost to suspicious responses only.
+     When the gate fires, `_run_scanners(text, role="assistant",
+self._c.second_stage_scanners)` runs and the results are appended to the
+     aggregator input. The span gets `second_stage=True`.
+     This is the cost-control knob from the original design: AgentAlignment
+     is LLM-based (~300-800ms per call). Running it on every response would
+     dominate sidecar latency and homelab cost; gating it on first-stage
+     suspicion bounds the alignment cost to suspicious responses only.
 5. **No Invariant on the response side** — toxic-flow is a request-time
    property. The trace records `(tool, args)` on the request; the response
    carries no tool identity to record.
@@ -282,13 +282,13 @@ The call graph:
 The aggregator ([`guardrails/aggregator.py`](guardrails/aggregator.py)) is
 a stateless combinator over a list of `ScanResult`. The fail-closed table:
 
-| Inputs                                                   | `human_review_mode=pass`                              | `human_review_mode=deny`                              |
-| -------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| All `ALLOW`                                              | `Decision(deny=False)` (allow)                       | `Decision(deny=False)` (allow)                       |
-| Any `BLOCK`, no `HUMAN_REVIEW`                           | `Decision(deny=True, reason="<scanner>:block:...")`  | `Decision(deny=True, reason="<scanner>:block:...")`  |
-| Any `BLOCK`, some `HUMAN_REVIEW`                         | `Decision(deny=True)` — BLOCK wins                   | `Decision(deny=True)` — BLOCK wins                   |
-| No `BLOCK`, any `HUMAN_REVIEW`                           | `Decision(deny=False, human_review=True)` (pass+warn) | `Decision(deny=True, reason="...:human_review_escalated:...")` |
-| Engine supplies `mutated=...`                            | `Decision(deny=False, mutated=...)` (passthrough)    | `Decision(deny=False, mutated=...)` (passthrough)    |
+| Inputs                           | `human_review_mode=pass`                              | `human_review_mode=deny`                                       |
+| -------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------- |
+| All `ALLOW`                      | `Decision(deny=False)` (allow)                        | `Decision(deny=False)` (allow)                                 |
+| Any `BLOCK`, no `HUMAN_REVIEW`   | `Decision(deny=True, reason="<scanner>:block:...")`   | `Decision(deny=True, reason="<scanner>:block:...")`            |
+| Any `BLOCK`, some `HUMAN_REVIEW` | `Decision(deny=True)` — BLOCK wins                    | `Decision(deny=True)` — BLOCK wins                             |
+| No `BLOCK`, any `HUMAN_REVIEW`   | `Decision(deny=False, human_review=True)` (pass+warn) | `Decision(deny=True, reason="...:human_review_escalated:...")` |
+| Engine supplies `mutated=...`    | `Decision(deny=False, mutated=...)` (passthrough)     | `Decision(deny=False, mutated=...)` (passthrough)              |
 
 Two invariants hold by construction:
 
@@ -388,7 +388,7 @@ or escalates to a deny (`HUMAN_REVIEW_MODE=deny`).
 Keep `SCANNER_TIMEOUT_MS` strictly less than the agentgateway
 `mcp-guardrails` processor timeout (recommended sidecar 500ms, gateway
 800-1000ms) so the sidecar always decides first — a sidecar that times out
-*after* the gateway has already failed-closed is just noise.
+_after_ the gateway has already failed-closed is just noise.
 
 ### Sidecar-unreachable
 
@@ -451,7 +451,7 @@ Operators reload rules without dropping the gRPC server:
 kill -HUP 1
 
 # or from the host (K8s)
-kubectl exec -n agent-system deploy/extmcp-guardrails -- kill -HUP 1
+kubectl exec -n agent-system deploy/mcp-guardrails -- kill -HUP 1
 ```
 
 If the new rule pack fails to load (syntax error, missing `RULES`
@@ -480,8 +480,13 @@ line per decision. Defaults to stdout when `AUDIT_LOG_PATH` is unset or
   "upstream_transport": "streamable_http",
   "route": "filesystem-mcp",
   "scanners": [
-    {"scanner": "regex:hidden_ascii", "outcome": "block", "reason": "...", "score": 0.9},
-    {"scanner": "invariant", "outcome": "allow", "reason": "", "score": 0.0}
+    {
+      "scanner": "regex:hidden_ascii",
+      "outcome": "block",
+      "reason": "...",
+      "score": 0.9
+    },
+    { "scanner": "invariant", "outcome": "allow", "reason": "", "score": 0.0 }
   ]
 }
 ```
@@ -503,7 +508,7 @@ importable, `Observability._init_otel` wires up:
   (on the response side) `second_stage` attributes.
 - A `MeterProvider` with a `PeriodicExportingMetricReader` (15s export
   interval) over `OTLPMetricExporter`. One counter is registered:
-  `extmcp.guardrail.decisions{unit=1}` with attributes
+  `mcp.guardrails.decisions{unit=1}` with attributes
   `{phase, outcome, method}`.
 
 If the SDK is absent or the endpoint is unreachable, the sidecar degrades
@@ -568,22 +573,22 @@ the one that minimises cost (compute, memory, latency, ops burden) at
 acceptable risk for a homelab. Production deployments should re-evaluate
 each row.
 
-| Decision point            | Choice                                  | Rationale                                                                                                                                                            |
-| ------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Language / runtime        | Python 3.11 + asyncio + grpc.aio        | Matches LlamaFirewall / transformers ecosystem (Python-native). asyncio gives single-process concurrency without GIL pain for I/O-bound gRPC. Rust/Go would force FFI to the ML stack. |
-| Model loading             | Pre-download PromptGuard-2-86M in image | ~350 MB weights. Lazy-fetch on first scan would add 5-10s cold-start latency per Pod and require HF egress. Pre-download makes the image air-gappable and cold-start fast.   |
-| AgentAlignment trigger    | Opt-in, gated on first-stage HUMAN_REVIEW | AgentAlignment is LLM-based (~300-800ms / call). Running it on every response would dominate sidecar P95 and homelab GPU/CPU cost. Gating bounds the cost to suspicious responses only. |
-| Failure mode              | failClosed by default                   | Write-capable agents (file write, email send, k8s apply) are far more dangerous unguarded than blocked. Loud `-32001` beats silent exfiltration.                    |
-| Replicas                  | 2 (with PDB minAvailable=1)             | Survives a single Pod restart / node drain. 1 replica is a single point of failure; 3+ is overkill for a homelab. HPA scales 2-4 on CPU 70%.                          |
-| Resource limits           | 500m/2Gi request, 2/4Gi limit           | Covers torch CPU + PromptGuard-2 weights with headroom. AgentAlignment (when enabled) holds an extra model in memory — bump limit to 4Gi.                              |
-| Trace window              | 64 calls                                | Covers a typical homelab agent tool-use chain (most plans fit in <32 calls). Bump for long multi-step plans; cost is O(window * rules) per evaluation.                  |
-| Observability             | JSONL audit (always) + OTel (opt-in)    | Audit log survives OTel collector outages and is GitOps-friendly. OTel adds spans + a counter when collection is up; the floor is the audit log, the ceiling is OTel. |
-| Scanner stack             | Regex (always) + LlamaFirewall (opt-in) | Regex catches hidden ASCII / PII / secrets with zero deps. LlamaFirewall adds semantic injection detection but pulls in torch. Both on by default; LlamaFirewall degrades gracefully. |
-| Content budget            | 32 KiB per scan                         | Tool output can be multi-MB; scanning it whole blows latency and risks OOM. 32 KiB covers the attacker-relevant head of any payload (injections live at the top).      |
-| Scanner timeout           | 500 ms                                  | Strictly less than the agentgateway processor timeout (recommended 800-1000ms). Sidecar decides first; gateway timeout is the backstop.                                |
-| Proto field naming        | `allowed` (not `pass`)                  | Wire-compatible with agentgateway via field numbers. Renamed to avoid Python `pass`-keyword kwarg collision in the generated stubs. Pure cosmetic.                    |
-| Hot-reload mechanism      | SIGHUP -> RulePack.reload()             | Operators swap rules without dropping the gRPC server. Lock-guarded swap; in-flight evaluations see the old rule tuple to completion.                                  |
-| stdio upstream headers    | Treat as untrusted / empty              | agentgateway forwards an empty header set for stdio upstreams. Do not rely on headers for authn/authz when `upstream_transport == "stdio"`.                            |
+| Decision point         | Choice                                    | Rationale                                                                                                                                                                               |
+| ---------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Language / runtime     | Python 3.11 + asyncio + grpc.aio          | Matches LlamaFirewall / transformers ecosystem (Python-native). asyncio gives single-process concurrency without GIL pain for I/O-bound gRPC. Rust/Go would force FFI to the ML stack.  |
+| Model loading          | Pre-download PromptGuard-2-86M in image   | ~350 MB weights. Lazy-fetch on first scan would add 5-10s cold-start latency per Pod and require HF egress. Pre-download makes the image air-gappable and cold-start fast.              |
+| AgentAlignment trigger | Opt-in, gated on first-stage HUMAN_REVIEW | AgentAlignment is LLM-based (~300-800ms / call). Running it on every response would dominate sidecar P95 and homelab GPU/CPU cost. Gating bounds the cost to suspicious responses only. |
+| Failure mode           | failClosed by default                     | Write-capable agents (file write, email send, k8s apply) are far more dangerous unguarded than blocked. Loud `-32001` beats silent exfiltration.                                        |
+| Replicas               | 2 (with PDB minAvailable=1)               | Survives a single Pod restart / node drain. 1 replica is a single point of failure; 3+ is overkill for a homelab. HPA scales 2-4 on CPU 70%.                                            |
+| Resource limits        | 500m/2Gi request, 2/4Gi limit             | Covers torch CPU + PromptGuard-2 weights with headroom. AgentAlignment (when enabled) holds an extra model in memory — bump limit to 4Gi.                                               |
+| Trace window           | 64 calls                                  | Covers a typical homelab agent tool-use chain (most plans fit in <32 calls). Bump for long multi-step plans; cost is O(window \* rules) per evaluation.                                 |
+| Observability          | JSONL audit (always) + OTel (opt-in)      | Audit log survives OTel collector outages and is GitOps-friendly. OTel adds spans + a counter when collection is up; the floor is the audit log, the ceiling is OTel.                   |
+| Scanner stack          | Regex (always) + LlamaFirewall (opt-in)   | Regex catches hidden ASCII / PII / secrets with zero deps. LlamaFirewall adds semantic injection detection but pulls in torch. Both on by default; LlamaFirewall degrades gracefully.   |
+| Content budget         | 32 KiB per scan                           | Tool output can be multi-MB; scanning it whole blows latency and risks OOM. 32 KiB covers the attacker-relevant head of any payload (injections live at the top).                       |
+| Scanner timeout        | 500 ms                                    | Strictly less than the agentgateway processor timeout (recommended 800-1000ms). Sidecar decides first; gateway timeout is the backstop.                                                 |
+| Proto field naming     | `allowed` (not `pass`)                    | Wire-compatible with agentgateway via field numbers. Renamed to avoid Python `pass`-keyword kwarg collision in the generated stubs. Pure cosmetic.                                      |
+| Hot-reload mechanism   | SIGHUP -> RulePack.reload()               | Operators swap rules without dropping the gRPC server. Lock-guarded swap; in-flight evaluations see the old rule tuple to completion.                                                   |
+| stdio upstream headers | Treat as untrusted / empty                | agentgateway forwards an empty header set for stdio upstreams. Do not rely on headers for authn/authz when `upstream_transport == "stdio"`.                                             |
 
 ## Sequence diagram
 
@@ -629,7 +634,7 @@ sequenceDiagram
 ## Container-internal flow
 
 Every gRPC call traverses this pipeline. The second-stage AgentAlignment
-box is dashed because it only fires on response-side calls *and* only when
+box is dashed because it only fires on response-side calls _and_ only when
 a first-stage scanner flagged `HUMAN_REVIEW`.
 
 ```mermaid

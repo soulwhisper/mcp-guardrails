@@ -9,7 +9,7 @@ Email the maintainer privately at **`security@soulwhisper.dev`** with:
 
 - a description of the issue,
 - the version / image tag you are running
-  (`ghcr.io/soulwhisper/extmcp-guardrails:<tag>`),
+  (`ghcr.io/soulwhisper/mcp-guardrails:<tag>`),
 - the relevant configuration (env vars; redact secrets),
 - a minimal repro if possible.
 
@@ -64,7 +64,7 @@ k8s apply, shell exec):
   to `deny` for stricter deployments. Do not set `failOpen` together
   with `HUMAN_REVIEW_MODE=deny` — that combination escalates every
   degraded scanner to a hard deny, which is rarely what you want.
-- Set `OTEL_EXPORTER_OTLP_ENDPOINT` so counter `extmcp.guardrail.decisions`
+- Set `OTEL_EXPORTER_OTLP_ENDPOINT` so counter `mcp.guardrails.decisions`
   is exported. Alert on any non-zero rate of `outcome=deny` (could indicate
   an active attack) or `outcome=human_review` (could indicate scanner
   degradation).
