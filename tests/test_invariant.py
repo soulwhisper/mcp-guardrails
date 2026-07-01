@@ -291,3 +291,22 @@ def test_invalid_rules_rejected():
     # A module without a RULES attribute is rejected with AttributeError.
     with pytest.raises(AttributeError):
         load_rules(module="guardrails.invariant")  # no RULES attr
+
+
+def test_set_rules_swaps_atomically():
+    engine = InvariantEngine(
+        [ToxicFlowRule(name="old", steps=[FlowStep(tool="a")])], window=8
+    )
+    engine.record("a")
+    assert engine.evaluate() is not None  # old rule fires
+    engine.set_rules([ToxicFlowRule(name="new", steps=[FlowStep(tool="b")])])
+    # old rule no longer present; trace still has "a" but no rule matches it
+    assert engine.evaluate() is None
+    assert [r.name for r in engine.rules] == ["new"]
+
+
+def test_set_rules_accepts_iterable():
+    engine = InvariantEngine([], window=4)
+    gen = (ToxicFlowRule(name=f"r{i}", steps=[FlowStep(tool="t")]) for i in range(3))
+    engine.set_rules(gen)
+    assert len(engine.rules) == 3
