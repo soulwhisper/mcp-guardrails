@@ -43,34 +43,56 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Default: model.onnx (full-precision, ~350MB, accuracy 98.01%).
 # Override with --build-arg LF_ONNX_FILE=model.quant.onnx for the quantized
 # variant (~90MB, accuracy 89.89%) if you want a smaller image.
+#
+# Build-cache: the HF download is cached in a BuildKit cache mount (/hf-cache)
+# so a rebuild (even after an upstream layer change) reuses the ~350MB download
+# instead of re-fetching it. The model is then materialised as REAL flat files
+# under /models/hf/pg2 (copy, not symlink) so the runtime image is independent
+# of the (ephemeral) cache mount. hf_transfer (HF_HUB_ENABLE_HF_TRANSFER=1)
+# parallelises the LFS download — 2-5x faster for the large .onnx blob.
 FROM base AS models
 ARG SKIP_MODEL_DOWNLOAD=0
 ARG LF_ONNX_MODEL=gravitee-io/Llama-Prompt-Guard-2-86M-onnx
 ARG LF_ONNX_FILE=model.onnx
-COPY --from=builder /install /usr/local
-RUN set -e; \
+# Install ONLY what the download needs (huggingface_hub + hf_transfer) — NOT the
+# full runtime deps. This decouples the model-download layer from the builder
+# stage, so a requirements.txt bump does NOT invalidate the (slow, ~350MB) model
+# layer cache: the download RUN only re-runs when LF_ONNX_MODEL / LF_ONNX_FILE
+# actually change.
+RUN pip install --no-cache-dir "huggingface-hub>=0.30.2" "hf_transfer>=0.1.6"
+RUN --mount=type=cache,target=/hf-cache,sharing=locked \
+    set -e; \
     if [ "${SKIP_MODEL_DOWNLOAD}" = "1" ]; then \
         echo "SKIP: model pre-download (SKIP_MODEL_DOWNLOAD=1)"; \
         echo "      Runtime will lazy-fetch on first scan."; \
+        mkdir -p /models/hf/pg2; \
         exit 0; \
     fi; \
+    export HF_HOME=/hf-cache HF_HUB_ENABLE_HF_TRANSFER=1; \
     echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE}) — public, no token needed"; \
     python - <<PYEOF
 from huggingface_hub import snapshot_download
 import os, shutil
 m = "${LF_ONNX_MODEL}"
 f = "${LF_ONNX_FILE}"
-# Download the ONNX model + tokenizer files (not the full snapshot).
+# Download the ONNX model + tokenizer files into the cache mount (persisted
+# across builds), then materialise REAL bytes into the image layer at
+# /models/hf/pg2 so the runtime image is self-contained (independent of the
+# ephemeral cache mount).
 path = snapshot_download(repo_id=m, allow_patterns=[f, "config.json", "tokenizer*", "special_tokens_map.json", "vocab*"])
-# Symlink into /models/hf/pg2 so runtime finds it via HF_HOME.
 os.makedirs("/models/hf/pg2", exist_ok=True)
 for item in os.listdir(path):
     src = os.path.join(path, item)
     dst = os.path.join("/models/hf/pg2", item)
-    if os.path.exists(dst):
-        os.remove(dst) if os.path.islink(dst) else shutil.rmtree(dst)
-    os.symlink(src, dst)
-print(f"ONNX model cached at /models/hf/pg2 (from {path})")
+    if os.path.islink(dst) or os.path.isfile(dst):
+        os.remove(dst)
+    elif os.path.isdir(dst):
+        shutil.rmtree(dst)
+    if os.path.isdir(src):
+        shutil.copytree(src, dst, symlinks=False)
+    else:
+        shutil.copy2(src, dst)  # dereferences the snapshot symlink -> real bytes
+print(f"ONNX model materialised at /models/hf/pg2 (from {path})")
 PYEOF
 
 # ---------- runtime ----------
@@ -90,7 +112,12 @@ COPY proto/ext_mcp_pb2.py proto/ext_mcp_pb2_grpc.py /app/proto/
 COPY guardrails/ /app/guardrails/
 COPY server.py /app/server.py
 
+# LF_ONNX_LOCAL_DIR points the scanner at the pre-baked model so it loads from
+# disk (no HF hub access at all). HF_HUB_OFFLINE=1 guarantees no network call
+# even on a cache miss (fail fast instead of hanging in an air-gapped env).
 ENV HF_HOME=/models/hf \
+    LF_ONNX_LOCAL_DIR=/models/hf/pg2 \
+    HF_HUB_OFFLINE=1 \
     PYTHONPATH=/app \
     LISTEN_ADDR="[::]:9001"
 
