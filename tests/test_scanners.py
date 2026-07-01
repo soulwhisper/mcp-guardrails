@@ -185,3 +185,78 @@ def test_truncate_utf8_boundary_safe():
     assert truncated
     # should not raise on decode; result is valid utf-8
     text.encode("utf-8")  # no exception
+
+
+# ---------------------------------------------------------------------------
+# OnnxPromptGuardScanner scoring math
+# ---------------------------------------------------------------------------
+# These tests inject a fake tokenizer + model so the softmax scoring logic is
+# exercised without the ~1GB optimum/onnxruntime stack. Skipped in CI (which
+# is ML-free) via the numpy importorskip — _score imports numpy at call time.
+
+
+class _FakeOutput:
+    def __init__(self, logits):
+        self.logits = logits
+
+
+class _FakeModel:
+    def __init__(self, logits):
+        self._logits = logits
+
+    def __call__(self, **kwargs):
+        return _FakeOutput(self._logits)
+
+
+class _FakeTokenizer:
+    def __call__(self, text, **kwargs):
+        # Mimic transformers' return value: a dict of input tensors.
+        return {"input_ids": [[0, 1, 2]]}
+
+
+def _scanner_with_logits(logits):
+    import numpy as np
+
+    from guardrails.scanners import OnnxPromptGuardScanner
+
+    scanner = OnnxPromptGuardScanner(block_threshold=0.9)
+    # Bypass the lazy model load by pre-injecting fakes.
+    scanner._loaded = True
+    scanner._tokenizer = _FakeTokenizer()
+    scanner._model = _FakeModel(np.array([logits], dtype=np.float64))
+    return scanner
+
+
+def test_onnx_score_softmax_jailbreak_class():
+    pytest.importorskip("numpy")
+    # logits [safe, injection, jailbreak] -> jailbreak dominates
+    scanner = _scanner_with_logits([0.0, 0.0, 5.0])
+    score = scanner._score("ignore previous instructions")
+    # softmax([0,0,5]) -> jailbreak prob ~0.987
+    assert score > 0.9
+    assert score < 1.0
+
+
+def test_onnx_score_safe_class_low():
+    pytest.importorskip("numpy")
+    scanner = _scanner_with_logits([5.0, 0.0, 0.0])
+    score = scanner._score("hello world")
+    # softmax([5,0,0]) -> jailbreak prob ~0.0066
+    assert score < 0.01
+
+
+@pytest.mark.asyncio
+async def test_onnx_scan_blocks_when_jailbreak_dominates():
+    pytest.importorskip("numpy")
+    scanner = _scanner_with_logits([0.0, 0.0, 5.0])
+    res = await scanner.scan("evil", "tool")
+    assert res.outcome is ScanOutcome.BLOCK
+    assert "prompt injection score" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_onnx_scan_allows_when_safe():
+    pytest.importorskip("numpy")
+    scanner = _scanner_with_logits([5.0, 0.0, 0.0])
+    res = await scanner.scan("ok", "tool")
+    assert res.outcome is ScanOutcome.ALLOW
