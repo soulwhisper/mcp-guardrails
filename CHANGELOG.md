@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **`docker-publish.yml`** now triggers on bare version tags (`0.2.0`) as well
+  as `v`-prefixed ones (`v0.2.0`) — previously only `v*` matched, so a
+  bare-semver tag push did not build the image. The `push: tags` event covers
+  both tag creation and tag force-update (re-point). The Trivy scan step's
+  image-ref now keys off `github.ref_type == 'tag'` instead of a `v` prefix
+  check, so bare tags scan the just-built `latest` image.
+
+### Removed
+
+- **`release.yml` workflow** — GitHub Releases are now created manually via the
+  GitHub UI (tag → Draft a new release) with the `CHANGELOG.md` section pasted
+  as the description. `docker-publish.yml` is the only workflow that fires on
+  version tags. `CONTRIBUTING.md` release process updated accordingly.
 
 ## [0.2.0] - 2026-07-01
 
