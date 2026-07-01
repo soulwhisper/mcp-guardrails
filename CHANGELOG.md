@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **GFW / slow-network build-args** for the model download: `HF_ENDPOINT`
+  (HuggingFace mirror, e.g. `https://hf-mirror.com` — the recommended fix,
+  works with `hf_transfer`), `HTTPS_PROXY` (HTTP proxy; disables
+  `hf_transfer`), and `HF_HUB_ENABLE_HF_TRANSFER` (default `1`, set `0` when
+  proxying). `docker-publish.yml` reads them from repository **Variables**
+  (`vars.HF_ENDPOINT` etc.) so CI can use the mirror without code changes.
 - **`LF_ONNX_LOCAL_DIR`** config knob + `OnnxPromptGuardScanner(local_dir=...)`:
   when set (the container pre-bakes the model at `/models/hf/pg2`), the scanner
   loads the tokenizer + `.onnx` from disk — no HF hub access at runtime
