@@ -1,0 +1,36 @@
+# Release Please — automated releases from conventional commits.
+#
+# On every push to main, release-please scans conventional commit messages,
+# maintains a release PR that accumulates changelog entries, version bumps
+# (pyproject.toml + __version__), and tag creation. When the release PR is
+# merged, it creates a GitHub Release with the curated CHANGELOG section.
+#
+# The tag push triggers docker-publish.yml which builds and pushes the
+# multi-arch container image.
+#
+# Token note: release-please creates the tag + release. The tag push
+# triggers docker-publish.yml. With the default GITHUB_TOKEN, workflows
+# triggered by tags from GITHUB_TOKEN won't run other workflows. Use a PAT
+# (RELEASE_PLEASE_TOKEN) so docker-publish fires on the tag push.
+# Without a PAT, docker-publish can still be triggered manually via
+# `gh workflow run docker-publish.yml --ref <tag>`.
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -44,6 +44,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Measures per-request added latency (P50/P90/P99) and throughput under
   varying concurrency against a real ONNX PromptGuard server.
 
+## [0.3.1] - 2026-07-02
+
+### Changed
+
+- **Scanners run in parallel** via `asyncio.gather` instead of sequentially.
+  Each scanner gets its own deadline and failure-mode handling; a slow or
+  failing scanner never blocks the others. Typical 2-scanner config (regex +
+  ONNX PromptGuard) sees ~30-50% latency reduction per check.
+
+- **OpenTelemetry SDK promoted to core dependency** (`opentelemetry-sdk` +
+  `opentelemetry-exporter-otlp`). OTel gracefully degrades to audit-log-only
+  when no OTLP endpoint is configured — zero overhead for users who don't
+  export traces.
+
+- **Per-scanner child spans** for latency breakdown. Each scanner invocation
+  emits a child OTel span carrying `scanner`, `role`, `outcome`, and
+  `duration_ms`. Audit log now includes `scanner.regex` and
+  `scanner.onnx-promptguard` events alongside the parent `guardrail.*` span.
+
+- **CI refresh:** bump `docker/build-push-action` v5 → v6, `codecov` v4 → v5.
+  Drop redundant `pip install` steps in CI/PR workflows (grpcio et al. now
+  resolved by `-e ".[dev]"`). Replace stale `llamafirewall` guard with
+  `onnxruntime`. Fix `protobuf>=4.25,<6` constraint conflict in `pr.yml`.
+
+### Fixed
+
+- **Field-test workflow `HF_ENDPOINT` bug** — same empty-env-var issue that
+  broke the Docker build in v0.2.1. Unset empty `HF_ENDPOINT` before
+  `huggingface_hub` calls. Also removed `HF_ENDPOINT` mirror overrides
+  project-wide (Dockerfile, docker-publish.yml, field-test.yml) — the default
+  `huggingface.co` endpoint works everywhere.
+
+- **Field-test scripts made portable.** Replaced hardcoded NixOS paths with
+  auto-detection of the ONNX model snapshot directory (checks
+  `LF_ONNX_LOCAL_DIR` env var → HF cache scan → NixOS fallback).
+
+- **HF Hub rate-limiting.** All `snapshot_download()` calls now authenticate
+  via `HF_TOKEN` (field-test workflow, Docker build). The field-test download
+  step was failing with HTTP 429 from shared GHA IPs.
+
+- **Docker build: BuildKit `env=` not supported.** GHA ships BuildKit v0.30.0
+  which doesn't support the `env=HF_TOKEN` shorthand on `--mount=type=secret`
+  (requires ≥ v0.31). Replaced with manual `export HF_TOKEN=$(cat ...)`.
+
+### Added
+
+- **18 OTel unit tests** (`tests/test_otel.py`): child-span emission, outcome
+  tracking, degradated operation when OTel endpoint is absent, `AuditSink`
+  resilience. Field test gains audit-trail assertions (4 new checks). Full
+  suite: 108 tests (was 90).
+
+- **K8s deployment docs:** OTLP endpoint configuration documented in
+  `deployment.yaml` and `configmap.yaml` with cluster-internal collector
+  endpoint and graceful degradation notes.
+
+- **Release Please** (`.github/workflows/release-please.yml`, `release-please-config.json`,
+  `.release-please-manifest.json`): automated releases from conventional commits.
+  Release PR auto-updates `pyproject.toml`, `__version__`, and `CHANGELOG.md`.
+  Merge → tag + GitHub Release + docker-publish. Replaces the manual release
+  workflow (`CONTRIBUTING.md` updated).
+
 ## [0.2.1] - 2026-07-02
 
 ### Fixed
@@ -321,6 +382,7 @@ McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
   `metadata_context.upstream_transport == "stdio"`.
 
 [0.3.0]: https://github.com/soulwhisper/mcp-guardrails/releases/tag/v0.3.0
+[0.3.1]: https://github.com/soulwhisper/mcp-guardrails/releases/tag/v0.3.1
 [0.2.1]: https://github.com/soulwhisper/mcp-guardrails/releases/tag/v0.2.1
 [0.2.0]: https://github.com/soulwhisper/mcp-guardrails/releases/tag/v0.2.0
 [0.1.0]: https://github.com/soulwhisper/mcp-guardrails/releases/tag/v0.1.0

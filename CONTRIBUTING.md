@@ -199,12 +199,9 @@ Before opening a PR:
 - [ ] No new ML-stack dep (`onnxruntime` / `transformers`) in the
       unit-test path. Heavy imports stay lazy.
 - [ ] DCO signoff on every commit (see below).
-- [ ] `CHANGELOG.md` entry under `## [Unreleased]` (or a new version section
-      if you are cutting a release).
-
-The PR template (`.github/PULL_REQUEST_TEMPLATE.md`) walks through the
-guardrail-policy impact (deny / mutation / fail-mode / wire-contract /
-version-bump) — fill it in honestly.
+- [ ] Commit messages follow [conventional commits](https://www.conventionalcommits.org/)
+      (`fix:`, `feat:`, `perf:`, `chore:`, etc.) — Release Please derives the
+      semver bump and changelog entry from the commit message.
 
 ## DCO / signoff
 
@@ -222,46 +219,75 @@ trailer to a branch.
 
 ## Release process
 
-Releases are tag-driven. The flow is:
+Releases are automated via [Release Please](https://github.com/googleapis/release-please)
+and driven by [conventional commits](https://www.conventionalcommits.org/).
 
-1. Bump `version` in [`pyproject.toml`](pyproject.toml) and `__version__` in
-   [`guardrails/__init__.py`](guardrails/__init__.py). Move the
-   `## [Unreleased]` section in [`CHANGELOG.md`](CHANGELOG.md) to
-   `## [x.y.z] - YYYY-MM-DD`.
-2. Open a PR with those changes. CI runs on the PR.
-3. After merge, tag the merge commit on `main`. Tags are bare semver (no
-   leading `v`); `docker-publish.yml` matches both `0.2.0` and `v0.2.0`:
+### How it works
 
-   ```bash
-   git tag 0.2.0
-   git push origin 0.2.0
-   ```
+1. **Every push to `main`** triggers the `release-please.yml` workflow.
+   Release Please scans commits since the last release and maintains a
+   **release PR** that accumulates changelog entries and version bumps.
 
-4. **`docker-publish.yml`** fires on the tag push (create or force-update) and
-   builds/pushes the multi-arch (linux/amd64, linux/arm64) image to
-   `ghcr.io/soulwhisper/mcp-guardrails` tagged `0.2.0`, `0.2`, and `latest`.
-5. Create the **GitHub Release** via the GitHub UI: Releases → Draft a new
-   release → select the tag → paste the `## [x.y.z]` section from
-   `CHANGELOG.md` as the description. (There is no release-creation workflow;
-   releases are authored manually so the changelog body is curated.)
-6. Sanity-check the release: pull the image, run
-   `docker run --rm -p 9001:9001 ghcr.io/soulwhisper/mcp-guardrails:0.2.0`,
-   hit the health check, run `tests/e2e_smoke.py` against it.
+2. **The release PR** updates `pyproject.toml`, `guardrails/__init__.py`,
+   and `CHANGELOG.md` automatically. It stays open and self-updates as
+   new commits land on `main` — review it for changelog prose quality
+   before merging.
 
-There is no separate "release branch" — releases are tags on `main`. Hotfix
-releases follow the same flow with a `0.2.1` tag.
+3. **Merge the release PR** → Release Please creates the Git tag and
+   GitHub Release with the curated `CHANGELOG.md` section as the body.
+   The tag push triggers `docker-publish.yml`, which builds and pushes
+   the multi-arch container image.
+
+### Commit conventions
+
+Every commit on `main` MUST follow conventional commits — Release Please
+uses the prefix to determine the semver bump:
+
+| Prefix     | Bump   | Example                                      |
+| ---------- | ------ | -------------------------------------------- |
+| `fix:`     | patch  | `fix: handle empty HF_ENDPOINT`              |
+| `feat:`    | minor  | `feat: add per-scanner OTel child spans`     |
+| `feat!:`   | major  | `feat!: drop Python 3.10 support`            |
+| `perf:`    | patch  | `perf: parallelize scanner execution`        |
+| `refactor:`| —      | no user-visible entry (included in release)  |
+| `chore:`   | —      | no user-visible entry (included in release)  |
+| `docs:`    | —      | no user-visible entry                        |
+| `ci:`      | —      | no user-visible entry                        |
+| `test:`    | —      | no user-visible entry                        |
+| `build:`   | —      | no user-visible entry                        |
+
+Breaking changes: append `!` after the type (e.g. `feat!:`) or include
+`BREAKING CHANGE:` in the commit body.
+
+### Token setup (PAT)
+
+Release Please creates the Git tag and GitHub Release. For the tag push
+to trigger the `docker-publish.yml` workflow, the action needs a
+**Personal Access Token (classic)** with `repo` scope — the default
+`GITHUB_TOKEN` suppresses downstream workflow triggers.
+
+1. Create a [PAT (classic)](https://github.com/settings/tokens) with
+   `repo` scope.
+2. Add it as a repository secret named `RELEASE_PLEASE_TOKEN`
+   (Settings → Secrets and variables → Actions → New repository secret).
+
+Without a PAT, the release will still be created but `docker-publish`
+won't fire automatically — trigger it manually with:
+```bash
+gh workflow run docker-publish.yml --ref <tag>
+```
 
 ### Image tags: immutable vs floating
 
-- **`x.y.z` (e.g. `0.2.0`) is immutable.** Never force-push a version tag to a
-  different commit — consumers pin `0.2.0` expecting the exact image. To ship a
-  change, cut a **new** tag (`0.2.1`).
-- **`latest` and `x.y` (e.g. `0.2`) float** by design — they move to the newest
+- **`x.y.z` (e.g. `0.3.0`) is immutable.** Never force-push a version tag to a
+  different commit — consumers pin `0.3.0` expecting the exact image. To ship a
+  change, cut a **new** tag (`0.3.1`).
+- **`latest` and `x.y` (e.g. `0.3`) float** by design — they move to the newest
   tag on the next release. Don't manually re-point them.
 - **Rebuild the *same* tag** (e.g. a build that failed and you want to retry the
   same commit) without changing it:
   ```bash
-  gh workflow run docker-publish.yml --ref 0.2.0
+  gh workflow run docker-publish.yml --ref 0.3.0
   ```
   (`docker-publish.yml` has a `workflow_dispatch` trigger; it rebuilds the
   selected ref and re-pushes the same image tags.)
