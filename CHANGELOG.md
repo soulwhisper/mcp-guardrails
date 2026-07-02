@@ -5,6 +5,24 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2](https://github.com/soulwhisper/mcp-guardrails/compare/0.3.1...v0.3.2) (2026-07-02)
+
+
+### Features
+
+* **ci:** automate releases with Release Please + update docs for 0.3.1 ([#28](https://github.com/soulwhisper/mcp-guardrails/issues/28)) ([e697df2](https://github.com/soulwhisper/mcp-guardrails/commit/e697df2bee64547c9d9c260b905fed3335dad2e4))
+
+
+### Bug Fixes
+
+* **ci:** document required repo setting for Release Please PR creation ([#29](https://github.com/soulwhisper/mcp-guardrails/issues/29)) ([6bd0ea2](https://github.com/soulwhisper/mcp-guardrails/commit/6bd0ea2468e9dd5f6209d0f820456701f752cc3b))
+* **ci:** use GitHub App token in release-please to trigger downstream workflows ([#32](https://github.com/soulwhisper/mcp-guardrails/issues/32)) ([175791c](https://github.com/soulwhisper/mcp-guardrails/commit/175791c976a3f539de863fea994f5b95cbf2f204))
+
+
+### Documentation
+
+* add Llama 4 license notice, fix stale README/K8s refs ([#31](https://github.com/soulwhisper/mcp-guardrails/issues/31)) ([cdd109e](https://github.com/soulwhisper/mcp-guardrails/commit/cdd109e7d8382073bf58e65a513cd72479afa008))
+
 ## [0.3.0] - 2026-07-02
 
 ### Fixed
