@@ -14,6 +14,11 @@
 # (RELEASE_PLEASE_TOKEN) so docker-publish fires on the tag push.
 # Without a PAT, docker-publish can still be triggered manually via
 # `gh workflow run docker-publish.yml --ref <tag>`.
+#
+# Prerequisites (repo admin, one-time setup):
+#   Settings → Actions → General → Workflow permissions
+#   ☑ Allow GitHub Actions to create and approve pull requests
+#   ☑ Read and write permissions (not read-only)
 name: Release Please
 
 on:

@@ -222,6 +222,18 @@ trailer to a branch.
 Releases are automated via [Release Please](https://github.com/googleapis/release-please)
 and driven by [conventional commits](https://www.conventionalcommits.org/).
 
+### Repo setup (one-time, admin)
+
+Release Please needs permission to create pull requests. In the repository
+Settings → Actions → General:
+
+- **Workflow permissions:** "Read and write permissions"
+- **☑ Allow GitHub Actions to create and approve pull requests**
+
+Without this, Release Please will fail with
+`GitHub Actions is not permitted to create or approve pull requests.`
+It successfully creates the branch and commit, but cannot open the PR.
+
 ### How it works
 
 1. **Every push to `main`** triggers the `release-please.yml` workflow.
