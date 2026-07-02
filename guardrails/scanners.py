@@ -64,6 +64,8 @@ _HIDDEN_ASCII = re.compile(
 
 # Common secret shapes (conservative — false-positive-averse).
 _AWS_KEY = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
+# AWS temporary security credentials (STS / IAM role).
+_AWS_TEMP_KEY = re.compile(r"\bASIA[0-9A-Z]{16}\b")
 _GITHUB_PAT = re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")
 _GITLAB_PAT = re.compile(r"\bglpat-[A-Za-z0-9_-]{20}\b")
 _SLACK_TOKEN = re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")
@@ -88,12 +90,20 @@ _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{4
 # <|im_start|>, so these are a deterministic backstop.
 _FORMAT_INJECTION = re.compile(
     r"\[SYSTEM\]|\[INST\]|\[/INST\]|\[ASSISTANT\]|"
-    r"<\|?im_start\|?>|<\|?im_end\|?>|"
+    r"<\|?im_start\|?>|<\|?im_end\|?>|<\|?endoftext\|?>|"
     r"###\s*(?:system|instruction|override|ignore)"
 )
 # Connection strings with embedded credentials — common leak vector.
 _CONNECTION_STRING = re.compile(
     r"(?i)\b(?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis|amqps?)://[^\s\"'<>]{10,}",
+)
+# Generic key=value credential pairs.  Catches inline secrets like
+#   PASSWORD=hunter2   token: sk-xxx   secret=abc123
+# Uses HUMAN_REVIEW rather than BLOCK because "password"/"secret" can appear
+# in benign documentation and code examples.
+_KEY_VALUE_CRED = re.compile(
+    r"(?i)\b(password|passwd|secret|token|api[_-]?key|access[_-]?key|"
+    r"private[_-]?key|bearer)\s*[=:]\s*[\"']?[^\s\"'<>]{8,}",
 )
 _PRIVATE_KEY = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")
 _GENERIC_HIGH_ENTROPY = re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b")
@@ -142,6 +152,13 @@ def default_patterns() -> list[Pattern]:
             "private_key", _PRIVATE_KEY, ScanOutcome.BLOCK, "private key material in payload", 0.99
         ),
         Pattern("aws_access_key", _AWS_KEY, ScanOutcome.BLOCK, "AWS access key id", 0.95),
+        Pattern(
+            "aws_temp_key",
+            _AWS_TEMP_KEY,
+            ScanOutcome.BLOCK,
+            "AWS temporary security credential",
+            0.95,
+        ),
         Pattern("google_api_key", _GOOGLE_API_KEY, ScanOutcome.BLOCK, "Google API key", 0.95),
         Pattern("github_pat", _GITHUB_PAT, ScanOutcome.BLOCK, "GitHub personal access token", 0.95),
         Pattern("gitlab_pat", _GITLAB_PAT, ScanOutcome.BLOCK, "GitLab personal access token", 0.95),
@@ -162,6 +179,13 @@ def default_patterns() -> list[Pattern]:
             ScanOutcome.HUMAN_REVIEW,
             "connection string with potential credentials",
             0.75,
+        ),
+        Pattern(
+            "key_value_credential",
+            _KEY_VALUE_CRED,
+            ScanOutcome.HUMAN_REVIEW,
+            "key=value credential pair in payload",
+            0.70,
         ),
         Pattern(
             "high_entropy_blob",

@@ -93,6 +93,38 @@ async def test_regex_scanner_detects_google_api_key():
 
 
 @pytest.mark.asyncio
+async def test_regex_scanner_detects_aws_temp_key():
+    scanner = RegexScanner()
+    result = await scanner.scan("ASIA1234567890ABCDEF", "tool")
+    assert result.outcome is ScanOutcome.BLOCK
+    assert "aws_temp_key" in result.scanner
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_detects_key_value_credential():
+    scanner = RegexScanner()
+    result = await scanner.scan("PASSWORD=hunter2abc123", "tool")
+    assert result.outcome is ScanOutcome.HUMAN_REVIEW
+    assert "key_value_credential" in result.scanner
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_key_value_no_false_positive():
+    scanner = RegexScanner()
+    # Short values (< 8 chars) should not match.
+    result = await scanner.scan("password=short", "tool")
+    assert result.outcome is ScanOutcome.ALLOW
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_detects_endoftext_marker():
+    scanner = RegexScanner()
+    result = await scanner.scan("<|endoftext|>", "tool")
+    assert result.outcome is ScanOutcome.BLOCK
+    assert "format_injection" in result.scanner
+
+
+@pytest.mark.asyncio
 async def test_regex_scanner_detects_jwt():
     scanner = RegexScanner()
     jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNq5e3"
