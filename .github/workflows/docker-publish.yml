@@ -1,9 +1,13 @@
 # Build and publish the multi-arch container image to GHCR.
 #
 # Triggers:
-#   - push to main            -> tag "main"
 #   - push of version tags    -> tag the semver (e.g. 0.2.0, 0.2) + "latest"
 #   - workflow_dispatch       -> manual run (tags from metadata-action)
+#
+# The push-to-main trigger is deliberately omitted — the tag push from
+# release-please already covers every release, and branch-push builds
+# were redundant with the tag build (two multi-arch builds for one merge).
+# Use workflow_dispatch when you need a one-off `main` image.
 #
 # Version tags match BOTH conventions: `v0.2.0` (leading v) and bare `0.2.0`.
 # The `push: tags` event fires on tag creation AND on tag force-update
@@ -19,7 +23,6 @@ name: Docker publish
 
 on:
   push:
-    branches: [main]
     tags: ["v*", "[0-9]*"]
     paths-ignore:
       - "docs/**"
@@ -62,15 +65,12 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/soulwhisper/mcp-guardrails
-          # On push to main:    tag "main"
           # On push of 1.2.3:   tag "1.2.3", "1.2", "latest"  (v1.2.3 also works)
-          # On workflow_dispatch: tag from the ref the run was dispatched on.
+          # On workflow_dispatch from main: tag "main"
           #
           # `type=semver` accepts a leading `v` OR a bare version, so both
           # `v0.2.0` and `0.2.0` produce `0.2.0` + `0.2`.
-          # `latest` is enabled ONLY on tag pushes so a version tag-push produces
-          # `0.2.0` + `0.2` + `latest`, while a main-branch push does NOT retag
-          # `latest` (main is a moving target, not a release).
+          # `latest` is enabled ONLY on tag pushes.
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -108,7 +108,9 @@ jobs:
           echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
 
       # ---------------------------------------------------------------------
-      # Advisory security scan of the published image.
+      # Advisory security scan of the published image — runs only on tag pushes
+      # (actual releases). workflow_dispatch builds are ad-hoc and don't need
+      # the scan.
       #
       # continue-on-error: true means a trivy finding does NOT block the
       # release — it surfaces as a warning in the run log for the maintainer
@@ -120,24 +122,13 @@ jobs:
       # this step is advisory only.
       # ---------------------------------------------------------------------
       - name: Trivy scan of the published image
+        if: github.ref_type == 'tag'
         continue-on-error: true
         uses: aquasecurity/trivy-action@master
         with:
-          # Scan a deterministic tag: `latest` on tag pushes (just built), `main`
-          # on main-branch pushes (just built). Both exist immediately after the
-          # build-push step above. Uses ref_type (not a `v` prefix check) so bare
-          # version tags like `0.2.0` also scan `latest`.
-          image-ref: ghcr.io/soulwhisper/mcp-guardrails:${{ github.ref_type == 'tag' && 'latest' || 'main' }}
+          image-ref: ghcr.io/soulwhisper/mcp-guardrails:latest
           format: table
           exit-code: "0" # 0 = print findings but never fail (advisory)
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH
-
-  workflow-keepalive:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - uses: liskin/gh-workflow-keepalive@f72ff1a1336129f29bf0166c0fd0ca6cf1bcb38c # v1

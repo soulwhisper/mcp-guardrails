@@ -1,15 +1,13 @@
 # GitHub CodeQL static analysis for the Python codebase.
-# Runs on push to main, on PRs, and on a weekly schedule.
+# Runs on pull requests to main (pre-merge) and on a weekly schedule
+# (catch dependency CVEs). The push-to-main trigger is deliberately
+# omitted — every PR already runs CodeQL, so re-running on merge is
+# redundant.
 name: CodeQL
 
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main]
-  schedule:
-    # 06:00 UTC every Monday — off-peak for runners.
-    - cron: "0 6 * * 1"
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -38,11 +36,3 @@ jobs:
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
-
-  workflow-keepalive:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - uses: liskin/gh-workflow-keepalive@f72ff1a1336129f29bf0166c0fd0ca6cf1bcb38c # v1

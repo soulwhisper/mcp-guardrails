@@ -5,13 +5,14 @@
 # (torch / transformers / onnxruntime). The `[dev]` extra in pyproject.toml
 # excludes ML deps so the unit tests run in regex-only mode, exercising the
 # engine's graceful fallback path when the ONNX stack is absent.
-name: CI
-
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
+      - ".gitignore"
 
 permissions:
   contents: read
@@ -195,11 +196,3 @@ jobs:
             exit 1
           fi
           echo "CI checks passed"
-
-  workflow-keepalive:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - uses: liskin/gh-workflow-keepalive@f72ff1a1336129f29bf0166c0fd0ca6cf1bcb38c # v1

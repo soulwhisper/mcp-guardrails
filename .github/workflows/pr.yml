@@ -7,7 +7,12 @@ name: PR e2e smoke
 
 on:
   pull_request:
-    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
+      - ".gitignore"
 
 permissions:
   contents: read
@@ -50,11 +55,3 @@ jobs:
         # The script boots server.py on 127.0.0.1:19099 and exits non-zero on
         # any failed assertion. See tests/e2e_smoke.py for details.
         run: python tests/e2e_smoke.py
-
-  workflow-keepalive:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - uses: liskin/gh-workflow-keepalive@f72ff1a1336129f29bf0166c0fd0ca6cf1bcb38c # v1
