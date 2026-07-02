@@ -91,6 +91,13 @@ spec:
               value: "/etc/guardrails/rules.policy"
             - name: SCANNER_TIMEOUT_MS
               value: "500"
+            # --- OpenTelemetry ---
+            # OTLP gRPC exporter. The endpoint is cluster-internal
+            # (typically an otel-collector Deployment). When this is set,
+            # the sidecar initialises a TracerProvider + MeterProvider and
+            # exports spans + the `mcp.guardrails.decisions` counter.
+            # When unset, OTel degrades gracefully to audit-log-only
+            # (structured JSON to AUDIT_LOG_PATH).
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector.observability.svc:4317"
             - name: OTEL_SERVICE_NAME

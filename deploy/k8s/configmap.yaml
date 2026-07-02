@@ -167,5 +167,16 @@ data:
     #   FAILURE_MODE           - failClosed (default) | failOpen
     #   HUMAN_REVIEW_MODE      - pass (default) | deny
     #
+    # Observability (see guardrails/otel.py):
+    #   OTEL_EXPORTER_OTLP_ENDPOINT  - OTLP gRPC collector endpoint
+    #                                   (e.g. http://otel-collector.observability.svc:4317).
+    #                                   When set, exports spans and the
+    #                                   `mcp.guardrails.decisions` counter.
+    #                                   When unset, degrades to audit-log-only.
+    #   OTEL_SERVICE_NAME            - service.name resource attribute
+    #                                   (default: mcp-guardrails)
+    #   AUDIT_LOG_PATH               - JSONL audit sink path
+    #                                   (default: stdout; set to /dev/null to silence)
+    #
     # The rule pack above is the ONLY file-driven config; everything else is
     # knobs on the container env.
