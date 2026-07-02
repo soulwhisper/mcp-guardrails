@@ -54,17 +54,59 @@ async def timed(stub_call, label: str) -> tuple[float, any]:
 # ── Server manager ───────────────────────────────────────────────────────────
 
 
+def _find_model_snap() -> str:
+    """Auto-detect the ONNX model snapshot directory from the HF cache."""
+    base = os.path.expanduser(
+        "~/.cache/huggingface/hub/"
+        "models--gravitee-io--Llama-Prompt-Guard-2-86M-onnx/snapshots"
+    )
+    if os.path.isdir(base):
+        dirs = sorted(os.listdir(base))
+        if dirs:
+            return os.path.join(base, dirs[0])
+    # Fallback: hardcoded NixOS local-dev path.
+    fallback = os.path.expanduser(
+        "~/.cache/huggingface/hub/models--gravitee-io--"
+        "Llama-Prompt-Guard-2-86M-onnx/snapshots/"
+        "45a05fbd5337a864edc608f994911f009c37ca57"
+    )
+    if os.path.isdir(fallback):
+        return fallback
+    raise RuntimeError(
+        "ONNX model not found. Set LF_ONNX_LOCAL_DIR to the model directory, "
+        "or download it with: pip install huggingface-hub && "
+        "python -c 'from huggingface_hub import snapshot_download; "
+        "snapshot_download(\"gravitee-io/Llama-Prompt-Guard-2-86M-onnx\")'"
+    )
+
+
+def _inject_nix_libs(env: dict) -> None:
+    """Add NixOS library paths to LD_LIBRARY_PATH if they exist on this host."""
+    import glob as _glob
+    nix_libs = []
+    for pattern in [
+        "/nix/store/*-gcc-*-lib/lib",
+        "/nix/store/*-zlib-*/lib",
+    ]:
+        matches = sorted(_glob.glob(pattern))
+        if matches:
+            nix_libs.append(matches[-1])  # newest
+    if nix_libs:
+        existing = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = ":".join(nix_libs + ([existing] if existing else []))
+
+
 class Server:
     """Start/stop the guardrail server in a subprocess."""
 
     def __init__(self, port: int = 19096):
         self.port = port
         self.proc: subprocess.Popen | None = None
-        model_snap = os.path.expanduser(
-            "~/.cache/huggingface/hub/models--gravitee-io--"
-            "Llama-Prompt-Guard-2-86M-onnx/snapshots/"
-            "45a05fbd5337a864edc608f994911f009c37ca57"
-        )
+        # Resolve model directory: env var (CI) > HF cache auto-detect >
+        # hardcoded NixOS path (local dev).
+        model_snap = os.environ.get("LF_ONNX_LOCAL_DIR", "")
+        if not model_snap or not os.path.isdir(model_snap):
+            model_snap = _find_model_snap()
         self.env = dict(os.environ)
         self.env.update({
             "GUARDRAIL_DRY_RUN": "0",
@@ -80,13 +122,8 @@ class Server:
             "LF_PROMPTGUARD_BLOCK_THRESHOLD": "0.9",
             "SCANNER_TIMEOUT_MS": "5000",
         })
-        # NixOS: inject lib paths for prebuilt wheels
-        libs = [
-            "/nix/store/hngmi01i8wgi25a0byrxcn4ysz5j79mw-gcc-15.2.0-lib/lib",
-            "/nix/store/dbz6pb9g67kpgpl95k8d85kzpxm1c32p-zlib-1.3.2/lib",
-        ]
-        existing = self.env.get("LD_LIBRARY_PATH", "")
-        self.env["LD_LIBRARY_PATH"] = ":".join(libs + ([existing] if existing else []))
+        # NixOS: inject lib paths for prebuilt wheels (only if they exist).
+        _inject_nix_libs(self.env)
 
     async def start(self) -> None:
         self.proc = subprocess.Popen(

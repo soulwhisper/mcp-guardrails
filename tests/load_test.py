@@ -21,14 +21,51 @@ import grpc  # noqa: E402
 from grpc_health.v1 import health_pb2, health_pb2_grpc  # noqa: E402
 
 PORT = 19099
-MODEL_SNAP = os.path.expanduser(
-    "~/.cache/huggingface/hub/models--gravitee-io--"
-    "Llama-Prompt-Guard-2-86M-onnx/snapshots/"
-    "45a05fbd5337a864edc608f994911f009c37ca57")
-LIBS = [
-    "/nix/store/hngmi01i8wgi25a0byrxcn4ysz5j79mw-gcc-15.2.0-lib/lib",
-    "/nix/store/dbz6pb9g67kpgpl95k8d85kzpxm1c32p-zlib-1.3.2/lib",
-]
+
+
+def _find_model_snap() -> str:
+    """Auto-detect the ONNX model snapshot directory."""
+    # Prefer env var (CI sets LF_ONNX_LOCAL_DIR).
+    snap = os.environ.get("LF_ONNX_LOCAL_DIR", "")
+    if snap and os.path.isdir(snap):
+        return snap
+    # Search the HF cache.
+    base = os.path.expanduser(
+        "~/.cache/huggingface/hub/"
+        "models--gravitee-io--Llama-Prompt-Guard-2-86M-onnx/snapshots"
+    )
+    if os.path.isdir(base):
+        dirs = sorted(os.listdir(base))
+        if dirs:
+            return os.path.join(base, dirs[0])
+    # Fallback for NixOS local dev.
+    fallback = os.path.expanduser(
+        "~/.cache/huggingface/hub/models--gravitee-io--"
+        "Llama-Prompt-Guard-2-86M-onnx/snapshots/"
+        "45a05fbd5337a864edc608f994911f009c37ca57"
+    )
+    if os.path.isdir(fallback):
+        return fallback
+    raise RuntimeError(
+        "ONNX model not found. Set LF_ONNX_LOCAL_DIR or download the model."
+    )
+
+
+def _inject_nix_libs(env: dict) -> None:
+    """Add NixOS lib paths to LD_LIBRARY_PATH if they exist on this host."""
+    import glob as _glob
+    nix_libs = []
+    for pattern in ["/nix/store/*-gcc-*-lib/lib", "/nix/store/*-zlib-*/lib"]:
+        matches = sorted(_glob.glob(pattern))
+        if matches:
+            nix_libs.append(matches[-1])
+    if nix_libs:
+        existing = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = ":".join(nix_libs + ([existing] if existing else []))
+
+
+MODEL_SNAP = _find_model_snap()
+
 
 def make_req(name="ping", args=None):
     if args is None:
@@ -45,8 +82,7 @@ async def main():
                HF_HOME=os.path.expanduser("~/.cache/huggingface"),
                HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
                AUDIT_LOG_PATH="/dev/null", SCANNER_TIMEOUT_MS="5000")
-    existing = env.get("LD_LIBRARY_PATH", "")
-    env["LD_LIBRARY_PATH"] = ":".join(LIBS + ([existing] if existing else []))
+    _inject_nix_libs(env)
 
     proc = subprocess.Popen([sys.executable, str(_ROOT / "server.py")],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

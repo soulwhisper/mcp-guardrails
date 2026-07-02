@@ -44,11 +44,16 @@ jobs:
       - name: Download ONNX PromptGuard model
         env:
           HF_ENDPOINT: ${{ inputs.hf-endpoint }}
-          HF_HUB_ENABLE_HF_TRANSFER: "1"
         run: |
+          # Unset HF_ENDPOINT when empty — an empty string causes
+          # httpx.UnsupportedProtocol in huggingface_hub (same bug as the
+          # Dockerfile empty-HF_ENDPOINT fix in v0.2.1).
+          if [ -z "$HF_ENDPOINT" ]; then
+            unset HF_ENDPOINT
+          fi
+
           python - <<'PY'
           import os, sys
-          os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
 
           endpoint = os.environ.get("HF_ENDPOINT", "")
           if endpoint:
@@ -76,6 +81,9 @@ jobs:
               with open(os.environ.get("GITHUB_ENV", "/dev/null"), "a") as env_fh:
                   env_fh.write(f"MODEL_SNAP_DIR={snap_path}\n")
               print(f"MODEL_SNAP_DIR={snap_path}")
+          else:
+              print("ERROR: model snapshot directory not found after download")
+              sys.exit(1)
           PY
 
       - name: Run field test (functional)
