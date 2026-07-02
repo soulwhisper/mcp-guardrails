@@ -9,8 +9,11 @@
 #   4. runtime    — nonroot (65532), copy install + models + app, expose :9001
 #
 # The ONNX model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) is PUBLIC and
-# non-gated — no HuggingFace token required. Uses ONNX Runtime for CPU
-# inference (no torch dependency, ~400MB smaller image than the torch path).
+# non-gated — no token required for access. However, HF_TOKEN is recommended
+# to avoid 429 rate-limiting during the model download stage (HF applies
+# stricter limits to unauthenticated requests from shared IPs like GHA).
+# Uses ONNX Runtime for CPU inference (no torch dependency, ~400MB smaller
+# image than the torch path).
 #
 # Final image ~600-800MB (onnxruntime + transformers + model weights).
 
@@ -35,10 +38,12 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --prefix=/install -r requirements.txt
 
-# ---------- models ----------
 # Pre-download the ONNX PromptGuard-2 model into the image. The model is
-# PUBLIC and non-gated, so NO HF_TOKEN is needed. This keeps runtime cold-start
-# fast (no download on first scan) and makes the image air-gappable.
+# PUBLIC and non-gated — no token required for access. However, HF_TOKEN
+# is recommended to avoid 429 rate-limiting from shared GHA IPs. The secret
+# is optional; the build works without it (just slower on cache miss).
+# This keeps runtime cold-start fast (no download on first scan) and makes
+# the image air-gappable.
 #
 # Default: model.onnx (full-precision, ~350MB, accuracy 98.01%).
 # Override with --build-arg LF_ONNX_FILE=model.quant.onnx for the quantized
@@ -61,6 +66,7 @@ ARG LF_ONNX_FILE=model.onnx
 # actually change.
 RUN pip install --no-cache-dir "huggingface-hub>=0.30.2" "hf_transfer>=0.1.6"
 RUN --mount=type=cache,target=/hf-cache,sharing=locked \
+    --mount=type=secret,id=HF_TOKEN,env=HF_TOKEN \
     set -e; \
     if [ "${SKIP_MODEL_DOWNLOAD}" = "1" ]; then \
         echo "SKIP: model pre-download (SKIP_MODEL_DOWNLOAD=1)"; \

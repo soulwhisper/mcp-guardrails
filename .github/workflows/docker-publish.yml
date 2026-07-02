@@ -90,11 +90,11 @@ jobs:
           build-args: |
             PY_VERSION=3.11-slim
           # The ONNX model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) is
-          # public and non-gated — NO HF_TOKEN needed. The Dockerfile's models
-          # stage downloads it directly.
-          #
+          # public and non-gated, but HF_TOKEN avoids 429 rate-limiting
+          # from shared GHA IPs during the models build stage.
+          secrets: |
+            "HF_TOKEN=${{ secrets.HF_TOKEN }}"
           cache-from: type=gha
-          cache-to: type=gha,mode=max
           provenance: false
 
       - name: Generate image digest summary

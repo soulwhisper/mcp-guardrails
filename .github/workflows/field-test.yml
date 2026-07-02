@@ -36,6 +36,8 @@ jobs:
           pip install -e ".[dev,onnx]"
 
       - name: Download ONNX PromptGuard model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python - <<'PY'
           import os, sys
