@@ -5,13 +5,21 @@
 # (torch / transformers / onnxruntime). The `[dev]` extra in pyproject.toml
 # excludes ML deps so the unit tests run in regex-only mode, exercising the
 # engine's graceful fallback path when the ONNX stack is absent.
-name: CI
-
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
+      - ".gitignore"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
+      - ".gitignore"
 
 permissions:
   contents: read

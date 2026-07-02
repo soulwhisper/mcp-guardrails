@@ -8,6 +8,11 @@ name: PR e2e smoke
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
+      - ".gitignore"
 
 permissions:
   contents: read
