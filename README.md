@@ -202,7 +202,7 @@ make run
 docker run --rm -p 9001:9001 \
   --env-file examples/docker-run.env \
   -v $(pwd)/examples/rules.policy:/etc/guardrails/rules.policy:ro \
-  ghcr.io/soulwhisper/mcp-guardrails:0.2.0
+  ghcr.io/soulwhisper/mcp-guardrails:0.3.1
 ```
 
 ### PromptGuard-2 model (ONNX, public, no token required)
