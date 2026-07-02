@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 #
 # mcp-guardrails sidecar image.
 #
@@ -17,7 +17,7 @@
 #
 # Final image ~600-800MB (onnxruntime + transformers + model weights).
 
-ARG PY_VERSION=3.11-slim
+ARG PY_VERSION=3.11-slim@sha256:b27df5841f3355e9473f9a516d38a6783b6c8dfeacaf2d14a240f443b368ddb6
 
 # ---------- base ----------
 FROM python:${PY_VERSION} AS base
