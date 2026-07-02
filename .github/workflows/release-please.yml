@@ -8,17 +8,25 @@
 # The tag push triggers docker-publish.yml which builds and pushes the
 # multi-arch container image.
 #
-# Token note: release-please creates the tag + release. The tag push
-# triggers docker-publish.yml. With the default GITHUB_TOKEN, workflows
-# triggered by tags from GITHUB_TOKEN won't run other workflows. Use a PAT
-# (RELEASE_PLEASE_TOKEN) so docker-publish fires on the tag push.
-# Without a PAT, docker-publish can still be triggered manually via
-# `gh workflow run docker-publish.yml --ref <tag>`.
+# Token: use a GitHub App token, not GITHUB_TOKEN.
+# GITHUB_TOKEN suppresses downstream workflow triggers — with it:
+#   1. CI (ci.yml, pr.yml) will NOT run on the release PR branch.
+#      The PR appears stuck with no status checks.
+#   2. docker-publish.yml will NOT fire on the tag push after merge.
+# A GitHub App token (via actions/create-github-app-token) acts like
+# a PAT but is scoped to the repo and tied to the app installation.
+# It triggers downstream workflows — CI runs on the release PR,
+# docker-publish fires on the tag push.
 #
 # Prerequisites (repo admin, one-time setup):
 #   Settings → Actions → General → Workflow permissions
 #   ☑ Allow GitHub Actions to create and approve pull requests
 #   ☑ Read and write permissions (not read-only)
+#
+#   GitHub App "repo-butler" must be installed on the repo with:
+#   - Contents: Read & write
+#   - Pull requests: Read & write
+#   - Secrets APP_CLIENT_ID and APP_PRIVATE_KEY must be set
 name: Release Please
 
 on:
@@ -34,8 +42,15 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
+      - name: Generate GitHub App token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: googleapis/release-please-action@v4
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
