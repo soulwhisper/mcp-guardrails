@@ -294,9 +294,7 @@ def test_invalid_rules_rejected():
 
 
 def test_set_rules_swaps_atomically():
-    engine = InvariantEngine(
-        [ToxicFlowRule(name="old", steps=[FlowStep(tool="a")])], window=8
-    )
+    engine = InvariantEngine([ToxicFlowRule(name="old", steps=[FlowStep(tool="a")])], window=8)
     engine.record("a")
     assert engine.evaluate() is not None  # old rule fires
     engine.set_rules([ToxicFlowRule(name="new", steps=[FlowStep(tool="b")])])

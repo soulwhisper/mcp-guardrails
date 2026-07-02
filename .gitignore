@@ -50,3 +50,10 @@ models/
 
 # OS
 Thumbs.db
+
+# Local dev tooling (mise, uv, oh-my-pi) — per-developer, never committed.
+.mise.toml
+uv.lock
+.python-version
+pyvenv.cfg
+.omp/
