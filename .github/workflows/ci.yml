@@ -133,7 +133,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload to Codecov
-        # Best-effort: skip when the token is not available (forks / dependabot).
+        # Best-effort: skip when the token is not available (forks / renovate).
         if: ${{ env.CODECOV_TOKEN != '' }}
         continue-on-error: true
         uses: codecov/codecov-action@v5
