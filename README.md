@@ -39,23 +39,23 @@ sequenceDiagram
     participant Agent as MCP Agent (LLM)
     participant GW as agentgateway
     participant Sidecar as ExtMcp Guardrail (sidecar)
-    participant LF as LlamaFirewall
+    participant PG as PromptGuard ONNX
     participant INV as Invariant Engine
     participant MCP as Upstream MCP Server
 
     Agent->>GW: tools/call (JSON-RPC)
     GW->>Sidecar: CheckRequest(McpRequest)
-    Sidecar->>LF: scan(params, role=TOOL)
+    Sidecar->>PG: scan(params, role=TOOL)
     Sidecar->>INV: record(tool, args) + evaluate()
-    LF-->>Sidecar: ScanDecision
+    PG-->>Sidecar: ScanDecision
     INV-->>Sidecar: ScanResult
     Sidecar-->>GW: McpRequestResult{allowed|mutated|error}
     alt allowed / mutated
         GW->>MCP: forward JSON-RPC
         MCP-->>GW: result
         GW->>Sidecar: CheckResponse(McpResponse)
-        Sidecar->>LF: scan(result, role=ASSISTANT)
-        LF-->>Sidecar: ScanDecision
+        Sidecar->>PG: scan(result, role=ASSISTANT)
+        PG-->>Sidecar: ScanDecision
         Sidecar-->>GW: McpResponseResult{allowed|mutated|error}
         alt allowed / mutated
             GW-->>Agent: result
@@ -81,10 +81,10 @@ flowchart TD
     subgraph Engine
         ENG --> EXT[extract_text + truncate]
         EXT --> RX[RegexScanner<br/>hidden-ascii / PII / secrets]
-        EXT --> LF[LlamaFirewallScanner<br/>PromptGuard-2 + CodeShield]
+        EXT --> PG[OnnxPromptGuardScanner<br/>PromptGuard-2]
         EXT --> INV[InvariantEngine<br/>trace record + evaluate]
         RX --> AGG
-        LF --> AGG
+        PG --> AGG
         INV --> AGG
         AGG[DecisionAggregator<br/>fail-closed]
     end
@@ -141,7 +141,7 @@ On `CheckRequest` for `tools/call`, the engine does two things in parallel:
 1. **Semantic scan**: extracts text from the JSON-RPC `params` object
    (`extract_text`), truncates to `MAX_CONTENT_BYTES` on a UTF-8 boundary,
    then runs the configured content scanners (`RegexScanner` for hidden
-   ASCII / PII / secrets, `LlamaFirewallScanner` for PromptGuard-2 + CodeShield)
+   ASCII / PII / secrets, `OnnxPromptGuardScanner` for PromptGuard-2)
    against the text with role `TOOL`.
 2. **Invariant trace**: appends `(tool, args)` to a bounded sliding window
    (`INVARIANT_WINDOW` calls, default 64) and evaluates every `ToxicFlowRule`
@@ -172,7 +172,7 @@ responses only — the cost-control knob from the original design.
 
 Prerequisites: Python 3.10+ and `pip`. The pure-Python policy core
 (models, aggregator, invariant engine, regex scanner) runs without the ML
-stack; LlamaFirewall is imported lazily.
+stack; the ONNX PromptGuard scanner is imported lazily.
 
 ```bash
 # 1. Clone
@@ -192,7 +192,7 @@ make test
 # 5. Build the container image
 make docker
 
-# 6. Run the server locally (regex-only; llamafirewall absent is graceful)
+# 6. Run the server locally (regex-only; onnxruntime absent is graceful)
 make run
 ```
 
@@ -492,7 +492,7 @@ mcp-guardrails/
 │   ├── models.py                 # Decision, ScanResult, ScanOutcome, FailureMode, ...
 │   ├── aggregator.py             # fail-closed DecisionAggregator
 │   ├── invariant.py              # FlowStep, ToxicFlowRule, LoopRule, InvariantEngine
-│   ├── scanners.py               # Scanner protocol, RegexScanner, LlamaFirewallScanner, Stub
+│   ├── scanners.py               # Scanner protocol, RegexScanner, OnnxPromptGuardScanner, Stub
 │   ├── engine.py                 # GuardrailEngine orchestrator (request + response paths)
 │   ├── servicer.py               # ExtMcpServicer (gRPC wire mapping)
 │   ├── config.py                 # GuardrailConfig.from_env()

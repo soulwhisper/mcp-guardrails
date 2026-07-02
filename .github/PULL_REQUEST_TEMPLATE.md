@@ -29,11 +29,11 @@ wire-compat with agentgateway. -->
 <!-- Tick every box. If something doesn't apply, explain why. -->
 
 - [ ] `make lint` passes (ruff check guardrails server.py tests)
-- [ ] `make test` passes (unit tests, regex-only mode — no torch required)
+- [ ] `make test` passes (unit tests, regex-only mode — no ML deps required)
 - [ ] `python tests/e2e_smoke.py` passes (live gRPC round-trip)
 - [ ] `make proto` was re-run if `proto/ext_mcp.proto` changed (CI proto-check job will fail otherwise)
 - [ ] New / changed deny patterns covered by a unit test in `tests/`
-- [ ] No new dependency on the heavy ML stack (torch / llamafirewall / transformers) in the unit-test path
+- [ ] No new dependency on the heavy ML stack (onnxruntime / transformers) in the unit-test path
 
 ## Guardrail-policy impact
 

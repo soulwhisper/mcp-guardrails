@@ -33,11 +33,11 @@ Each call returns one of three states: **allowed** (forward unchanged),
 
 The sidecar composes two complementary policy layers:
 
-- A **semantic content layer** built on
-  [LlamaFirewall](https://github.com/meta-llama/PurpleLlama-LlamaFirewall)
-  (PromptGuard-2 for prompt-injection detection, CodeShield for code
-  safety) plus a zero-dependency `RegexScanner` for hidden ASCII / PII /
-  secrets. This layer inspects the bytes of a single exchange.
+- A **semantic content layer** built on ONNX
+  [PromptGuard-2](https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-86M-onnx)
+  (prompt-injection detection via CPU inference, no torch) plus a
+  zero-dependency `RegexScanner` for hidden ASCII / PII / secrets. This
+  layer inspects the bytes of a single exchange.
 - A **stateful rule layer** inspired by
   [Invariant Labs](https://invariantlabs.ai/)' toxic-flow research. This
   layer inspects the _sequence_ of tool calls inside a sliding window and
@@ -203,8 +203,8 @@ self._c.request_scanners)`:
      — first-match-wins over `default_patterns()`: hidden ASCII, private
      keys, AWS / GitHub / GitLab / Slack tokens, high-entropy blobs,
      credit cards, emails.
-   - `LlamaFirewallScanner` (lazy import; falls back to regex-only if
-     `llamafirewall` is absent) — PromptGuard-2 + CodeShield for the
+   - `OnnxPromptGuardScanner` (lazy import; falls back to regex-only if
+     `onnxruntime` / `transformers` is absent) —  PromptGuard-2 for the
      `TOOL` role.
    - Each scanner runs under `asyncio.wait_for(..., timeout)` with the
      deadline set to `SCANNER_TIMEOUT_MS / 1000`. Timeouts and exceptions
@@ -257,7 +257,7 @@ The call graph:
 self._c.response_scanners)`:
    - `RegexScanner` — same patterns as request side (a private key in tool
      output is just as bad as one in params).
-   - `LlamaFirewallScanner` — PromptGuard with role `ASSISTANT`. The
+   - `OnnxPromptGuardScanner` — PromptGuard with role `ASSISTANT`. The
      default role map does **not** enable `AGENT_ALIGNMENT` for the
      assistant role at the first stage (see the next step).
 4. **Optional second-stage AgentAlignment** — only when **both** are true:
@@ -532,14 +532,16 @@ The Dockerfile is multi-stage:
    `HF_HOME=/models/hf`.
 2. **`builder`** — `pip install --prefix=/install -r requirements.txt`
    with a BuildKit pip cache mount. Build tools do not leak into runtime.
-3. **`models`** — pre-downloads PromptGuard-2-86M
-   (`meta-llama/Llama-Prompt-Guard-2-86M`) into `/models/hf/pg2` via
-   `transformers.AutoModelForSequenceClassification.from_pretrained`. If
-   the model is unavailable at build time (air-gapped build, HF outage),
-   the build still succeeds — runtime will lazy-fetch on first scan
-   (guarded by a 30s warmup deadline). This stage is what makes the image
-   air-gappable and cold-start fast: no 5-10s HF download on first
-   request.
+3. **`models`** — pre-downloads the public ONNX PromptGuard-2-86M model
+   (`gravitee-io/Llama-Prompt-Guard-2-86M-onnx`) into `/models/hf/pg2` via
+   `huggingface_hub.snapshot_download`. The model is a flat `.onnx` file
+   (~350MB) loaded at runtime by `onnxruntime.InferenceSession` directly —
+   no `torch`, no `optimum`. A BuildKit cache mount (`/hf-cache`) with
+   `HF_HUB_ENABLE_HF_TRANSFER=1` parallelises the LFS download (2-5x faster).
+   If the model is unavailable at build time (air-gapped build, HF outage),
+   the build still succeeds — runtime will lazy-fetch on first scan (guarded
+   by a 30s warmup deadline). This stage is what makes the image air-gappable
+   and cold-start fast: no 5-10s HF download on first request.
 4. **`runtime`** — `python:3.11-slim`, `useradd -u 65532 nonroot`, copies
    `/install` from builder and `/models/hf` from models, copies the app
    (`proto/`, `guardrails/`, `server.py`) into `/app`, sets
@@ -547,23 +549,14 @@ The Dockerfile is multi-stage:
    uses an inline Python `grpc.health.v1` probe (zero extra system deps —
    no `grpcurl` needed).
 
-Final image is ~1.8-2.2 GB (torch CPU + model weights). The container runs
-as UID/GID 65532 (matching the K8s `securityContext.runAsUser`).
+Final image is ~600 MB (onnxruntime + model weights, torch-free). The
+container runs as UID/GID 65532 (matching the K8s `securityContext.runAsUser`).
 
-### Slim image variant (not the default)
-
-For a sub-500 MB image, swap the PromptGuard-2 path to ONNX:
-
-- Export `meta-llama/Llama-Prompt-Guard-2-86M` to ONNX once (`optimum.exporters`).
-- Replace the `transformers` + `torch` runtime deps with `onnxruntime`
-  (~50 MB vs ~1.5 GB for torch CPU).
-- Subclass `LlamaFirewallScanner` to call the ONNX session directly
-  instead of `LlamaFirewall.scan` (which loads torch internally).
-
-This drops image size by ~75% and cold-start time by ~60% at the cost of
-maintaining the ONNX export yourself. The default image stays on the
-torch path because LlamaFirewall's `AgentAlignment` scanner is not yet
-ONNX-exportable.
+The ONNX stack is the **default and only path** — the old torch-based
+LlamaFirewall pipeline was dropped in 0.2.1 in favor of direct
+`onnxruntime.InferenceSession` inference. The `AgentAlignment` second-stage
+scanner (LLM-based, opt-in) uses an external API call and does not require
+a local model.
 
 ## Homelab cost tradeoffs
 
@@ -575,15 +568,15 @@ each row.
 
 | Decision point         | Choice                                    | Rationale                                                                                                                                                                               |
 | ---------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Language / runtime     | Python 3.11 + asyncio + grpc.aio          | Matches LlamaFirewall / transformers ecosystem (Python-native). asyncio gives single-process concurrency without GIL pain for I/O-bound gRPC. Rust/Go would force FFI to the ML stack.  |
+| Language / runtime     | Python 3.11 + asyncio + grpc.aio          | Matches the ONNX / transformers tokenizer ecosystem (Python-native). asyncio gives single-process concurrency without GIL pain for I/O-bound gRPC. Rust/Go would force FFI to the ML stack. |
 | Model loading          | Pre-download PromptGuard-2-86M in image   | ~350 MB weights. Lazy-fetch on first scan would add 5-10s cold-start latency per Pod and require HF egress. Pre-download makes the image air-gappable and cold-start fast.              |
 | AgentAlignment trigger | Opt-in, gated on first-stage HUMAN_REVIEW | AgentAlignment is LLM-based (~300-800ms / call). Running it on every response would dominate sidecar P95 and homelab GPU/CPU cost. Gating bounds the cost to suspicious responses only. |
 | Failure mode           | failClosed by default                     | Write-capable agents (file write, email send, k8s apply) are far more dangerous unguarded than blocked. Loud `-32001` beats silent exfiltration.                                        |
 | Replicas               | 2 (with PDB minAvailable=1)               | Survives a single Pod restart / node drain. 1 replica is a single point of failure; 3+ is overkill for a homelab. HPA scales 2-4 on CPU 70%.                                            |
-| Resource limits        | 500m/2Gi request, 2/4Gi limit             | Covers torch CPU + PromptGuard-2 weights with headroom. AgentAlignment (when enabled) holds an extra model in memory — bump limit to 4Gi.                                               |
+| Resource limits        | 500m/2Gi request, 2/4Gi limit             | Covers onnxruntime CPU + PromptGuard-2 weights (~350MB) with headroom. AgentAlignment (when enabled) calls an external LLM API — no extra local model memory needed.                     |
 | Trace window           | 64 calls                                  | Covers a typical homelab agent tool-use chain (most plans fit in <32 calls). Bump for long multi-step plans; cost is O(window \* rules) per evaluation.                                 |
 | Observability          | JSONL audit (always) + OTel (opt-in)      | Audit log survives OTel collector outages and is GitOps-friendly. OTel adds spans + a counter when collection is up; the floor is the audit log, the ceiling is OTel.                   |
-| Scanner stack          | Regex (always) + LlamaFirewall (opt-in)   | Regex catches hidden ASCII / PII / secrets with zero deps. LlamaFirewall adds semantic injection detection but pulls in torch. Both on by default; LlamaFirewall degrades gracefully.   |
+| Scanner stack          | Regex (always) + PromptGuard ONNX (opt-in) | Regex catches hidden ASCII / PII / secrets with zero deps. PromptGuard ONNX adds semantic injection detection via `onnxruntime` (~15MB); no torch needed. Both on by default; degrades gracefully to regex-only. |
 | Content budget         | 32 KiB per scan                           | Tool output can be multi-MB; scanning it whole blows latency and risks OOM. 32 KiB covers the attacker-relevant head of any payload (injections live at the top).                       |
 | Scanner timeout        | 500 ms                                    | Strictly less than the agentgateway processor timeout (recommended 800-1000ms). Sidecar decides first; gateway timeout is the backstop.                                                 |
 | Proto field naming     | `allowed` (not `pass`)                    | Wire-compatible with agentgateway via field numbers. Renamed to avoid Python `pass`-keyword kwarg collision in the generated stubs. Pure cosmetic.                                      |
@@ -603,23 +596,23 @@ sequenceDiagram
     participant Agent as MCP Agent (LLM)
     participant GW as agentgateway
     participant Sidecar as ExtMcp Guardrail (sidecar)
-    participant LF as LlamaFirewall
+    participant PG as PromptGuard ONNX
     participant INV as Invariant Engine
     participant MCP as Upstream MCP Server
 
     Agent->>GW: tools/call (JSON-RPC)
     GW->>Sidecar: CheckRequest(McpRequest)
-    Sidecar->>LF: scan(params, role=TOOL)
+    Sidecar->>PG: scan(params, role=TOOL)
     Sidecar->>INV: record(tool, args) + evaluate()
-    LF-->>Sidecar: ScanDecision
+    PG-->>Sidecar: ScanDecision
     INV-->>Sidecar: ScanResult
     Sidecar-->>GW: McpRequestResult{allowed|mutated|error}
     alt allowed / mutated
         GW->>MCP: forward JSON-RPC
         MCP-->>GW: result
         GW->>Sidecar: CheckResponse(McpResponse)
-        Sidecar->>LF: scan(result, role=ASSISTANT)
-        LF-->>Sidecar: ScanDecision
+        Sidecar->>PG: scan(result, role=ASSISTANT)
+        PG-->>Sidecar: ScanDecision
         Sidecar-->>GW: McpResponseResult{allowed|mutated|error}
         alt allowed / mutated
             GW-->>Agent: result
@@ -649,7 +642,7 @@ flowchart TD
     subgraph Engine
         ENG --> EXT[extract_text + truncate]
         EXT --> RX[RegexScanner<br/>hidden-ascii / PII / secrets]
-        EXT --> LF[LlamaFirewallScanner<br/>PromptGuard-2 + CodeShield]
+        EXT --> LF[OnnxPromptGuardScanner<br/>PromptGuard-2]
         EXT --> INV[InvariantEngine<br/>trace record + evaluate]
         RX --> AGG
         LF --> AGG

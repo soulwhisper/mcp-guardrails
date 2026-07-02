@@ -20,10 +20,10 @@ extra review; disagreeing about threat models is fine, doing so rudely is not.
 
 The pure-Python policy core (models, aggregator, invariant engine, regex
 scanner, servicer) runs **without** the ML stack. The dev install
-(`pip install -e ".[dev]"`) deliberately does **not** pull in `llamafirewall`,
-`torch`, or `transformers`. The unit tests must pass in this minimal
-environment; that is enforced by CI (the `test` job hard-fails if any of those
-three packages leaks back in).
+(`pip install -e ".[dev]"`) deliberately does **not** pull in `onnxruntime`
+or `transformers`. The unit tests must pass in this minimal
+environment; that is enforced by CI (the `test` job hard-fails if either of those
+packages leaks back in).
 
 ## Clone and first run
 
@@ -32,7 +32,7 @@ git clone https://github.com/soulwhisper/mcp-guardrails.git
 cd mcp-guardrails
 make dev          # pip install -e ".[dev]" — pytest, ruff, grpcio-tools
 make proto        # regenerate stubs (no-op if proto/ext_mcp.proto is unchanged)
-make test         # 71 unit tests, ~0.3s
+make test         # 72 unit tests, ~0.3s
 make lint         # ruff check
 ```
 
@@ -86,7 +86,7 @@ and `filterwarnings = ["error", ...]`. New warnings will fail the suite —
 fix the warning rather than suppressing it. The exception is grpc
 deprecation warnings, which are ignored.
 
-The 71 unit tests cover:
+The 72 unit tests cover:
 
 - `tests/test_aggregator.py` — fail-closed table, HUMAN_REVIEW resolution,
   mutation passthrough.
@@ -125,7 +125,7 @@ To add a scanner:
    small ones). Implementations **must** be safe to call concurrently. If
    your scanner does synchronous ML inference, wrap it in
    `asyncio.to_thread` so the asyncio event loop is never blocked (see
-   `LlamaFirewallScanner.scan` for the pattern).
+   `OnnxPromptGuardScanner.scan` for the pattern).
 2. **Return a `ScanResult`** with one of `ScanOutcome.ALLOW`, `BLOCK`, or
    `HUMAN_REVIEW`. The aggregator handles the rest.
 3. **Register it** in `GuardrailEngine.from_config`
@@ -141,7 +141,7 @@ To add a scanner:
    `tests/test_scanner_<name>.py`). Cover the allow / block / review paths
    and the timeout / exception path.
 
-Heavy ML imports (`llamafirewall`, `transformers`, `torch`) must be **lazy**
+Heavy ML imports (`onnxruntime`, `transformers`) must be **lazy**
 (inside `from_default` / `from_env`, never at module top level) so the unit
 tests keep passing in the ML-free dev environment.
 
@@ -186,7 +186,7 @@ Rule packs are hot-reloadable at runtime via `SIGHUP` — see
 Before opening a PR:
 
 - [ ] `make lint` clean.
-- [ ] `make test` green (71+ tests).
+- [ ] `make test` green (72+ tests).
 - [ ] `python3 tests/e2e_smoke.py` green if you touched the servicer, engine,
       config, or server entrypoint.
 - [ ] `make proto` re-run and stubs committed if you touched
@@ -196,7 +196,7 @@ Before opening a PR:
 - [ ] If you added an env var, it is read in `guardrails/config.py` (or
       `guardrails/rules/__init__.py` for the two `INVARIANT_RULES_*` vars)
       **and** documented in the README env-var table.
-- [ ] No new ML-stack dep (`llamafirewall` / `torch` / `transformers`) in the
+- [ ] No new ML-stack dep (`onnxruntime` / `transformers`) in the
       unit-test path. Heavy imports stay lazy.
 - [ ] DCO signoff on every commit (see below).
 - [ ] `CHANGELOG.md` entry under `## [Unreleased]` (or a new version section
