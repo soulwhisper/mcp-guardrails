@@ -54,12 +54,6 @@ FROM base AS models
 ARG SKIP_MODEL_DOWNLOAD=0
 ARG LF_ONNX_MODEL=gravitee-io/Llama-Prompt-Guard-2-86M-onnx
 ARG LF_ONNX_FILE=model.onnx
-# GFW / slow-network knob (optional, default to none):
-#   HF_ENDPOINT            HuggingFace mirror URL, e.g. https://hf-mirror.com
-#                          (the recommended fix for GFW — works WITH hf_transfer,
-#                          reachable from CI). hf_transfer (parallel chunked
-#                          download) is always on.
-ARG HF_ENDPOINT=""
 # Install ONLY what the download needs (huggingface_hub + hf_transfer) — NOT the
 # full runtime deps. This decouples the model-download layer from the builder
 # stage, so a requirements.txt bump does NOT invalidate the (slow, ~350MB) model
@@ -75,12 +69,8 @@ RUN --mount=type=cache,target=/hf-cache,sharing=locked \
         exit 0; \
     fi; \
     export HF_HOME=/hf-cache HF_HUB_ENABLE_HF_TRANSFER=1; \
-    # An empty HF_ENDPOINT build-arg (the default, when no mirror is configured)
-    # would leak into the env as "" and make huggingface_hub build scheme-less
-    # URLs (httpx UnsupportedProtocol). unset it so the hub falls back to its
-    # built-in default (https://huggingface.co); only honour a real mirror.
-    if [ -n "${HF_ENDPOINT}" ]; then export HF_ENDPOINT="${HF_ENDPOINT}"; else unset HF_ENDPOINT; fi; \
-    echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE}) — endpoint=${HF_ENDPOINT:-default}"; \
+    echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE})"; \
+    echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE})"; \
     python - <<PYEOF
 from huggingface_hub import snapshot_download
 import os, shutil

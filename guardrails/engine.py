@@ -126,7 +126,7 @@ class GuardrailEngine:
                 except ImportError as exc:
                     logger.warning(
                         "ONNX PromptGuard unavailable (%s); continuing with regex-only. "
-                        "Install with: pip install 'optimum[onnxruntime]'",
+                        "Install with: pip install onnxruntime transformers",
                         exc,
                     )
             if config.enable_agent_alignment:

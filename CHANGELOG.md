@@ -82,11 +82,6 @@ missing an 'http://' or 'https://' protocol`. The empty `HF_ENDPOINT`
 
 ### Added
 
-- **GFW / slow-network build-arg** for the model download: `HF_ENDPOINT`
-  (HuggingFace mirror, e.g. `https://hf-mirror.com` — the recommended fix,
-  works with `hf_transfer`, reachable from CI). `docker-publish.yml` reads it
-  from the repository **Variable** `vars.HF_ENDPOINT` so CI can use the mirror
-  without code changes.
 - **`LF_ONNX_LOCAL_DIR`** config knob + `OnnxPromptGuardScanner(local_dir=...)`:
   when set (the container pre-bakes the model at `/models/hf/pg2`), the scanner
   loads the tokenizer + `.onnx` from disk — no HF hub access at runtime

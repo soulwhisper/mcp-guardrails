@@ -9,12 +9,6 @@ name: Field Test (ONNX)
 
 on:
   workflow_dispatch:
-    inputs:
-      hf-endpoint:
-        description: "HF endpoint override (leave empty for default; set https://hf-mirror.com for GFW)"
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: read
@@ -42,24 +36,11 @@ jobs:
           pip install -e ".[dev,onnx]"
 
       - name: Download ONNX PromptGuard model
-        env:
-          HF_ENDPOINT: ${{ inputs.hf-endpoint }}
         run: |
-          # Unset HF_ENDPOINT when empty — an empty string causes
-          # httpx.UnsupportedProtocol in huggingface_hub (same bug as the
-          # Dockerfile empty-HF_ENDPOINT fix in v0.2.1).
-          if [ -z "$HF_ENDPOINT" ]; then
-            unset HF_ENDPOINT
-          fi
-
           python - <<'PY'
           import os, sys
-
-          endpoint = os.environ.get("HF_ENDPOINT", "")
-          if endpoint:
-              print(f"Using HF_ENDPOINT={endpoint}")
-
           from huggingface_hub import snapshot_download
+
           model_file = "model.onnx"
           print(f"Downloading model (file={model_file})...")
           path = snapshot_download(
@@ -133,7 +114,6 @@ jobs:
           **Branch:** ${{ github.ref_name }}
           **Commit:** ${{ github.sha }}
           **Model file:** `model.onnx`
-          **HF endpoint:** `${{ inputs.hf-endpoint || '(default)' }}`
 
           ## Functional Test
 

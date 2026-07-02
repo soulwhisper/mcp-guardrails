@@ -227,19 +227,6 @@ The Dockerfile pre-downloads the ONNX model at build time (`model.onnx`,
 full-precision, ~350MB, accuracy 98.01%), so the image is self-contained and
 air-gappable.
 
-##### Building behind the GFW / on a slow network
-
-The model download from `huggingface.co` can be slow or blocked behind the GFW.
-Pass the `HF_ENDPOINT` build-arg (defaults to off) to use a mirror:
-
-```bash
-# Use the hf-mirror.com mirror (works WITH hf_transfer, reachable from CI)
-docker build --build-arg HF_ENDPOINT=https://hf-mirror.com -t mcp-guardrails .
-```
-
-For CI (`docker-publish.yml`), set `HF_ENDPOINT=https://hf-mirror.com` as a
-repository **Variable** (not a secret — it must be readable in the build-args).
-
 The model-download layer is cached across builds (decoupled `models` stage +
 `cache-from: type=gha`), so the download only runs when the model actually
 changes.
