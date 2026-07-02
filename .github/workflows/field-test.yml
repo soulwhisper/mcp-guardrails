@@ -1,0 +1,183 @@
+# Manual field-test workflow — exercises the full ONNX PromptGuard + regex
+# scanner pipeline and measures latency/throughput against a live server.
+#
+# Trigger: manual dispatch from the Actions tab (or via `gh workflow run`).
+# This is intentionally NOT on push/PR — the ONNX model download (~350MB) and
+# inference are too heavy for routine CI.  Use this workflow before releases
+# and when validating scanner changes locally.
+name: Field Test (ONNX)
+
+on:
+  workflow_dispatch:
+    inputs:
+      hf-endpoint:
+        description: "HF endpoint override (leave empty for default; set https://hf-mirror.com for GFW)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  field-test:
+    name: "Field test (ONNX PromptGuard)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install ML deps + gRPC stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,onnx]"
+
+      - name: Download ONNX PromptGuard model
+        env:
+          HF_ENDPOINT: ${{ inputs.hf-endpoint }}
+          HF_HUB_ENABLE_HF_TRANSFER: "1"
+        run: |
+          python - <<'PY'
+          import os, sys
+          os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+
+          endpoint = os.environ.get("HF_ENDPOINT", "")
+          if endpoint:
+              print(f"Using HF_ENDPOINT={endpoint}")
+
+          from huggingface_hub import snapshot_download
+          model_file = "model.onnx"
+          print(f"Downloading model (file={model_file})...")
+          path = snapshot_download(
+              repo_id="gravitee-io/Llama-Prompt-Guard-2-86M-onnx",
+              allow_patterns=[model_file, "config.json", "tokenizer*",
+                              "special_tokens_map.json", "vocab*"],
+          )
+          print(f"Model cached at {path}")
+
+          # Find the actual snapshot directory for LF_ONNX_LOCAL_DIR
+          snapshots = os.path.join(
+              os.path.expanduser("~/.cache/huggingface/hub"),
+              "models--gravitee-io--Llama-Prompt-Guard-2-86M-onnx",
+              "snapshots",
+          )
+          snap_dirs = os.listdir(snapshots) if os.path.isdir(snapshots) else []
+          if snap_dirs:
+              snap_path = os.path.join(snapshots, snap_dirs[0])
+              with open(os.environ.get("GITHUB_ENV", "/dev/null"), "a") as env_fh:
+                  env_fh.write(f"MODEL_SNAP_DIR={snap_path}\n")
+              print(f"MODEL_SNAP_DIR={snap_path}")
+          PY
+
+      - name: Run field test (functional)
+        id: field-test
+        env:
+          GUARDRAIL_DRY_RUN: "0"
+          ENABLE_REGEX_SCANNER: "1"
+          ENABLE_PROMPTGUARD: "1"
+          LF_ONNX_LOCAL_DIR: ${{ env.MODEL_SNAP_DIR }}
+          LF_ONNX_FILE: model.onnx
+          LISTEN_ADDR: "127.0.0.1:19091"
+          LOG_LEVEL: "WARNING"
+          AUDIT_LOG_PATH: "/dev/null"
+          SCANNER_TIMEOUT_MS: "10000"
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          python tests/field_test.py 2>&1 | tee field-test-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Run load test
+        id: load-test
+        env:
+          GUARDRAIL_DRY_RUN: "0"
+          ENABLE_REGEX_SCANNER: "1"
+          ENABLE_PROMPTGUARD: "1"
+          LF_ONNX_LOCAL_DIR: ${{ env.MODEL_SNAP_DIR }}
+          LF_ONNX_FILE: model.onnx
+          LISTEN_ADDR: "127.0.0.1:19092"
+          LOG_LEVEL: "ERROR"
+          AUDIT_LOG_PATH: "/dev/null"
+          SCANNER_TIMEOUT_MS: "10000"
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          python tests/load_test.py 2>&1 | tee load-test-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate report
+        if: always()
+        run: |
+          cat << 'REPORT_EOF' > field-test-report.md
+          # mcp-guardrails Field Test Report
+
+          **Workflow:** ${{ github.workflow }}
+          **Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          **Branch:** ${{ github.ref_name }}
+          **Commit:** ${{ github.sha }}
+          **Model file:** `model.onnx`
+          **HF endpoint:** `${{ inputs.hf-endpoint || '(default)' }}`
+
+          ## Functional Test
+
+          ```
+          $(cat field-test-output.txt 2>/dev/null || echo "No output (test may have failed to start)")
+          ```
+
+          ## Load Test
+
+          ```
+          $(cat load-test-output.txt 2>/dev/null || echo "No output (test may have failed to start)")
+          ```
+
+          ## Results
+
+          | Test | Status |
+          |------|--------|
+          | Field test | ${{ steps.field-test.outcome }} |
+          | Load test | ${{ steps.load-test.outcome }} |
+          REPORT_EOF
+
+          cat field-test-report.md
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: field-test-report
+          path: |
+            field-test-report.md
+            field-test-output.txt
+            load-test-output.txt
+          if-no-files-found: warn
+
+      - name: Post report to job summary
+        if: always()
+        run: |
+          {
+            echo "## 📊 Field Test Results"
+            echo ""
+            echo "| Test | Status |"
+            echo "|------|--------|"
+            echo "| Field test (functional) | ${{ steps.field-test.outcome }} |"
+            echo "| Load test (latency/throughput) | ${{ steps.load-test.outcome }} |"
+            echo ""
+            echo "### Field Test Output"
+            echo '```'
+            cat field-test-output.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo ""
+            echo "### Load Test Output"
+            echo '```'
+            cat load-test-output.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

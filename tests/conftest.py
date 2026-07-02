@@ -51,3 +51,8 @@ def allow_result() -> ScanResult:
 @pytest.fixture
 def review_result() -> ScanResult:
     return ScanResult.review("test", "suspicious")
+
+
+# Standalone scripts (run directly, not via pytest).  These use their own
+# subprocess-based server lifecycle and are not pytest-test functions.
+collect_ignore = ["field_test.py", "load_test.py"]

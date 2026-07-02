@@ -85,6 +85,82 @@ async def test_regex_scanner_block_pattern_wins_over_review():
 
 
 @pytest.mark.asyncio
+async def test_regex_scanner_detects_google_api_key():
+    scanner = RegexScanner()
+    result = await scanner.scan("key=AIzaSyDfGhiJklMnOpQrStUvWxYzAbCdEfGhIjK", "tool")
+    assert result.outcome is ScanOutcome.BLOCK
+    assert "google_api_key" in result.scanner
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_detects_aws_temp_key():
+    scanner = RegexScanner()
+    result = await scanner.scan("ASIA1234567890ABCDEF", "tool")
+    assert result.outcome is ScanOutcome.BLOCK
+    assert "aws_temp_key" in result.scanner
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_detects_key_value_credential():
+    scanner = RegexScanner()
+    result = await scanner.scan("PASSWORD=hunter2abc123", "tool")
+    assert result.outcome is ScanOutcome.HUMAN_REVIEW
+    assert "key_value_credential" in result.scanner
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_key_value_no_false_positive():
+    scanner = RegexScanner()
+    # Short values (< 8 chars) should not match.
+    result = await scanner.scan("password=short", "tool")
+    assert result.outcome is ScanOutcome.ALLOW
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_detects_endoftext_marker():
+    scanner = RegexScanner()
+    result = await scanner.scan("<|endoftext|>", "tool")
+    assert result.outcome is ScanOutcome.BLOCK
+    assert "format_injection" in result.scanner
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_detects_jwt():
+    scanner = RegexScanner()
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNq5e3"
+    result = await scanner.scan(f"Bearer {jwt}", "tool")
+    assert result.outcome is ScanOutcome.HUMAN_REVIEW
+    assert "jwt" in result.scanner
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_detects_format_injection():
+    scanner = RegexScanner()
+    for marker in ["[SYSTEM]", "[INST]", "[/INST]", "[ASSISTANT]",
+                   "<|im_start|>system", "<|im_end|>",
+                   "### system", "### instruction: do X"]:
+        result = await scanner.scan(marker, "tool")
+        assert result.outcome is ScanOutcome.BLOCK, f"format_injection should block {marker!r}"
+        assert "format_injection" in result.scanner
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_format_injection_no_false_positive():
+    scanner = RegexScanner()
+    # Bracketed words without the injection semantics should pass.
+    result = await scanner.scan("SYSTEM status: online", "tool")
+    assert result.outcome is ScanOutcome.ALLOW
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_detects_connection_string():
+    scanner = RegexScanner()
+    result = await scanner.scan("mongodb://admin:secret@db.internal:27017/production", "tool")
+    assert result.outcome is ScanOutcome.HUMAN_REVIEW
+    assert "connection_string" in result.scanner
+
+
+@pytest.mark.asyncio
 async def test_regex_scanner_custom_patterns():
     pat = [
         Pattern(

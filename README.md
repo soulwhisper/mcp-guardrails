@@ -317,7 +317,7 @@ deadline.
 | Scanners       | `ENABLE_PROMPTGUARD`             | `true`                                   | ONNX PromptGuard semantic scanner. Falls back to regex-only if `onnxruntime`/`transformers` is absent.                                         |
 | Scanners       | `ENABLE_AGENT_ALIGNMENT`         | `false`                                  | LLM-based AgentAlignment. Off by default; only triggered as a second stage when PromptGuard flags `HUMAN_REVIEW` on a response.                |
 | PromptGuard    | `LF_ONNX_MODEL`                  | `gravitee-io/...-onnx`                   | ONNX model repo ID. Public, non-gated — no HF_TOKEN needed.                                                                                    |
-| PromptGuard    | `LF_ONNX_FILE`                   | `model.onnx`                             | Which `.onnx` file to load. `model.onnx` = full-precision (98.01% accuracy). `model.quant.onnx` = quantized (89.89%, ~90MB).                   |
+| PromptGuard    | `LF_ONNX_FILE`                   | `model.onnx`                             | Which `.onnx` file to load. Defaults to the full-precision `model.onnx`. |
 | PromptGuard    | `LF_ONNX_LOCAL_DIR`              | _(unset; `/models/hf/pg2` in container)_ | Local dir of a pre-baked model. When set, load tokenizer + `.onnx` from disk (air-gapped, no hub access).                                      |
 | PromptGuard    | `LF_PROMPTGUARD_BLOCK_THRESHOLD` | `0.9`                                    | Block threshold (0.0-1.0). PromptGuard score >= threshold -> BLOCK.                                                                            |
 | AgentAlignment | `LF_ALIGNMENT_MODEL`             | `meta-llama/...-FP8`                     | LLM model name for AgentAlignment (only when `ENABLE_AGENT_ALIGNMENT=true`). Default: Llama-4-Maverick via Together AI.                        |
@@ -435,7 +435,7 @@ for a non-K8s, standalone agentgateway config pointing at `localhost:9001`.
 ## Testing
 
 ```bash
-# Unit suite (72 tests, ~0.3s) — pure-Python policy core, no ML deps required
+# Unit suite (81 tests, ~1.5s) — pure-Python policy core, no ML deps required
 make test
 
 # With coverage
@@ -446,6 +446,12 @@ make lint
 
 # Live end-to-end smoke (boots a real server in a subprocess)
 python3 tests/e2e_smoke.py
+
+# Full field test with ONNX model (requires onnxruntime + model cache)
+python3 tests/field_test.py
+
+# Latency / throughput benchmark (ONNX model required)
+python3 tests/load_test.py
 ```
 
 The unit suite covers the aggregator (fail-closed table), invariant engine
@@ -458,7 +464,25 @@ rule loader. The e2e smoke boots a live server, exercises health +
 private key) + malformed `INVALID_ARGUMENT`, and exits non-zero on any
 mismatch.
 
-All 72 unit tests and the e2e smoke are green on a fresh clone.
+All 81 unit tests and the e2e smoke are green on a fresh clone.
+
+### ONNX model class layout
+
+The `gravitee-io/Llama-Prompt-Guard-2-86M-onnx` export produces a **2-class**
+model `[benign, malicious]`.  The code always takes the **last** class
+as the block score.
+
+### Latency (CPU, single client)
+
+| Operation | Mean | P50 | P90 | P99 |
+|---|---|---|---|---|
+| CheckRequest (minimal) | 35.9ms | 34.3ms | 44.7ms | 64.1ms |
+| CheckRequest (content) | 43.5ms | 42.6ms | 51.1ms | 58.4ms |
+| CheckResponse (content) | 36.1ms | 35.2ms | 41.7ms | 61.4ms |
+
+Measured on NixOS, Python 3.13, ONNX Runtime 1.27 CPU, PromptGuard-2-86M
+full-precision ONNX (~1.1GB).  First inference cold-start is ~8-10s (model
+load); the readiness probe absorbs this.
 
 CI runs the unit suite with coverage on every push/PR. The coverage
 percentage is published as a [job summary](https://github.com/soulwhisper/mcp-guardrails/actions/workflows/ci.yml)
