@@ -1,11 +1,11 @@
 # MCP Guardrails
 
 An **agentgateway ExtMcp guardrail sidecar** that wraps an ONNX-based
-PromptGuard-2 scanner (prompt-injection detection via the public, non-gated
-[gravitee-io/Llama-Prompt-Guard-2-86M-onnx] model) and an Invariant
-Guardrails-style rule engine (cross-call toxic-flow / loop detection) behind
-the agentgateway ExtMcp gRPC contract. The sidecar is **fail-closed by
-default**, listens on plaintext HTTP/2 (`h2c`) gRPC on `:9001`, and is driven
+PromptGuard-2 scanner (prompt-injection detection via the ONNX
+[gravitee-io/Llama-Prompt-Guard-2-86M-onnx] model, Llama 4 Community
+License) and an Invariant Guardrails-style rule engine (cross-call
+toxic-flow / loop detection) behind the agentgateway ExtMcp gRPC contract.
+The sidecar is **fail-closed by default**, listens on plaintext HTTP/2 (`h2c`) gRPC on `:9001`, and is driven
 by agentgateway's `mcp-guardrails` processor on both sides of every MCP
 exchange — request params scanned as the `TOOL` role, tool output scanned as
 the `ASSISTANT` role (the indirect-injection frontline), with optional
@@ -205,31 +205,30 @@ docker run --rm -p 9001:9001 \
   ghcr.io/soulwhisper/mcp-guardrails:0.3.1
 ```
 
-### PromptGuard-2 model (ONNX, public, no token required)
+### PromptGuard-2 model (ONNX, Llama 4 Community License)
 
-The `PROMPT_GUARD` scanner uses the **public, non-gated** ONNX model
+The `PROMPT_GUARD` scanner uses the ONNX model
 [`gravitee-io/Llama-Prompt-Guard-2-86M-onnx`](https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-86M-onnx)
-via ONNX Runtime (CPU inference). No HuggingFace token needed — the model
-repo is public and non-gated. The `.onnx` graph is loaded with `onnxruntime`
-directly (no `optimum`, no `torch`) — `onnxruntime` (~15MB) + `transformers`
-(tokenizer-only) is the full ML dependency surface, so the image stays small
-(~600MB) and truly torch-free.
+via ONNX Runtime (CPU inference). The model repo is public and non-gated,
+but the **model weights are licensed under the Llama 4 Community License**
+— users of the Docker image must comply with that license. See [NOTICE](NOTICE).
+
+The `.onnx` graph is loaded with `onnxruntime` directly (no `optimum`,
+no `torch`) — `onnxruntime` (~15MB) + `transformers` (tokenizer-only)
+is the full ML dependency surface, so the image stays small (~600MB).
 
 ```bash
-# No HF_TOKEN needed — ONNX model is public
+# Pre-baked model in the image — just run:
 docker run --rm -p 9001:9001 \
   -e ENABLE_REGEX_SCANNER=1 \
   -e ENABLE_PROMPTGUARD=1 \
   ghcr.io/soulwhisper/mcp-guardrails:latest
 ```
 
-The Dockerfile pre-downloads the ONNX model at build time (`model.onnx`,
-full-precision, ~350MB, accuracy 98.01%), so the image is self-contained and
-air-gappable.
-
-The model-download layer is cached across builds (decoupled `models` stage +
-`cache-from: type=gha`), so the download only runs when the model actually
-changes.
+> **HF_TOKEN recommended.** The model repo is public, but unauthenticated
+> HF API calls from shared IPs (GHA runners, cloud VMs) may hit rate limits
+> (HTTP 429). Set `HF_TOKEN` if downloading the model outside the pre-built
+> Docker image.
 
 #### AgentAlignment LLM (second-stage, opt-in)
 
@@ -303,9 +302,8 @@ deadline.
 | Scanners       | `ENABLE_REGEX_SCANNER`           | `true`                                   | Deterministic pattern scanner (hidden ASCII / PII / secrets). Zero ML deps.                                                                    |
 | Scanners       | `ENABLE_PROMPTGUARD`             | `true`                                   | ONNX PromptGuard semantic scanner. Falls back to regex-only if `onnxruntime`/`transformers` is absent.                                         |
 | Scanners       | `ENABLE_AGENT_ALIGNMENT`         | `false`                                  | LLM-based AgentAlignment. Off by default; only triggered as a second stage when PromptGuard flags `HUMAN_REVIEW` on a response.                |
-| PromptGuard    | `LF_ONNX_MODEL`                  | `gravitee-io/...-onnx`                   | ONNX model repo ID. Public, non-gated — no HF_TOKEN needed.                                                                                    |
 | PromptGuard    | `LF_ONNX_FILE`                   | `model.onnx`                             | Which `.onnx` file to load. Defaults to the full-precision `model.onnx`. |
-| PromptGuard    | `LF_ONNX_LOCAL_DIR`              | _(unset; `/models/hf/pg2` in container)_ | Local dir of a pre-baked model. When set, load tokenizer + `.onnx` from disk (air-gapped, no hub access).                                      |
+| PromptGuard    | `LF_ONNX_MODEL`                  | `gravitee-io/...-onnx`                   | ONNX model repo ID. Public, non-gated; model weights under Llama 4 Community License (see NOTICE).                                          |
 | PromptGuard    | `LF_PROMPTGUARD_BLOCK_THRESHOLD` | `0.9`                                    | Block threshold (0.0-1.0). PromptGuard score >= threshold -> BLOCK.                                                                            |
 | AgentAlignment | `LF_ALIGNMENT_MODEL`             | `meta-llama/...-FP8`                     | LLM model name for AgentAlignment (only when `ENABLE_AGENT_ALIGNMENT=true`). Default: Llama-4-Maverick via Together AI.                        |
 | AgentAlignment | `LF_ALIGNMENT_API_BASE`          | `https://api.together.xyz/v1`            | LLM API base URL (OpenAI-compatible). Override for OpenAI, Azure, vLLM, Ollama, etc.                                                           |
@@ -542,8 +540,10 @@ Licensed under the Apache License, Version 2.0. See [`LICENSE`](LICENSE).
 
 - [agentgateway](https://github.com/agentgateway/agentgateway) — the
   MCP-aware gateway whose `ExtMcp` contract this sidecar implements.
-- [LlamaFirewall](https://github.com/meta-llama/PurpleLlama-LlamaFirewall)
-  (Meta) — the semantic content scanners (PromptGuard-2, AgentAlignment,
-  CodeShield) wrapped behind the request/response scan paths.
+- [Prompt Guard](https://github.com/meta-llama/Prompt-Guard) (Meta) — the
+  PromptGuard-2 classifier, converted to ONNX by
+  [Gravitee.io](https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-86M-onnx).
+- [ONNX Runtime](https://onnxruntime.ai/) — CPU inference engine for the
+  PromptGuard-2 model (no torch dependency).
 - [Invariant Labs](https://invariantlabs.ai/) — the toxic-flow / agent-loop
   detection research that informed the `ToxicFlowRule` / `LoopRule` shapes.
