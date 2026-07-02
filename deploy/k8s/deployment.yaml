@@ -63,7 +63,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: guardrail
-          image: ghcr.io/soulwhisper/mcp-guardrails:0.2.0
+          image: ghcr.io/soulwhisper/mcp-guardrails:0.3.1
           imagePullPolicy: IfNotPresent
           ports:
             - name: grpc-h2c
@@ -109,7 +109,8 @@ spec:
             - name: LISTEN_ADDR
               value: "[::]:9001"
             # --- PromptGuard (ONNX, always on) ---
-            # The ONNX model is public + non-gated — NO HF_TOKEN required.
+            # The ONNX model is public; model weights are Llama 4 Community
+            # License. HF_TOKEN recommended if downloading outside the image.
             # Default: model.onnx (full-precision, ~350MB, accuracy 98.01%).
             - name: LF_ONNX_MODEL
               value: "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
@@ -138,8 +139,8 @@ spec:
                   optional: true
           resources:
             # PromptGuard-2 ONNX (86M params) + onnxruntime + per-call regex.
-            # 1Gi request covers model load + steady-state; 2Gi limit absorbs
-            # burst traffic. CPU 500m / 2 keeps cold-start (model warmup)
+            # 2Gi request covers model load + steady-state (~800MB-1.1GB);
+            # 4Gi limit absorbs burst traffic. CPU 500m / 2 keeps cold-start
             # under ~10s while leaving headroom for parallel scanner calls.
             requests:
               cpu: 500m

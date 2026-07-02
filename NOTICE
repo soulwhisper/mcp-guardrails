@@ -1,0 +1,22 @@
+mcp-guardrails
+Copyright 2025 Soul Whisper
+
+This product includes software developed at
+Soul Whisper (https://github.com/soulwhisper).
+
+---
+
+Bundled model weights: gravitee-io/Llama-Prompt-Guard-2-86M-onnx
+
+The Docker image includes pre-downloaded model weights from
+https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-86M-onnx
+
+These model weights are licensed under the Llama 4 Community License
+(https://www.llama.com/llama4/license/). Users of this image must
+comply with the Llama 4 Community License, including its acceptable
+use policy, attribution requirements, and any applicable usage
+thresholds.
+
+The model is a fine-tuned Prompt Guard classifier derived from Llama,
+converted to ONNX format by Gravitee.io. Neither Soul Whisper nor this
+project is affiliated with Meta Platforms, Inc. or Gravitee.io.
