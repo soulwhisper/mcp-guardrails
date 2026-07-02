@@ -5,12 +5,12 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.1] - 2026-07-02
 
 ### Fixed
 
 - **Docker build broke** with `httpx.UnsupportedProtocol: Request URL is
-  missing an 'http://' or 'https://' protocol`. The empty `HF_ENDPOINT`
+missing an 'http://' or 'https://' protocol`. The empty `HF_ENDPOINT`
   build-arg (the default when no mirror is configured) leaked into the build
   env as `HF_ENDPOINT=""`, which `huggingface_hub` picked up instead of its
   built-in default endpoint. The models stage now `unset`s `HF_ENDPOINT` when
@@ -60,13 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`optimum[onnxruntime]`** dependency (pulled torch). Replaced by direct
   `onnxruntime` usage.
-- **`release.yml` workflow** — GitHub Releases are now created manually via the
-  GitHub UI (tag → Draft a new release) with the `CHANGELOG.md` section pasted
-  as the description. `docker-publish.yml` is the only workflow that fires on
-  version tags. `CONTRIBUTING.md` release process updated accordingly.
-
-### Removed
-
 - **`release.yml` workflow** — GitHub Releases are now created manually via the
   GitHub UI (tag → Draft a new release) with the `CHANGELOG.md` section pasted
   as the description. `docker-publish.yml` is the only workflow that fires on
@@ -293,6 +286,6 @@ McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
   not rely on headers for authn/authz when
   `metadata_context.upstream_transport == "stdio"`.
 
-[Unreleased]: https://github.com/soulwhisper/mcp-guardrails/compare/v0.2.0...HEAD
+[0.2.1]: https://github.com/soulwhisper/mcp-guardrails/releases/tag/v0.2.1
 [0.2.0]: https://github.com/soulwhisper/mcp-guardrails/releases/tag/v0.2.0
 [0.1.0]: https://github.com/soulwhisper/mcp-guardrails/releases/tag/v0.1.0

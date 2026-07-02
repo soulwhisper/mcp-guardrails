@@ -44,13 +44,7 @@ Out of scope (but still welcome as regular issues):
 
 ## Supported versions
 
-Only the latest minor release line receives security fixes. The project is
-pre-1.0; do not run anything older than the current `0.1.x` in production.
-
-| Version | Supported |
-| ------- | --------- |
-| 0.1.x   | Yes       |
-| < 0.1   | No        |
+Only the latest minor release line receives security fixes.
 
 ## Hardening recommendations
 
