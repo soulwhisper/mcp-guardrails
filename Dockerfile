@@ -70,7 +70,6 @@ RUN --mount=type=cache,target=/hf-cache,sharing=locked \
     fi; \
     export HF_HOME=/hf-cache HF_HUB_ENABLE_HF_TRANSFER=1; \
     echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE})"; \
-    echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE})"; \
     python - <<PYEOF
 from huggingface_hub import snapshot_download
 import os, shutil
