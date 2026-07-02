@@ -469,9 +469,8 @@ All 81 unit tests and the e2e smoke are green on a fresh clone.
 ### ONNX model class layout
 
 The `gravitee-io/Llama-Prompt-Guard-2-86M-onnx` export produces a **2-class**
-model `[benign, malicious]` (not the 3-class `[safe, injection, jailbreak]`
-of the original Meta PromptGuard-2).  The code always takes the **last** class
-as the block score — correct for both 2-class and 3-class exports.
+model `[benign, malicious]`.  The code always takes the **last** class
+as the block score.
 
 ### Latency (CPU, single client)
 
