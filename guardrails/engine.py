@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .aggregator import DecisionAggregator
@@ -342,21 +342,39 @@ class GuardrailEngine:
         role: str,
         scanners: Sequence[Scanner],
     ) -> list[ScanResult]:
+        """Run all scanners concurrently, each with its own deadline.
+
+        Scanners are independent (same input, no shared mutable state), so
+        :func:`asyncio.gather` runs them in parallel.  Each scanner gets its
+        own :func:`asyncio.wait_for` deadline and failure-mode handling, so a
+        slow or failing scanner never blocks the others.
+        """
         timeout = self._cfg.scanner_timeout_ms / 1000.0
-        out: list[ScanResult] = []
-        for scanner in scanners:
+
+        async def _scan_one(scanner: Scanner) -> ScanResult:
             name = getattr(scanner, "name", repr(scanner))
-            try:
-                result = await asyncio.wait_for(
-                    scanner.scan(content, role),
-                    timeout=timeout,
-                )
-                out.append(result)
-            except asyncio.TimeoutError:
-                out.append(self._failure_result(name, f"timeout>{self._cfg.scanner_timeout_ms}ms"))
-            except Exception as exc:
-                out.append(self._failure_result(name, f"error:{type(exc).__name__}:{exc}"))
-        return out
+            with self._obs.span(
+                f"scanner.{name}", scanner=name, role=role
+            ) as attrs:
+                attrs["outcome"] = "unknown"
+                try:
+                    result = await asyncio.wait_for(
+                        scanner.scan(content, role),
+                        timeout=timeout,
+                    )
+                    attrs["outcome"] = result.outcome.value
+                    return result
+                except asyncio.TimeoutError:
+                    attrs["outcome"] = "timeout"
+                    return self._failure_result(
+                        name, f"timeout>{self._cfg.scanner_timeout_ms}ms"
+                    )
+                except Exception as exc:
+                    attrs["outcome"] = "error"
+                    attrs["error"] = f"{type(exc).__name__}:{exc}"
+                    return self._failure_result(name, f"error:{type(exc).__name__}:{exc}")
+
+        return list(await asyncio.gather(*(_scan_one(s) for s in scanners)))
 
     def _failure_result(self, scanner_name: str, reason: str) -> ScanResult:
         """Translate a scanner exception per the configured failure mode.
@@ -372,6 +390,4 @@ class GuardrailEngine:
 def _with_truncated(ctx: McpCallContext, truncated: bool) -> McpCallContext:
     if not truncated:
         return ctx
-    from dataclasses import replace
-
     return replace(ctx, truncated=True)

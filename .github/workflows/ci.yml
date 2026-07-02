@@ -2,9 +2,9 @@
 # drift detection. Runs on every pull request and on every push to main.
 #
 # IMPORTANT: the test job deliberately does NOT install the heavy ML stack
-# (llamafirewall / torch / transformers). The `[dev]` extra in pyproject.toml
+# (torch / transformers / onnxruntime). The `[dev]` extra in pyproject.toml
 # excludes ML deps so the unit tests run in regex-only mode, exercising the
-# engine's graceful fallback path when LlamaFirewall is absent.
+# engine's graceful fallback path when the ONNX stack is absent.
 name: CI
 
 on:
@@ -59,26 +59,25 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install dev deps + gRPC stack (no ML stack)
-        # The [dev] extra intentionally excludes llamafirewall/torch/transformers
+      - name: Install dev deps (no ML stack)
+        # The [dev] extra intentionally excludes onnxruntime/torch/transformers
         # so CI stays fast (~30s install vs ~5min). The engine falls back to
-        # regex-only mode when LlamaFirewall import fails.
-        # NOTE: do NOT add llamafirewall or torch here — the unit tests pass in
+        # regex-only mode when the ONNX stack is absent.
+        # NOTE: do NOT add onnxruntime or torch here — the unit tests pass in
         # regex-only mode and keeping the ML stack out keeps CI fast.
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-          pip install grpcio grpcio-health-checking pyyaml
 
       - name: Verify ML stack is NOT installed
-        # Guard rail: fail fast if a future change accidentally pulls torch in.
+        # Guard rail: fail fast if a future change accidentally pulls ML deps in.
         run: |
           python - <<'PY'
           import importlib.util as u
-          for mod in ("torch", "transformers", "llamafirewall"):
+          for mod in ("torch", "transformers", "onnxruntime"):
               if u.find_spec(mod) is not None:
                   raise SystemExit(f"FAIL: {mod} is installed in CI — test job must stay ML-free")
-          print("OK: no torch/transformers/llamafirewall in CI env")
+          print("OK: no torch/transformers/onnxruntime in CI env")
           PY
 
       - name: Run pytest with coverage
@@ -137,7 +136,7 @@ jobs:
         # Best-effort: skip when the token is not available (forks / dependabot).
         if: ${{ env.CODECOV_TOKEN != '' }}
         continue-on-error: true
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           files: ./coverage.xml
           fail_ci_if_error: false

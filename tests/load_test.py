@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Load test for mcp-guardrails: measure latency and throughput under load."""
+
 from __future__ import annotations
 
 import asyncio
@@ -31,8 +32,7 @@ def _find_model_snap() -> str:
         return snap
     # Search the HF cache.
     base = os.path.expanduser(
-        "~/.cache/huggingface/hub/"
-        "models--gravitee-io--Llama-Prompt-Guard-2-86M-onnx/snapshots"
+        "~/.cache/huggingface/hub/models--gravitee-io--Llama-Prompt-Guard-2-86M-onnx/snapshots"
     )
     if os.path.isdir(base):
         dirs = sorted(os.listdir(base))
@@ -46,14 +46,13 @@ def _find_model_snap() -> str:
     )
     if os.path.isdir(fallback):
         return fallback
-    raise RuntimeError(
-        "ONNX model not found. Set LF_ONNX_LOCAL_DIR or download the model."
-    )
+    raise RuntimeError("ONNX model not found. Set LF_ONNX_LOCAL_DIR or download the model.")
 
 
 def _inject_nix_libs(env: dict) -> None:
     """Add NixOS lib paths to LD_LIBRARY_PATH if they exist on this host."""
     import glob as _glob
+
     nix_libs = []
     for pattern in ["/nix/store/*-gcc-*-lib/lib", "/nix/store/*-zlib-*/lib"]:
         matches = sorted(_glob.glob(pattern))
@@ -70,29 +69,44 @@ MODEL_SNAP = _find_model_snap()
 def make_req(name="ping", args=None):
     if args is None:
         args = {"x": 1}
-    return pb.McpRequest(method="tools/call",
-                         mcp_request=json.dumps({"name": name, "arguments": args}).encode())
+    return pb.McpRequest(
+        method="tools/call", mcp_request=json.dumps({"name": name, "arguments": args}).encode()
+    )
+
 
 async def main():
     # Start server
     env = dict(os.environ)
-    env.update(LISTEN_ADDR=f"127.0.0.1:{PORT}", LOG_LEVEL="ERROR",
-               GUARDRAIL_DRY_RUN="0", ENABLE_REGEX_SCANNER="1", ENABLE_PROMPTGUARD="1",
-               LF_ONNX_LOCAL_DIR=MODEL_SNAP, LF_ONNX_FILE="model.onnx",
-               HF_HOME=os.path.expanduser("~/.cache/huggingface"),
-               HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
-               AUDIT_LOG_PATH="/dev/null", SCANNER_TIMEOUT_MS="5000")
+    env.update(
+        LISTEN_ADDR=f"127.0.0.1:{PORT}",
+        LOG_LEVEL="ERROR",
+        GUARDRAIL_DRY_RUN="0",
+        ENABLE_REGEX_SCANNER="1",
+        ENABLE_PROMPTGUARD="1",
+        LF_ONNX_LOCAL_DIR=MODEL_SNAP,
+        LF_ONNX_FILE="model.onnx",
+        HF_HOME=os.path.expanduser("~/.cache/huggingface"),
+        HF_HUB_OFFLINE="1",
+        TRANSFORMERS_OFFLINE="1",
+        AUDIT_LOG_PATH="/dev/null",
+        SCANNER_TIMEOUT_MS="5000",
+    )
     _inject_nix_libs(env)
 
-    proc = subprocess.Popen([sys.executable, str(_ROOT / "server.py")],
-                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(
+        [sys.executable, str(_ROOT / "server.py")],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     try:
         for _ in range(30):
             try:
                 ch = grpc.aio.insecure_channel(f"127.0.0.1:{PORT}")
                 await asyncio.wait_for(ch.channel_ready(), timeout=2.0)
                 r = await health_pb2_grpc.HealthStub(ch).Check(
-                    health_pb2.HealthCheckRequest(service=""))
+                    health_pb2.HealthCheckRequest(service="")
+                )
                 await ch.close()
                 if r.status == health_pb2.HealthCheckResponse.SERVING:
                     break
@@ -118,14 +132,35 @@ async def main():
 
         for label, factory in [
             ("CheckRequest(minimal)", lambda: make_req()),
-            ("CheckRequest(content)", lambda: make_req("analyze", {
-                "text": "Please process this document. The system administrator "
-                        "requests a full audit of security configurations."})),
-            ("CheckResponse(content)", lambda: pb.McpResponse(method="tools/call",
-                mcp_response=json.dumps({"content": [{"type": "text", "text": (
-                    "Report: database contains user profiles with email addresses. "
-                    "Handle per privacy policy."
-                )}]}).encode())),
+            (
+                "CheckRequest(content)",
+                lambda: make_req(
+                    "analyze",
+                    {
+                        "text": "Please process this document. The system administrator "
+                        "requests a full audit of security configurations."
+                    },
+                ),
+            ),
+            (
+                "CheckResponse(content)",
+                lambda: pb.McpResponse(
+                    method="tools/call",
+                    mcp_response=json.dumps(
+                        {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "Report: database contains user profiles with email addresses. "
+                                        "Handle per privacy policy."
+                                    ),
+                                }
+                            ]
+                        }
+                    ).encode(),
+                ),
+            ),
         ]:
             lats = []
             is_resp = "Response" in label
@@ -138,14 +173,18 @@ async def main():
                 lats.append((time.monotonic() - t0) * 1000)
             lats.sort()
             print(f"  {label}:")
-            print(f"    mean={statistics.mean(lats):.1f}ms median={lats[50]:.1f}ms "
-                  f"p90={lats[90]:.1f}ms p99={lats[99]:.1f}ms min={lats[0]:.1f}ms max={lats[-1]:.1f}ms")
+            print(
+                f"    mean={statistics.mean(lats):.1f}ms median={lats[50]:.1f}ms "
+                f"p90={lats[90]:.1f}ms p99={lats[99]:.1f}ms min={lats[0]:.1f}ms max={lats[-1]:.1f}ms"
+            )
         await ch.close()
 
         # 2. Throughput at varying concurrency
         print("\n── Throughput vs Concurrency ──")
-        print(f"  {'Conc':>5} {'Reqs':>6} {'Wall':>8} {'RPS':>8} {'Avg':>7} {'P50':>7} {'P90':>7} {'P99':>7}")
-        print(f"  {'-'*62}")
+        print(
+            f"  {'Conc':>5} {'Reqs':>6} {'Wall':>8} {'RPS':>8} {'Avg':>7} {'P50':>7} {'P90':>7} {'P99':>7}"
+        )
+        print(f"  {'-' * 62}")
 
         async def client(cid: int, n: int) -> list[float]:
             ch = grpc.aio.insecure_channel(f"127.0.0.1:{PORT}")
@@ -168,9 +207,11 @@ async def main():
             total = len(flat)
             flat.sort()
             rps = total / (wall / 1000)
-            print(f"  {conc:>5} {total:>6} {wall:>7.0f}ms {rps:>7.1f} "
-                  f"{statistics.mean(flat):>6.1f}ms {flat[total//2]:>6.1f}ms "
-                  f"{flat[int(total*0.9)]:>6.1f}ms {flat[int(total*0.99)]:>6.1f}ms")
+            print(
+                f"  {conc:>5} {total:>6} {wall:>7.0f}ms {rps:>7.1f} "
+                f"{statistics.mean(flat):>6.1f}ms {flat[total // 2]:>6.1f}ms "
+                f"{flat[int(total * 0.9)]:>6.1f}ms {flat[int(total * 0.99)]:>6.1f}ms"
+            )
 
         # 3. Summary
         print("\n── Summary ──")
@@ -186,6 +227,7 @@ async def main():
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

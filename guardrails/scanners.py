@@ -160,9 +160,7 @@ def default_patterns() -> list[Pattern]:
         Pattern("github_pat", _GITHUB_PAT, ScanOutcome.BLOCK, "GitHub personal access token", 0.95),
         Pattern("gitlab_pat", _GITLAB_PAT, ScanOutcome.BLOCK, "GitLab personal access token", 0.95),
         Pattern("slack_token", _SLACK_TOKEN, ScanOutcome.BLOCK, "Slack token", 0.95),
-        Pattern(
-            "llm_api_key", _LLM_API_KEY, ScanOutcome.BLOCK, "LLM API key in payload", 0.95
-        ),
+        Pattern("llm_api_key", _LLM_API_KEY, ScanOutcome.BLOCK, "LLM API key in payload", 0.95),
         Pattern(
             "jwt",
             _JWT,
@@ -453,9 +451,7 @@ class OnnxPromptGuardScanner:
         self._tokenizer = AutoTokenizer.from_pretrained(tok_src)
         # Model load is blocking. This is called from scan() via
         # asyncio.to_thread, so it's safe to do the load synchronously here.
-        self._sess = ort.InferenceSession(
-            model_path, providers=["CPUExecutionProvider"]
-        )
+        self._sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
         self._loaded = True
 
     async def scan(

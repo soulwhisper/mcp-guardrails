@@ -164,9 +164,7 @@ class GuardrailConfig:
             ),
             lf_onnx_file=os.environ.get("LF_ONNX_FILE", "model.onnx"),
             lf_onnx_local_dir=os.environ.get("LF_ONNX_LOCAL_DIR") or None,
-            lf_promptguard_block_threshold=_env_float(
-                "LF_PROMPTGUARD_BLOCK_THRESHOLD", 0.9
-            ),
+            lf_promptguard_block_threshold=_env_float("LF_PROMPTGUARD_BLOCK_THRESHOLD", 0.9),
             lf_alignment_model=os.environ.get(
                 "LF_ALIGNMENT_MODEL",
                 "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",

@@ -136,9 +136,16 @@ async def test_regex_scanner_detects_jwt():
 @pytest.mark.asyncio
 async def test_regex_scanner_detects_format_injection():
     scanner = RegexScanner()
-    for marker in ["[SYSTEM]", "[INST]", "[/INST]", "[ASSISTANT]",
-                   "<|im_start|>system", "<|im_end|>",
-                   "### system", "### instruction: do X"]:
+    for marker in [
+        "[SYSTEM]",
+        "[INST]",
+        "[/INST]",
+        "[ASSISTANT]",
+        "<|im_start|>system",
+        "<|im_end|>",
+        "### system",
+        "### instruction: do X",
+    ]:
         result = await scanner.scan(marker, "tool")
         assert result.outcome is ScanOutcome.BLOCK, f"format_injection should block {marker!r}"
         assert "format_injection" in result.scanner
