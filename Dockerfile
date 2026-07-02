@@ -66,8 +66,9 @@ ARG LF_ONNX_FILE=model.onnx
 # actually change.
 RUN pip install --no-cache-dir "huggingface-hub>=0.30.2" "hf_transfer>=0.1.6"
 RUN --mount=type=cache,target=/hf-cache,sharing=locked \
-    --mount=type=secret,id=HF_TOKEN,env=HF_TOKEN \
+    --mount=type=secret,id=HF_TOKEN \
     set -e; \
+    if [ -f /run/secrets/HF_TOKEN ]; then export HF_TOKEN=$(cat /run/secrets/HF_TOKEN); fi; \
     if [ "${SKIP_MODEL_DOWNLOAD}" = "1" ]; then \
         echo "SKIP: model pre-download (SKIP_MODEL_DOWNLOAD=1)"; \
         echo "      Runtime will lazy-fetch on first scan."; \
