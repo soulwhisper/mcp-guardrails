@@ -5,6 +5,35 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **ONNX PromptGuard classification was inverted for the 2-class model.**
+  The `gravitee-io/Llama-Prompt-Guard-2-86M-onnx` export produces 2 logits
+  `[benign, malicious]`, not the 3-class `[safe, injection, jailbreak]` that
+  the original Meta model outputs.  The code took `probs[0, 0]` (benign) as
+  the block score for non-3-class models, which inverted every decision —
+  clean text was blocked and prompt-injection text was allowed.  Fixed to
+  always take `probs[0, -1]` (the last class is always the "should-block"
+  dimension regardless of arity).  Found during field testing.
+
+- **Added `sk-*` LLM API key detection.** The regex scanner now catches
+  OpenAI (`sk-...`, `sk-proj-...`, `sk-svcacct-...`) and Anthropic
+  (`sk-ant-api03-...`) API keys with the new `llm_api_key` pattern.
+  Previously only AWS/GitHub/GitLab/Slack token shapes were matched.
+
+### Added
+
+- `tests/field_test.py` — comprehensive functional test exercising the full
+  scanner pipeline (regex + ONNX PromptGuard + invariant engine) with a live
+  server subprocess.  Covers request scanning, response indirect-injection
+  defense, loop detection, and concurrency.
+
+- `tests/load_test.py` — standalone latency-and-throughput benchmark.
+  Measures per-request added latency (P50/P90/P99) and throughput under
+  varying concurrency against a real ONNX PromptGuard server.
+
 ## [0.2.1] - 2026-07-02
 
 ### Fixed

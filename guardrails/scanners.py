@@ -67,6 +67,13 @@ _AWS_KEY = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
 _GITHUB_PAT = re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")
 _GITLAB_PAT = re.compile(r"\bglpat-[A-Za-z0-9_-]{20}\b")
 _SLACK_TOKEN = re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")
+# OpenAI / Anthropic / common LLM API keys.  Covers:
+#   sk-<key>                    (OpenAI standard)
+#   sk-proj-<key>               (OpenAI project)
+#   sk-svcacct-<key>            (OpenAI service account)
+#   sk-ant-api03-<key>          (Anthropic)
+# Requires >=20 characters after "sk-" to avoid false positives.
+_LLM_API_KEY = re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")
 _PRIVATE_KEY = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")
 _GENERIC_HIGH_ENTROPY = re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b")
 
@@ -110,6 +117,9 @@ def default_patterns() -> list[Pattern]:
         Pattern("github_pat", _GITHUB_PAT, ScanOutcome.BLOCK, "GitHub personal access token", 0.95),
         Pattern("gitlab_pat", _GITLAB_PAT, ScanOutcome.BLOCK, "GitLab personal access token", 0.95),
         Pattern("slack_token", _SLACK_TOKEN, ScanOutcome.BLOCK, "Slack token", 0.95),
+        Pattern(
+            "llm_api_key", _LLM_API_KEY, ScanOutcome.BLOCK, "LLM API key in payload", 0.95
+        ),
         Pattern(
             "high_entropy_blob",
             _GENERIC_HIGH_ENTROPY,
@@ -327,8 +337,9 @@ class OnnxPromptGuardScanner:
         P95 is 10-20ms vs 15-30ms for torch CPU.
 
     The scanner reproduces LlamaFirewall's PromptGuard scoring exactly (same
-    tokenizer, same softmax over the 3-class logits: safe / injection / jailbreak).
-    A score >= ``block_threshold`` -> BLOCK.
+    tokenizer, same softmax).  The ``gravitee-io`` ONNX export is a **2-class**
+    model ``[benign, malicious]``; the code always takes the **last** class as
+    the block score, which works for both 2-class and 3-class exports.
 
     ``onnxruntime`` and ``transformers`` are imported lazily so the package
     remains importable without them installed (the regex-only path still works).
@@ -427,13 +438,14 @@ class OnnxPromptGuardScanner:
         shifted = logits - logits.max(axis=-1, keepdims=True)
         exp = np.exp(shifted)
         probs = exp / exp.sum(axis=-1, keepdims=True)
-        # PromptGuard-2 outputs 3 logits: [safe, injection, jailbreak].
-        # The jailbreak score is the last class. Some ONNX exports have
-        # shape (1, 3); others (1, 1). Handle both.
-        if probs.shape[-1] >= 3:
-            return float(probs[0, -1])
-        # Fallback: if single-logit, treat as binary jailbreak prob
-        return float(probs[0, 0])
+        # The original Meta PromptGuard-2 outputs 3 logits:
+        #   [safe, injection, jailbreak].
+        # The gravitee-io ONNX export is a 2-class model:
+        #   [benign, malicious].
+        # We always take the LAST class as the "block" score so both
+        # exports work correctly.  (The last class is always the
+        # "should-block" dimension regardless of arity.)
+        return float(probs[0, -1])
 
 
 # ---------------------------------------------------------------------------
