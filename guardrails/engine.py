@@ -178,7 +178,7 @@ class GuardrailEngine:
         """Preload model weights / warm caches so the first request is fast.
 
         For the ONNX PromptGuard-backed engine this triggers the ONNX model
-        load (PromptGuard-2-86M, ~350MB full-precision / ~90MB quantized).
+        load (PromptGuard-2-86M, ~350MB full-precision ONNX).
         With dry-run / regex-only configs this is a no-op.
         """
         # Touch each scanner once to force lazy init in a thread.

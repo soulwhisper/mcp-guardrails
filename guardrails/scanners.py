@@ -399,7 +399,7 @@ class OnnxPromptGuardScanner:
     Advantages:
       * **No HF_TOKEN required** — the ONNX repo is public and non-gated.
       * **Truly torch-free** — onnxruntime (~15MB) replaces torch (~750MB);
-        the full-precision model is ~350MB, the quantized variant ~90MB.
+        the full-precision model is ~350MB.
       * **Faster CPU inference** — ONNX Runtime is tuned for CPU; typical
         P95 is 10-20ms vs 15-30ms for torch CPU.
 

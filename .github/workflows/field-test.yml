@@ -10,14 +10,6 @@ name: Field Test (ONNX)
 on:
   workflow_dispatch:
     inputs:
-      model-file:
-        description: "ONNX model file (model.onnx = full ~350MB, model.quant.onnx = quantized ~90MB)"
-        required: false
-        default: "model.onnx"
-        type: choice
-        options:
-          - "model.onnx"
-          - "model.quant.onnx"
       hf-endpoint:
         description: "HF endpoint override (leave empty for default; set https://hf-mirror.com for GFW)"
         required: false
@@ -63,16 +55,7 @@ jobs:
               print(f"Using HF_ENDPOINT={endpoint}")
 
           from huggingface_hub import snapshot_download
-          import json
-
-          # Read the workflow input for model-file
-          event_path = os.environ.get("GITHUB_EVENT_PATH", "")
           model_file = "model.onnx"
-          if event_path and os.path.exists(event_path):
-              with open(event_path) as f:
-                  event = json.load(f)
-              model_file = event.get("inputs", {}).get("model-file", "model.onnx")
-
           print(f"Downloading model (file={model_file})...")
           path = snapshot_download(
               repo_id="gravitee-io/Llama-Prompt-Guard-2-86M-onnx",
@@ -102,7 +85,7 @@ jobs:
           ENABLE_REGEX_SCANNER: "1"
           ENABLE_PROMPTGUARD: "1"
           LF_ONNX_LOCAL_DIR: ${{ env.MODEL_SNAP_DIR }}
-          LF_ONNX_FILE: ${{ inputs.model-file }}
+          LF_ONNX_FILE: model.onnx
           LISTEN_ADDR: "127.0.0.1:19091"
           LOG_LEVEL: "WARNING"
           AUDIT_LOG_PATH: "/dev/null"
@@ -120,7 +103,7 @@ jobs:
           ENABLE_REGEX_SCANNER: "1"
           ENABLE_PROMPTGUARD: "1"
           LF_ONNX_LOCAL_DIR: ${{ env.MODEL_SNAP_DIR }}
-          LF_ONNX_FILE: ${{ inputs.model-file }}
+          LF_ONNX_FILE: model.onnx
           LISTEN_ADDR: "127.0.0.1:19092"
           LOG_LEVEL: "ERROR"
           AUDIT_LOG_PATH: "/dev/null"
@@ -141,7 +124,7 @@ jobs:
           **Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           **Branch:** ${{ github.ref_name }}
           **Commit:** ${{ github.sha }}
-          **Model file:** `${{ inputs.model-file }}`
+          **Model file:** `model.onnx`
           **HF endpoint:** `${{ inputs.hf-endpoint || '(default)' }}`
 
           ## Functional Test

@@ -99,8 +99,6 @@ jobs:
           # public and non-gated — NO HF_TOKEN needed. The Dockerfile's models
           # stage downloads it directly.
           #
-          # To override the ONNX model file (e.g. use the quantized variant),
-          # add LF_ONNX_FILE=model.quant.onnx to build-args above.
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false

@@ -18,7 +18,7 @@ LlamaFirewall ships with, avoiding the 401 Unauthorized build failure.
                                "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
   LF_ONNX_FILE                 Which .onnx file to load. Default: "model.onnx"
                                (full-precision, ~350MB, accuracy 98.01%). The
-                               repo also has "model.quant.onnx" (quantized,
+                               repo has
                                ~90MB, accuracy 89.89%) if you want a smaller
                                image at the cost of recall.
   LF_PROMPTGUARD_BLOCK_THRESHOLD  Block threshold (0.0-1.0). Score >= threshold
