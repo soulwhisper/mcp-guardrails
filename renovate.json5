@@ -1,6 +1,4 @@
 {
-  // Shared Renovate config for @soulwhisper repos.
-  // Covers pip, Docker, GitHub Actions, and more.
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["github>soulwhisper/renovate-config"],
 }
