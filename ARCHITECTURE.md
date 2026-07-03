@@ -537,7 +537,7 @@ The Dockerfile is multi-stage:
    `huggingface_hub.snapshot_download`. The model is a flat `.onnx` file
    (~350MB) loaded at runtime by `onnxruntime.InferenceSession` directly —
    no `torch`, no `optimum`. A BuildKit cache mount (`/hf-cache`) with
-   `HF_HUB_ENABLE_HF_TRANSFER=1` parallelises the LFS download (2-5x faster).
+   `HF_XET_HIGH_PERFORMANCE=1` parallelises the download (2-5x faster).
    If the model is unavailable at build time (air-gapped build, HF outage),
    the build still succeeds — runtime will lazy-fetch on first scan (guarded
    by a 30s warmup deadline). This stage is what makes the image air-gappable
