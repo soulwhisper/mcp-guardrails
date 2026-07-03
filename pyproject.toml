@@ -35,8 +35,7 @@ dependencies = [
 # Truly torch-free: we load the .onnx graph with onnxruntime directly and
 # tokenise with transformers (tokenizer-only — no torch extra). optimum is
 # intentionally NOT used because it hard-requires torch (~750MB).
-# hf-xet enables Xet storage transfers (chunk-based deduplication, faster
-# than legacy hf_transfer). Auto-detected when installed.
+# hf-xet enables Xet storage transfers (auto-detected when installed).
 onnx = [
     "transformers>=4.51.3",
     "onnxruntime>=1.20.0",

@@ -53,9 +53,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # so a rebuild (even after an upstream layer change) reuses the ~350MB download
 # instead of re-fetching it. The model is then materialised as REAL flat files
 # under /models/hf/pg2 (copy, not symlink) so the runtime image is independent
-# of the (ephemeral) cache mount. hf-xet (auto-detected when installed;
-# set HF_XET_HIGH_PERFORMANCE=1 for max throughput) parallelises the download
-# — 2-5x faster for the large .onnx blob.
+# of the (ephemeral) cache mount. hf-xet (auto-detected) parallelises the
+# download — 2-5x faster for the large .onnx blob.
 FROM base AS models
 ARG SKIP_MODEL_DOWNLOAD=0
 ARG LF_ONNX_MODEL=gravitee-io/Llama-Prompt-Guard-2-86M-onnx

@@ -148,8 +148,7 @@ missing an 'http://' or 'https://' protocol`. The empty `HF_ENDPOINT`
   only `huggingface-hub` + `hf-xet`, decoupled from the builder) so a
   `requirements.txt` bump no longer invalidates the ~350MB model-download
   layer cache. A BuildKit cache mount (`/hf-cache`) persists the HF download
-  across builds, and `HF_XET_HIGH_PERFORMANCE=1` parallelises the download
-  (2-5x faster). The model is materialised as real flat files under
+  across builds. The model is materialised as real flat files under
   `/models/hf/pg2` (copy, not symlink) so the runtime image is independent of
   the cache mount.
 - **`docker-publish.yml`** now triggers on bare version tags (`0.2.0`) as well
