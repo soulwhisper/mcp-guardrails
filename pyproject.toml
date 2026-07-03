@@ -21,8 +21,8 @@ classifiers = [
 dependencies = [
     "grpcio>=1.62,<2",
     "grpcio-health-checking>=1.62,<2",
-    # protobuf 5.x and 6.x are both runtime-compatible for our generated stubs.
-    "protobuf>=5.29,<7",
+    # protobuf runtime is backward-compatible: newer runtime loads older gencode.
+    "protobuf>=5.29",
     # OpenTelemetry — always available; degrades gracefully to audit-log-only
     # when no OTLP endpoint is configured.
     "opentelemetry-sdk>=1.28.0",
@@ -35,12 +35,12 @@ dependencies = [
 # Truly torch-free: we load the .onnx graph with onnxruntime directly and
 # tokenise with transformers (tokenizer-only — no torch extra). optimum is
 # intentionally NOT used because it hard-requires torch (~750MB).
-# hf_transfer enables parallel chunked downloads (HF_HUB_ENABLE_HF_TRANSFER=1).
+# hf-xet enables Xet storage transfers (auto-detected when installed).
 onnx = [
     "transformers>=4.51.3",
     "onnxruntime>=1.20.0",
     "huggingface-hub>=0.30.2",
-    "hf_transfer>=0.1.6",
+    "hf-xet>=1.5",
 ]
 
 # AgentAlignment LLM — opt-in second-stage deep inspection. Calls an

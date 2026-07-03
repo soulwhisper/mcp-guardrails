@@ -12,8 +12,8 @@ grpcio>=1.81,<1.82
 grpcio-health-checking>=1.81,<1.82
 # grpcio-tools is a BUILD-TIME / DEV dependency only — NOT listed here.
 
-# protobuf 5.x and 6.x are both runtime-compatible for our generated stubs.
-protobuf>=5.29,<7
+# protobuf runtime is backward-compatible: newer runtime loads older gencode.
+protobuf>=5.29
 
 # --- Transformers + ONNX Runtime for PromptGuard-2-86M inference ---
 # The ONNX model is public + non-gated, so no HF_TOKEN is needed. We load the
@@ -32,10 +32,8 @@ openai>=1.76.0
 # Used by the Dockerfile models stage to snapshot_download the ONNX model.
 huggingface-hub>=0.30.2
 
-# --- hf_transfer: parallel chunked HF downloads (2-5x faster for the ~350MB
-#     model). Enabled by HF_HUB_ENABLE_HF_TRANSFER=1 in the Dockerfile build
-#     and the local download-model task. ---
-hf_transfer>=0.1.6
+# --- hf-xet: Xet storage client for HF Hub downloads (auto-detected). ---
+hf-xet>=1.5
 
 # --- OpenTelemetry (optional at runtime; sidecar degrades to stdout audit
 #     if these are absent). Lower-bound only; the 1.x line is stable. ---

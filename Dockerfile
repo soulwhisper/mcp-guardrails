@@ -53,18 +53,18 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # so a rebuild (even after an upstream layer change) reuses the ~350MB download
 # instead of re-fetching it. The model is then materialised as REAL flat files
 # under /models/hf/pg2 (copy, not symlink) so the runtime image is independent
-# of the (ephemeral) cache mount. hf_transfer (HF_HUB_ENABLE_HF_TRANSFER=1)
-# parallelises the LFS download — 2-5x faster for the large .onnx blob.
+# of the (ephemeral) cache mount. hf-xet (auto-detected) parallelises the
+# download — 2-5x faster for the large .onnx blob.
 FROM base AS models
 ARG SKIP_MODEL_DOWNLOAD=0
 ARG LF_ONNX_MODEL=gravitee-io/Llama-Prompt-Guard-2-86M-onnx
 ARG LF_ONNX_FILE=model.onnx
-# Install ONLY what the download needs (huggingface_hub + hf_transfer) — NOT the
+# Install ONLY what the download needs (huggingface_hub + hf-xet) — NOT the
 # full runtime deps. This decouples the model-download layer from the builder
 # stage, so a requirements.txt bump does NOT invalidate the (slow, ~350MB) model
 # layer cache: the download RUN only re-runs when LF_ONNX_MODEL / LF_ONNX_FILE
 # actually change.
-RUN pip install --no-cache-dir "huggingface-hub>=0.30.2" "hf_transfer>=0.1.6"
+RUN pip install --no-cache-dir "huggingface-hub>=0.30.2" "hf-xet>=1.5"
 RUN --mount=type=cache,target=/hf-cache,sharing=locked \
     --mount=type=secret,id=HF_TOKEN \
     set -e; \
@@ -75,7 +75,7 @@ RUN --mount=type=cache,target=/hf-cache,sharing=locked \
         mkdir -p /models/hf/pg2; \
         exit 0; \
     fi; \
-    export HF_HOME=/hf-cache HF_HUB_ENABLE_HF_TRANSFER=1; \
+    export HF_HOME=/hf-cache; \
     echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE})"; \
     python - <<PYEOF
 from huggingface_hub import snapshot_download
