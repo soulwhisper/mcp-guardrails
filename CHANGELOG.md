@@ -5,6 +5,32 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.2...v0.3.3) (2026-07-04)
+
+
+### Features
+
+* **container:** update image docker/dockerfile ( 1.7 → 1.25 ) ([#38](https://github.com/soulwhisper/mcp-guardrails/issues/38)) ([ad2f0d6](https://github.com/soulwhisper/mcp-guardrails/commit/ad2f0d6bdd0ce70c71f944bbb268363468294948))
+* **github-action:** update python ([#39](https://github.com/soulwhisper/mcp-guardrails/issues/39)) ([710ec0f](https://github.com/soulwhisper/mcp-guardrails/commit/710ec0fc2af598129c9a50f87bd836c6e9068a12))
+
+
+### Bug Fixes
+
+* **ci:** make chore commits visible to release-please ([#35](https://github.com/soulwhisper/mcp-guardrails/issues/35)) ([a1d9b41](https://github.com/soulwhisper/mcp-guardrails/commit/a1d9b41c47af154ef7c555427096866f7cd6d728))
+
+
+### Continuous Integration
+
+* **github-action:** pin dependencies ([#37](https://github.com/soulwhisper/mcp-guardrails/issues/37)) ([50687f2](https://github.com/soulwhisper/mcp-guardrails/commit/50687f2ef5f2f8978345035a539ae5eca84b0e8b))
+* **github-action:** pin dependencies ([#42](https://github.com/soulwhisper/mcp-guardrails/issues/42)) ([e5edade](https://github.com/soulwhisper/mcp-guardrails/commit/e5edade6e23d131117fddce703be55fc68f9f764))
+* **github-action:** update docker/login-action digest ( c99871d → af1e73f ) ([#43](https://github.com/soulwhisper/mcp-guardrails/issues/43)) ([3eb30b8](https://github.com/soulwhisper/mcp-guardrails/commit/3eb30b83ecce276ef935818d448e1fe427253d45))
+
+
+### Chores
+
+* **ci:** optimize workflow triggers to reduce duplicate runs ([#34](https://github.com/soulwhisper/mcp-guardrails/issues/34)) ([207543c](https://github.com/soulwhisper/mcp-guardrails/commit/207543c673e69c8b4dbbae03df69df56a7560730))
+* **ci:** update github actions ([#41](https://github.com/soulwhisper/mcp-guardrails/issues/41)) ([3fee6d0](https://github.com/soulwhisper/mcp-guardrails/commit/3fee6d0efae53d7fbad2a09882220ee148addb0c))
+
 ## [0.3.2](https://github.com/soulwhisper/mcp-guardrails/compare/0.3.1...v0.3.2) (2026-07-02)
 
 
