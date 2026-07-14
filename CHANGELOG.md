@@ -5,6 +5,27 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.3...v0.3.4) (2026-07-14)
+
+
+### Features
+
+* **deps:** update grpcio ( 1.81.1 → 1.82.1 ) ([#49](https://github.com/soulwhisper/mcp-guardrails/issues/49)) ([400c7c8](https://github.com/soulwhisper/mcp-guardrails/commit/400c7c8cd3d81773f96fe0bf5e63c611f1da0bf2))
+* **deps:** update grpcio-health-checking ( 1.81.1 → 1.82.1 ) ([#50](https://github.com/soulwhisper/mcp-guardrails/issues/50)) ([0d14af8](https://github.com/soulwhisper/mcp-guardrails/commit/0d14af8a49d13578da34b0e5f22e3940d15ea1a1))
+* **deps:** update grpcio-health-checking ( 1.81.1 → 1.82.1 ) ([#51](https://github.com/soulwhisper/mcp-guardrails/issues/51)) ([90bb5c7](https://github.com/soulwhisper/mcp-guardrails/commit/90bb5c71369bf4b6036280558258eb78dc0bba11))
+* **deps:** update grpcio-tools ( 1.81.1 → 1.82.0 ) ([#46](https://github.com/soulwhisper/mcp-guardrails/issues/46)) ([2772e20](https://github.com/soulwhisper/mcp-guardrails/commit/2772e2048c772066070fbd531812c82d225f84ab))
+
+
+### Continuous Integration
+
+* **github-action:** update github/codeql-action digest ( 54f647b → 99df26d ) ([#48](https://github.com/soulwhisper/mcp-guardrails/issues/48)) ([16c8127](https://github.com/soulwhisper/mcp-guardrails/commit/16c8127ca4326e5cbc70c7856768086ca43de023))
+
+
+### Chores
+
+* **container:** update image python ( 072ffcb → d3400aa ) ([#53](https://github.com/soulwhisper/mcp-guardrails/issues/53)) ([843b5da](https://github.com/soulwhisper/mcp-guardrails/commit/843b5da3f9244ec53c328f1684f037181b13d673))
+* **container:** update image python ( b877e50 → 072ffcb ) ([#52](https://github.com/soulwhisper/mcp-guardrails/issues/52)) ([70e3b79](https://github.com/soulwhisper/mcp-guardrails/commit/70e3b79ac1888c04e87b1469e004e4b27678b6fe))
+
 ## [0.3.3](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.2...v0.3.3) (2026-07-04)
 
 
