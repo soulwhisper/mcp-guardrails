@@ -17,7 +17,7 @@
 #
 # Final image ~600-800MB (onnxruntime + transformers + model weights).
 
-ARG PY_VERSION=3.14-slim@sha256:072ffcb57bab690052d9b695592d811a42b849e8ef254ced334a28f283d5f76a
+ARG PY_VERSION=3.14-slim@sha256:d3400aa122fa42cf0af0dbe8ec3091b047eac5c8f7e3539f7135e86d855dc015
 
 # ---------- base ----------
 FROM python:${PY_VERSION} AS base
