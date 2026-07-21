@@ -13,12 +13,13 @@ help: ## Show available targets
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 proto: ## Regenerate Python gRPC stubs from proto/ext_mcp.proto
-	# NOTE: the committed stubs are generated with grpcio-tools 1.82.1 +
-	# protobuf 7.35.x gencode (matching the requirements lower bounds).
-	# If you run `make proto` with a different grpcio-tools version, the
-	# output will differ cosmetically (version stamps, class style) but be
-	# semantically identical. Run `make proto-check` to verify — it
-	# normalizes cosmetic differences before diffing.
+	# NOTE: the committed stubs were generated with grpcio-tools 1.71.2 +
+	# protobuf 5.29.0, while CI's proto-check job currently uses the
+	# grpcio-tools 1.82.x line. If you run `make proto` with a different
+	# grpcio-tools version, the output will differ cosmetically (version
+	# stamps, class style) but should remain semantically identical. Run
+	# `make proto-check` to verify — it normalizes cosmetic differences
+	# before diffing.
 	$(PY) -m grpc_tools.protoc -I proto \
 		--python_out=proto --grpc_python_out=proto \
 		proto/ext_mcp.proto
