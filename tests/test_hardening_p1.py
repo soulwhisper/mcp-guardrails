@@ -54,13 +54,13 @@ def test_scan_windows_tail_disabled():
 
 def test_scan_windows_tail_utf8_safe():
     # Multi-byte emoji straddling the tail cut must not produce mojibake.
-    text = _big_pad(2048) + "\U0001f512" * 200
+    text = _big_pad(2048) + "🔒" * 200
     chunks, truncated = scan_windows(text, 1024, 100)
     assert truncated is True
     tail = chunks[1]
     tail.encode("utf-8")  # round-trips without error
-    assert "\U0001f512" in tail
-    assert tail.endswith("\U0001f512")
+    assert "🔒" in tail
+    assert tail.endswith("🔒")
 
 
 def test_scan_windows_tail_overlaps_head():
