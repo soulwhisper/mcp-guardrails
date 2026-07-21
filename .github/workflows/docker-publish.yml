@@ -87,11 +87,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            PY_VERSION=3.11-slim
-          # The ONNX model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) is
-          # public and non-gated, but HF_TOKEN avoids 429 rate-limiting
-          # from shared GHA IPs during the models build stage.
           secrets: |
             "HF_TOKEN=${{ secrets.HF_TOKEN }}"
           cache-from: type=gha
