@@ -93,7 +93,7 @@ _FORMAT_INJECTION = re.compile(
 )
 # Connection strings with embedded credentials — common leak vector.
 _CONNECTION_STRING = re.compile(
-    r"(?i)\b(?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis|amqps?)://[^\s\"'<>]{10,}",
+    r"(?i)\b(?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis|amqps?)://[^\s\"'<>{10,}",
 )
 # Generic key=value credential pairs.  Catches inline secrets like
 #   PASSWORD=hunter2   token: sk-xxx   secret=abc123
@@ -559,6 +559,27 @@ def truncate(text: str, max_bytes: int) -> tuple[str, bool]:
         return text, False
     truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
     return truncated, True
+
+
+def scan_windows(text: str, max_bytes: int, tail_bytes: int) -> tuple[list[str], bool]:
+    """Split ``text`` into the chunks that content scanners must inspect.
+
+    Returns ``(chunks, was_truncated)``. For in-budget payloads this is just
+    ``[text]``. For over-budget payloads the head (``max_bytes``) is always
+    scanned, plus a UTF-8-safe tail window of up to ``tail_bytes`` — an
+    injection hidden behind a padding prefix (the truncation bypass: attacker
+    pads the payload so the malicious instruction lands beyond the scanned
+    head) is caught by the tail chunk. ``tail_bytes <= 0`` disables the tail
+    window.
+    """
+    head, truncated = truncate(text, max_bytes)
+    if not truncated or tail_bytes <= 0:
+        return [head], truncated
+    encoded = text.encode("utf-8", errors="ignore")
+    tail = encoded[-tail_bytes:].decode("utf-8", errors="ignore")
+    if not tail or tail == head:
+        return [head], truncated
+    return [head, tail], True
 
 
 def extract_text(payload: Any) -> str:
