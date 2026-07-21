@@ -63,7 +63,7 @@ def normalize(text: str) -> list[str]:
     # 3. _runtime_version.ValidateProtobufRuntimeVersion(..., MAJOR, MINOR, PATCH, ...)
     text = re.sub(
         r"_runtime_version\.ValidateProtobufRuntimeVersion\(\s*"
-        r"_runtime_version\.Domain\.PUBLIC,\s*\d+,\s*\d+,\s*\d+,",
+        r"_runtime_version\.Domain\.PUBLIC,\s*\d+,\s*\d+,",
         "_runtime_version.ValidateProtobufRuntimeVersion(\n"
         "    _runtime_version.Domain.PUBLIC, 0, 0, 0,",
         text,
@@ -101,6 +101,24 @@ def normalize(text: str) -> list[str]:
     return text.splitlines(keepends=True)
 
 
+def extract_serialized(text: str) -> bytes | None:
+    """Extract and decode the ``AddSerializedFile(b'...')`` bytes literal.
+
+    Returns ``None`` when the literal is absent or undecodable (caller falls
+    back to normalized text comparison).
+    """
+    import ast
+
+    match = re.search(r"AddSerializedFile\((b'(?:[^'\\]|\\.)*')\)", text)
+    if not match:
+        return None
+    try:
+        raw = ast.literal_eval(match.group(1))
+    except (SyntaxError, ValueError):
+        return None
+    return raw if isinstance(raw, bytes) else None
+
+
 def regenerate(dest: Path) -> None:
     """Run grpc_tools.protoc to regenerate stubs into ``dest``."""
     subprocess.run(
@@ -127,8 +145,27 @@ def main() -> int:
             if not committed_path.exists():
                 print(f"Error: committed stub {committed_path} does not exist.", file=sys.stderr)
                 return 1
-            committed_norm = normalize(committed_path.read_text(encoding="utf-8"))
-            generated_norm = normalize((dest / name).read_text(encoding="utf-8"))
+            committed_text = committed_path.read_text(encoding="utf-8")
+            generated_text = (dest / name).read_text(encoding="utf-8")
+            # For the descriptor module, compare the raw serialized descriptor
+            # bytes — the only semantically meaningful content. This is immune
+            # to every gencode cosmetic drift (escaping, version stamps, builder
+            # API style). Fall back to normalized text comparison if extraction
+            # fails.
+            committed_desc = extract_serialized(committed_text)
+            generated_desc = extract_serialized(generated_text)
+            if committed_desc is not None and generated_desc is not None:
+                if committed_desc == generated_desc:
+                    continue
+                print(
+                    f"Error: {name}: serialized descriptor differs from the "
+                    "one generated from proto/ext_mcp.proto.",
+                    file=sys.stderr,
+                )
+                diffs_found = True
+                continue
+            committed_norm = normalize(committed_text)
+            generated_norm = normalize(generated_text)
             if committed_norm != generated_norm:
                 diffs_found = True
                 sys.stdout.writelines(
