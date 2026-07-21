@@ -79,7 +79,7 @@ flowchart TD
     end
 
     subgraph Engine
-        ENG --> EXT[extract_text + truncate]
+        ENG --> EXT[extract_text + scan_windows (head+tail)]
         EXT --> RX[RegexScanner<br/>hidden-ascii / PII / secrets]
         EXT --> PG[OnnxPromptGuardScanner<br/>PromptGuard-2]
         EXT --> INV[InvariantEngine<br/>trace record + evaluate]
@@ -225,8 +225,13 @@ make run
 docker run --rm -p 9001:9001 \
   --env-file examples/docker-run.env \
   -v $(pwd)/examples/rules.policy:/etc/guardrails/rules.policy:ro \
-  ghcr.io/soulwhisper/mcp-guardrails:0.3.1
+  ghcr.io/soulwhisper/mcp-guardrails:0.3.4
 ```
+
+Note: the head+tail `scan_windows` / per-route trace hardening and the
+redaction pipeline (PRs #61 / #62) are merged into `main` but are **not**
+included in the `0.3.4` image — wait for the next release or build locally
+with `make docker`.
 
 ### PromptGuard-2 model (ONNX, Llama 4 Community License)
 
@@ -328,6 +333,7 @@ deadline.
 | Scanners       | `ENABLE_AGENT_ALIGNMENT`         | `false`                                  | LLM-based AgentAlignment. Off by default; only triggered as a second stage when PromptGuard flags `HUMAN_REVIEW` on a response.                |
 | Redaction      | `ENABLE_REDACTION`               | `true`                                   | Structural secret/PII redaction on allowed payloads (`[REDACTED:<TYPE>]` placeholders, forwarded via the `mutated` oneof). Runs only when no scanner BLOCKs and no `HUMAN_REVIEW` is pending. |
 | Redaction      | `REDACT_REQUEST_PARAMS`          | `false`                                  | Also redact inside `params.arguments` on the request side. Off by default — secrets in requests should BLOCK (RegexScanner), not be rewritten. |
+| Redaction      | `REDACTION_MAX_BYTES`            | `262144`                                 | Payload byte cap for redaction (256KiB). Over-cap payloads skip redaction entirely and pass through unchanged with `redaction_skipped=size` in the audit span; they are still scanned by the head+tail `scan_windows`. |
 | PromptGuard    | `LF_ONNX_FILE`                   | `model.onnx`                             | Which `.onnx` file to load. Defaults to the full-precision `model.onnx`. |
 | PromptGuard    | `LF_ONNX_MODEL`                  | `gravitee-io/...-onnx`                   | ONNX model repo ID. Public, non-gated; model weights under Llama 4 Community License (see NOTICE).                                          |
 | PromptGuard    | `LF_PROMPTGUARD_BLOCK_THRESHOLD` | `0.9`                                    | Block threshold (0.0-1.0). PromptGuard score >= threshold -> BLOCK.                                                                            |
@@ -447,8 +453,11 @@ agentgateway. Key points:
   (~350MB weights). Bump to 4Gi for `ENABLE_AGENT_ALIGNMENT=1` (LLM-based
   alignment holds an extra model in memory).
 
-See [`examples/agentgateway-local.yaml`](examples/agentgateway-local.yaml)
-for a non-K8s, standalone agentgateway config pointing at `localhost:9001`.
+See [`examples/agentgateway.standalone.yaml`](examples/agentgateway.standalone.yaml)
+for a non-K8s, standalone agentgateway config pointing at `localhost:9001`,
+and [`scripts/e2e_agentgateway.sh`](scripts/e2e_agentgateway.sh) for the
+driver script that exercises it end-to-end against a real agentgateway
+binary (both verified in practice).
 
 ## Testing
 
@@ -485,7 +494,7 @@ rule loader. The e2e smoke boots a live server, exercises health +
 private key) + malformed `INVALID`, and exits non-zero on any
 mismatch.
 
-All 81 unit tests and the e2e smoke are green on a fresh clone.
+All 157 unit tests and the e2e smoke are green on a fresh clone.
 
 ### Real agentgateway interoperability e2e
 
@@ -583,13 +592,15 @@ mcp-guardrails/
 │   ├── servicer.py               # ExtMcpServicer (gRPC wire mapping)
 │   ├── config.py                 # GuardrailConfig.from_env()
 │   ├── otel.py                   # OTel spans/metrics + always-on JSONL audit
+│   ├── redaction.py              # RedactionScanner (secret/PII masking, [REDACTED:<TYPE>] mutation)
 │   ├── proto_bridge.py           # sys.path bridge for the generated stubs
 │   └── rules/
 │       ├── __init__.py           # RulePack loader (path / module / env, SIGHUP reload)
 │       └── default.py            # bundled homelab starter rule pack
-├── tests/                        # 72 unit tests + e2e_smoke.py
+├── tests/                        # 157 unit tests + e2e_smoke.py
+├── scripts/                      # proto_check.py, version_check.py, e2e_agentgateway.sh (real agentgateway e2e)
 ├── deploy/k8s/                   # K8s manifests (Deployment, Service, ConfigMap, CRD)
-├── examples/                     # rule pack, env file, local agentgateway config
+├── examples/                     # rule pack, env file, standalone agentgateway config, PII demo upstream
 ├── .github/workflows/            # CI + release workflows
 ├── server.py                     # grpc.aio entrypoint (SIGHUP reload, SIGTERM drain)
 ├── Dockerfile                    # multi-stage (base/builder/models/runtime), nonroot 65532
