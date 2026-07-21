@@ -1,24 +1,189 @@
 # Deployment for the ExtMcp guardrail sidecar.
+#
+# The guardrail implements the agentgateway ExtMcp gRPC contract: a plaintext
+# HTTP/2 (h2c) server on :9001 exposing CheckRequest / CheckResponse. agentgateway
+# calls it as a *remote* MCP guardrails processor — every tools/call, tools/list,
+# prompts/get and resources/read flowing through the gateway is double-gated
+# (Request + Response) by this sidecar before being forwarded to the backing MCP
+# server.
+#
+# Why h2c (HTTP/2 cleartext, no TLS)?
+#   agentgateway uses `appProtocol: kubernetes.io/h2c` on the Service to learn
+#   that this backend speaks plaintext HTTP/2 gRPC. TLS termination is the
+#   gateway's job; the sidecar only ever sees cluster-internal traffic and so
+#   binds an insecure port. Do NOT add TLS here unless you also switch the
+#   Service appProtocol to kubernetes.io/grpc and provide a certificate.
+#
+# Why failClosed?
+#   The guardrail is the last line of defence between a prompt-injected agent
+#   and the user's tools. If a scanner throws (model OOM, regex catastrophic
+#   backtracking, transient HF outage), `FAILURE_MODE=failClosed` makes the
+#   sidecar return an AuthorizationError rather than Pass — i.e. the gateway
+#   blocks the call. Fail-open here would mean a single transient scanner
+#   failure silently disables every guardrail. The tradeoff is availability:
+#   a prolonged scanner outage takes the agent offline, which is the desired
+#   failure mode for a security control.
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mcp-guardrails
   namespace: agent-system
+  labels:
+    app.kubernetes.io/name: mcp-guardrails
+    app.kubernetes.io/component: sidecar
+    app.kubernetes.io/part-of: agentgateway
+    app.kubernetes.io/managed-by: kustomize
 spec:
   replicas: 2
   selector:
     matchLabels:
       app: mcp-guardrails
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   template:
     metadata:
       labels:
-        app: mcp-guardrails
+        app.kubernetes.io/name: mcp-guardrails
+        app.kubernetes.io/component: sidecar
+        app.kubernetes.io/part-of: agentgateway
     spec:
+      # Pod-level security: non-root, UID 65532 (matches Dockerfile USER),
+      # fsGroup 65532 so the mounted ConfigMap is readable, seccomp locked to
+      # the runtime default profile.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: guardrail
           image: ghcr.io/soulwhisper/mcp-guardrails:0.3.4  # x-release-please-version
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc-h2c
+              containerPort: 9001
+              protocol: TCP
+          # Env var names EXACTLY match guardrails/config.py:GuardrailConfig.from_env().
+          # See that file for the full list — only the knobs we want to override
+          # from the homelab defaults are listed here.
+          env:
+            - name: FAILURE_MODE
+              value: "failClosed"
+            - name: HUMAN_REVIEW_MODE
+              value: "pass"
+            - name: MAX_CONTENT_BYTES
+              value: "32768"
+            - name: ENABLE_REGEX_SCANNER
+              value: "true"
+            - name: ENABLE_PROMPTGUARD
+              value: "true"
+            - name: ENABLE_AGENT_ALIGNMENT
+              value: "false"
+            - name: INVARIANT_WINDOW
+              value: "64"
+            - name: INVARIANT_RULES_PATH
+              value: "/etc/guardrails/rules.policy"
+            - name: SCANNER_TIMEOUT_MS
+              value: "500"
+            # --- OpenTelemetry ---
+            # OTLP gRPC exporter. The endpoint is cluster-internal
+            # (typically an otel-collector Deployment). When this is set,
+            # the sidecar initialises a TracerProvider + MeterProvider and
+            # exports spans + the `mcp.guardrails.decisions` counter.
+            # When unset, OTel degrades gracefully to audit-log-only
+            # (structured JSON to AUDIT_LOG_PATH).
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.observability.svc:4317"
+            - name: OTEL_SERVICE_NAME
+              value: "mcp-guardrails"
+            - name: AUDIT_LOG_PATH
+              value: "/dev/stdout"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: LISTEN_ADDR
+              value: "[::]:9001"
+            # --- PromptGuard (ONNX, always on) ---
+            # The ONNX model is public; model weights are Llama 4 Community
+            # License. HF_TOKEN recommended if downloading outside the image.
+            # Default: model.onnx (full-precision, ~350MB, accuracy 98.01%).
+            - name: LF_ONNX_MODEL
+              value: "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
+            - name: LF_ONNX_FILE
+              value: "model.onnx"
+            - name: LF_PROMPTGUARD_BLOCK_THRESHOLD
+              value: "0.9"
+            # --- AgentAlignment LLM (second-stage, opt-in) ---
+            # Only needed when ENABLE_AGENT_ALIGNMENT=1. The LLM client reads
+            # the API key directly from LF_ALIGNMENT_API_KEY.
+            - name: LF_ALIGNMENT_MODEL
+              value: "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+            - name: LF_ALIGNMENT_API_BASE
+              value: "https://api.together.xyz/v1"
+            # LF_ALIGNMENT_API_KEY: the API key for the LLM provider.
+            # Create a Kubernetes Secret:
+            #   kubectl create secret generic alignment-api-key -n agent-system \
+            #     --from-literal=LF_ALIGNMENT_API_KEY=xxx
+            # For OpenAI: also set LF_ALIGNMENT_API_BASE=https://api.openai.com/v1
+            # and LF_ALIGNMENT_MODEL=gpt-4o (or your model of choice).
+            - name: LF_ALIGNMENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: alignment-api-key
+                  key: LF_ALIGNMENT_API_KEY
+                  optional: true
+          resources:
+            # PromptGuard-2 ONNX (86M params) + onnxruntime + per-call regex.
+            # 2Gi request covers model load + steady-state (~800MB-1.1GB);
+            # 4Gi limit absorbs burst traffic. CPU 500m / 2 keeps cold-start
+            # under ~10s while leaving headroom for parallel scanner calls.
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          # Readiness: gRPC health probe on the ExtMcp service. server.py
+          # registers SERVING for both "" and "ExtMcp" only after engine
+          # warmup, so this naturally keeps the Pod out of rotation during
+          # cold-start. Use the named service here so kubelet checks the
+          # actual ExtMcp surface rather than a non-existent fully-qualified
+          # health service name.
           readinessProbe:
             grpc:
               port: 9001
               service: "ExtMcp"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Liveness: bare gRPC health check (overall server health, service "").
+          # Longer initial delay because PromptGuard-2 cold-load can take 20-30s
+          # on a cold node; killing the Pod during warmup would loop forever.
+          livenessProbe:
+            grpc:
+              port: 9001
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: rules
+              mountPath: /etc/guardrails
+              readOnly: true
+      volumes:
+        - name: rules
+          configMap:
+            name: guardrail-rules
+            # The ConfigMap key is `rules.policy`; mount it as that exact
+            # filename at /etc/guardrails/rules.policy so INVARIANT_RULES_PATH
+            # resolves correctly.
+            items:
+              - key: rules.policy
+                path: rules.policy
+      terminationGracePeriodSeconds: 15
