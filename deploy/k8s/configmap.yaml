@@ -160,10 +160,13 @@ data:
     #   ENABLE_AGENT_ALIGNMENT - toggle the LLM-based AgentAlignment second stage
     #                            (only runs when PromptGuard returns HUMAN_REVIEW;
     #                            default off for homelab latency budget)
-    #   MAX_CONTENT_BYTES      - per-call text budget fed to each scanner
+    #   MAX_CONTENT_BYTES      - per-call head text budget fed to each scanner
     #                            (excess is truncated + flagged in the audit span)
+    #   SCAN_TAIL_BYTES        - extra tail window scanned on over-budget payloads
+    #                            (default 8192; 0 disables; closes truncation bypass)
     #   SCANNER_TIMEOUT_MS     - per-engine-call deadline; exceeded -> failure_mode
     #   INVARIANT_WINDOW       - sliding-window size for ToxicFlowRule / LoopRule
+    #   INVARIANT_MAX_TRACES   - max distinct per-route trace windows (default 1024)
     #   FAILURE_MODE           - failClosed (default) | failOpen
     #   HUMAN_REVIEW_MODE      - pass (default) | deny
     #
