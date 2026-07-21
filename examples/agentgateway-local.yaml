@@ -41,7 +41,7 @@ ext_mcp:
   failureMode: FailClosed
   # Per-method gate selection. Full = invoke BOTH CheckRequest and
   # CheckResponse (the double gate). Request = CheckRequest only.
-  # Response = CheckResponse only. None = skip the sidecar for that method.
+  # Response = CheckResponse only. Off = skip the sidecar for that method.
   #
   # The recommended homelab baseline:
   #   tools/call     -> Full     (request params + tool output both scanned)
@@ -54,5 +54,5 @@ ext_mcp:
     prompts/get: Response
     resources/read: Response
     # logging/setLevel, ping, initialize: not policy-relevant, skip.
-    ping: None
-    initialize: None
+    ping: Off
+    initialize: Off

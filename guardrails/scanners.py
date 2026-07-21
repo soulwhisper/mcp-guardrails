@@ -15,6 +15,7 @@ per phase:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -110,6 +111,19 @@ _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
 _CREDIT_CARD = re.compile(r"\b(?:\d[ -]*?){13,16}\b")
 
 
+def _match_fingerprint(value: str) -> str:
+    """Return a non-reversible fingerprint for a regex match.
+
+    Scanner reasons are copied into audit logs and OTel spans. Logging even
+    the first 32 characters of a match can leak complete short secrets
+    (for example AWS access key IDs) or enough token prefix to aid
+    credential stuffing. Keep only the length and a short SHA-256 digest
+    so operators can correlate repeats without storing the secret itself.
+    """
+    digest = hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    return f"match_len={len(value)} match_sha256={digest}"
+
+
 @dataclass
 class Pattern:
     """A named regex with a per-pattern outcome."""
@@ -127,7 +141,7 @@ class Pattern:
         return ScanResult(
             scanner=f"regex:{self.name}",
             outcome=self.outcome,
-            reason=f"{self.reason} (match={m.group(0)[:32]!r})",
+            reason=f"{self.reason} ({_match_fingerprint(m.group(0))})",
             score=self.score,
         )
 

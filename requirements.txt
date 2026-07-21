@@ -7,7 +7,7 @@
 # The ONNX PromptGuard model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) is
 # public and non-gated — NO HF_TOKEN required.
 
-# --- gRPC stack (wire-compat critical: stubs generated with grpcio 1.81.x) ---
+# --- gRPC stack (wire-compat critical; committed stubs generated with grpcio-tools 1.71.2) ---
 grpcio>=1.82,<1.83
 grpcio-health-checking>=1.82,<1.83
 # grpcio-tools is a BUILD-TIME / DEV dependency only — NOT listed here.

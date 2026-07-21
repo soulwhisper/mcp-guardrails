@@ -63,7 +63,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: guardrail
-          image: ghcr.io/soulwhisper/mcp-guardrails:0.3.1
+          image: ghcr.io/soulwhisper/mcp-guardrails:0.3.4  # x-release-please-version
           imagePullPolicy: IfNotPresent
           ports:
             - name: grpc-h2c
@@ -148,14 +148,16 @@ spec:
             limits:
               cpu: "2"
               memory: 4Gi
-          # Readiness: gRPC health probe on the standard grpc.health.v1.Health
-          # service. The server only sets SERVING after the engine is warmed
-          # up (model loaded), so this naturally keeps the Pod out of rotation
-          # during cold-start.
+          # Readiness: gRPC health probe on the ExtMcp service. server.py
+          # registers SERVING for both "" and "ExtMcp" only after engine
+          # warmup, so this naturally keeps the Pod out of rotation during
+          # cold-start. Use the named service here so kubelet checks the
+          # actual ExtMcp surface rather than a non-existent fully-qualified
+          # health service name.
           readinessProbe:
             grpc:
               port: 9001
-              service: "grpc.health.v1.Health"
+              service: "ExtMcp"
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3

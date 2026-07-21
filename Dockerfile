@@ -71,7 +71,7 @@ RUN --mount=type=cache,target=/hf-cache,sharing=locked \
     if [ -f /run/secrets/HF_TOKEN ]; then export HF_TOKEN=$(cat /run/secrets/HF_TOKEN); fi; \
     if [ "${SKIP_MODEL_DOWNLOAD}" = "1" ]; then \
         echo "SKIP: model pre-download (SKIP_MODEL_DOWNLOAD=1)"; \
-        echo "      Runtime will lazy-fetch on first scan."; \
+        echo "      Build-validation only: runtime sets HF_HUB_OFFLINE=1 and will fail closed if the model is absent."; \
         mkdir -p /models/hf/pg2; \
         exit 0; \
     fi; \
