@@ -112,8 +112,9 @@ Both RPCs return one of three states via a protobuf `oneof`:
 
 - **`pass` (`Pass`)** — forward the payload unchanged.
 - **`mutated` (`bytes`)** — replace the payload with the supplied raw JSON
-  bytes (used for future redaction / masking passes; not emitted by the
-  default scanners).
+  bytes. Emitted by the redaction stage (see
+  [Response-side redaction](#response-side-redaction-mutation)) when it masks
+  secrets/PII in an otherwise-allowed payload.
 - **`error` (`AuthorizationError`)** — deny. agentgateway surfaces this to
   the agent as a JSON-RPC error.
 
@@ -156,6 +157,31 @@ prompt bodies from `prompts/get`, etc.) as the `ASSISTANT` role. This is the
 attacker-controlled text (a web page, a file, a database row) is exactly
 where instructions-to-the-LLM sneak back into the agent's context.
 
+### Response-side redaction (mutation)
+
+When every content scanner ALLOWs a response, the redaction stage
+structurally rewrites secret/PII material in the result (e.g. emails,
+credit cards, API tokens that scanners deliberately do not hard-deny),
+replacing each match with a `[REDACTED:<TYPE>]` placeholder and returning
+the rewritten payload via the `mutated` oneof. A BLOCK always wins, and a
+`HUMAN_REVIEW` payload is passed+warned **without** mutation so review
+semantics stay intact — under `failOpen` that means a scanner exception
+(HUMAN_REVIEW) suppresses redaction and the payload is forwarded in
+cleartext (see
+[Security model and failure modes](#security-model-and-failure-modes)).
+Request-side redaction of `params.arguments` is opt-in
+(`REDACT_REQUEST_PARAMS`).
+
+Redaction runs the full regex sweep over the *untruncated* payload, so two
+guards keep it off the request hot path: the sweep is offloaded to a worker
+thread (`asyncio.to_thread`, no event-loop stall), and payloads larger than
+`REDACTION_MAX_BYTES` (default 256KiB) skip redaction entirely — they pass
+through unchanged with `redaction_skipped=size` in the audit span. This is
+a safe trade-off, not a blocking gap: over-cap payloads are still scanned
+by the RegexScanner head+tail `scan_windows`, so block-grade secrets
+(private keys, tokens) are BLOCKed upstream; only best-effort masking of
+ALLOW-grade PII (emails, credit cards) is skipped.
+
 ### Optional AgentAlignment second stage
 
 `AgentAlignment` is LLM-based (~300-800ms per call). Running it on every
@@ -183,7 +209,7 @@ make proto
 # 3. Install dev/test deps (no torch / transformers — fast local iteration)
 make dev
 
-# 4. Run the unit suite (72 tests, ~0.3s)
+# 4. Run the unit suite (~0.3s)
 make test
 
 # 5. Build the container image
@@ -300,6 +326,8 @@ deadline.
 | Scanners       | `ENABLE_REGEX_SCANNER`           | `true`                                   | Deterministic pattern scanner (hidden ASCII / PII / secrets). Zero ML deps.                                                                    |
 | Scanners       | `ENABLE_PROMPTGUARD`             | `true`                                   | ONNX PromptGuard semantic scanner. Falls back to regex-only if `onnxruntime`/`transformers` is absent.                                         |
 | Scanners       | `ENABLE_AGENT_ALIGNMENT`         | `false`                                  | LLM-based AgentAlignment. Off by default; only triggered as a second stage when PromptGuard flags `HUMAN_REVIEW` on a response.                |
+| Redaction      | `ENABLE_REDACTION`               | `true`                                   | Structural secret/PII redaction on allowed payloads (`[REDACTED:<TYPE>]` placeholders, forwarded via the `mutated` oneof). Runs only when no scanner BLOCKs and no `HUMAN_REVIEW` is pending. |
+| Redaction      | `REDACT_REQUEST_PARAMS`          | `false`                                  | Also redact inside `params.arguments` on the request side. Off by default — secrets in requests should BLOCK (RegexScanner), not be rewritten. |
 | PromptGuard    | `LF_ONNX_FILE`                   | `model.onnx`                             | Which `.onnx` file to load. Defaults to the full-precision `model.onnx`. |
 | PromptGuard    | `LF_ONNX_MODEL`                  | `gravitee-io/...-onnx`                   | ONNX model repo ID. Public, non-gated; model weights under Llama 4 Community License (see NOTICE).                                          |
 | PromptGuard    | `LF_PROMPTGUARD_BLOCK_THRESHOLD` | `0.9`                                    | Block threshold (0.0-1.0). PromptGuard score >= threshold -> BLOCK.                                                                            |
@@ -324,6 +352,12 @@ deadline.
 > The table above is the source of truth for runtime configuration and is
 > kept in sync with `guardrails/config.py`. (The two `INVARIANT_RULES_*`
 > vars are resolved by `guardrails/rules/__init__.py`.)
+
+> **Observability note for upgrades.** With redaction enabled, the
+> `mcp.guardrails.decisions` counter (and the audit `outcome` field) gains a
+> new `outcome="mutated"` value for exchanges forwarded with a rewritten
+> payload. Dashboards or alerts that count "successful" decisions as
+> `outcome="allow"` should be widened to `outcome=~"allow|mutated"`.
 
 ## Rule packs
 
@@ -419,7 +453,7 @@ for a non-K8s, standalone agentgateway config pointing at `localhost:9001`.
 ## Testing
 
 ```bash
-# Unit suite (81 tests, ~1.5s) — pure-Python policy core, no ML deps required
+# Unit suite (~1.5s) — pure-Python policy core, no ML deps required
 make test
 
 # With coverage
@@ -430,6 +464,9 @@ make lint
 
 # Live end-to-end smoke (boots a real server in a subprocess)
 python3 tests/e2e_smoke.py
+
+# Real agentgateway interoperability e2e (optional; needs an agentgateway binary)
+AGENTGATEWAY_BIN=/path/to/agentgateway ./scripts/e2e_agentgateway.sh
 
 # Full field test with ONNX model (requires onnxruntime + model cache)
 python3 tests/field_test.py
@@ -449,6 +486,41 @@ private key) + malformed `INVALID`, and exits non-zero on any
 mismatch.
 
 All 81 unit tests and the e2e smoke are green on a fresh clone.
+
+### Real agentgateway interoperability e2e
+
+`scripts/e2e_agentgateway.sh` stands up the full production topology against
+a **real agentgateway binary** (verified with v1.3.1, standalone YAML):
+
+```
+client(curl) -> agentgateway :3000 (mcpGuardrails processor, failClosed)
+             -> ExtMcp sidecar gRPC :9001 (ENABLE_PROMPTGUARD=0, regex-only)
+             -> stdio MCP upstream (examples/mcp_pii_upstream.py)
+```
+
+Prerequisites: `python3` with `-r requirements.txt` installed (no ONNX model
+download needed — the script runs the sidecar with `ENABLE_PROMPTGUARD=0`), a
+python interpreter with the `mcp` package for the stdio upstream
+(`UPSTREAM_PYTHON`, defaults to `python3`), and an agentgateway binary via
+`AGENTGATEWAY_BIN` or `PATH`. If no binary is found the script prints a skip
+notice and exits 0, so CI can wire it in as an optional job.
+
+The script drives the official Streamable-HTTP MCP handshake
+(`initialize` -> `mcp-session-id` -> `notifications/initialized`) and asserts:
+
+| Case | Expected |
+|---|---|
+| `tools/call echo` (benign) | pass-through, echo returned |
+| `tools/call pii_leak` | response **mutated**: `jdoe@example.com` -> `[REDACTED:EMAIL]` |
+| `tools/call echo` with `-----BEGIN RSA PRIVATE KEY-----` arg | deny, JSON-RPC `-32001` |
+| same tool+args x4 | 3rd+ call denied (`invariant:denied-tool-retry-loop`) |
+| sidecar killed, then `tools/call` | failClosed: JSON-RPC `-32603` |
+| sidecar audit log | `outcome="mutated"` / `outcome="deny"` JSONL lines |
+
+The gateway config it consumes is
+[`examples/agentgateway.standalone.yaml`](examples/agentgateway.standalone.yaml)
+(the `binds`/`mcpGuardrails` schema; `@PLACEHOLDER@` tokens are substituted by
+the script). All processes are cleaned up by PID on exit.
 
 ### ONNX model class layout
 
@@ -482,6 +554,12 @@ markdown table.
 | Malformed JSON-RPC payload                    | Servicer returns `AuthorizationError{INVALID}` (fail-closed on parse failure).                                                                                |
 | Tool output > `MAX_CONTENT_BYTES`             | Head (32KiB) + tail (`SCAN_TAIL_BYTES`, 8KiB) windows are scanned; the decision is flagged `truncated=true` in the audit span. Padding at the head or tail cannot hide an injection; the region between the two windows remains unscanned (documented trade-off). |
 | stdio upstream                                | agentgateway forwards an empty header set for stdio upstreams. Do **not** rely on headers for authn/authz when `metadata_context.upstream_transport == "stdio"`.       |
+
+**failOpen × redaction.** Under `FAILURE_MODE=failOpen` a scanner exception
+becomes `HUMAN_REVIEW`, and review semantics suppress redaction — the
+payload is forwarded **in cleartext** (with the audit warning). Redaction
+never masks content that is pending review, so failOpen trades both the
+block *and* the masking layer away for availability.
 
 The fail-closed posture is deliberate: an agent that can call real tools
 (write files, send email, apply k8s manifests) is far more dangerous when a
