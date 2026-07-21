@@ -32,7 +32,7 @@ git clone https://github.com/soulwhisper/mcp-guardrails.git
 cd mcp-guardrails
 make dev          # pip install -e ".[dev]" — pytest, ruff, grpcio-tools
 make proto        # regenerate stubs (no-op if proto/ext_mcp.proto is unchanged)
-make test         # 72 unit tests, ~0.3s
+make test         # 157 unit tests, ~1.5s
 make lint         # ruff check
 ```
 
@@ -86,7 +86,7 @@ and `filterwarnings = ["error", ...]`. New warnings will fail the suite —
 fix the warning rather than suppressing it. The exception is grpc
 deprecation warnings, which are ignored.
 
-The 72 unit tests cover:
+The 157 unit tests cover:
 
 - `tests/test_aggregator.py` — fail-closed table, HUMAN_REVIEW resolution,
   mutation passthrough.
@@ -94,10 +94,21 @@ The 72 unit tests cover:
   fingerprinting, dotted-path resolution, hot-reload.
 - `tests/test_scanners.py` — regex patterns, truncation, `extract_text`
   hidden-Unicode preservation (the `ensure_ascii=False` regression).
+- `tests/test_hardening_p1.py` — P1 hardening regressions: head+tail
+  `scan_windows` truncation-bypass fix, per-route invariant trace isolation
+  with a bounded LRU.
 - `tests/test_engine.py` — timeout / exception handling per failure mode,
   second-stage gating on HUMAN_REVIEW, invariant trace serialisation.
+- `tests/test_redaction.py` — redaction / mutation pipeline
+  (RedactionScanner + engine wiring, size-cap skip).
+- `tests/test_scanner_redaction.py` — secret redaction inside scanner
+  reasons (no secret material leaks into reasons / audit).
+- `tests/test_otel.py` — Observability: child spans, audit sink, duration
+  tracking.
 - `tests/test_servicer.py` — in-process gRPC round-trip + wire mapping
   (pass / mutated / error oneof, INVALID on malformed JSON).
+- `tests/test_server_module.py` — import-time smoke for the `server`
+  module (coverage + trivial import regressions).
 
 ## Adding a scanner
 
@@ -167,7 +178,7 @@ To add a rule:
    deployment-specific policy.
 3. **Use matchers wisely.**
    - Tool matchers: exact string (safest), regex string (heuristic — any
-     string containing regex meta-characters is compiled and `.search()`ed),
+     string containing regex meta-characters are compiled and `.search()`ed),
      compiled `re.Pattern`, or callable `(tool_name) -> bool`.
    - Arg value matchers: same heuristic, plus callables for arbitrary
      predicates.
@@ -186,7 +197,7 @@ Rule packs are hot-reloadable at runtime via `SIGHUP` — see
 Before opening a PR:
 
 - [ ] `make lint` clean.
-- [ ] `make test` green (72+ tests).
+- [ ] `make test` green (157+ tests).
 - [ ] `python3 tests/e2e_smoke.py` green if you touched the servicer, engine,
       config, or server entrypoint.
 - [ ] `make proto` re-run and stubs committed if you touched
