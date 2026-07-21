@@ -57,7 +57,7 @@ class Scanner(Protocol):
 # pictures / RTL override / zero-width chars used to hide instructions.
 _HIDDEN_ASCII = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f"
-    r" -‏‪-‮⁠-⁯\ufeff]"
+    r"​-‏‪-‮⁠-⁯\ufeff]"
 )
 
 # Common secret shapes (conservative — false-positive-averse).
