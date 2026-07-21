@@ -103,6 +103,30 @@ class GuardrailConfig:
     enable_promptguard: bool = True
     enable_agent_alignment: bool = False
 
+    # --- Redaction (mutation pipeline) ---
+    # When enabled, the engine structurally rewrites secret/PII material in
+    # otherwise-allowed payloads, replacing each match with a fixed
+    # `[REDACTED:<TYPE>]` placeholder and forwarding the result via the
+    # proto `mutated` oneof. Runs only after every content scanner has
+    # ALLOWed the exchange — any BLOCK still wins, and HUMAN_REVIEW payloads
+    # are passed+warned without mutation so review semantics are untouched.
+    enable_redaction: bool = True
+    # Request-side redaction is OFF by default: a secret in tool-call params
+    # is a signal to BLOCK (the RegexScanner already does), not to silently
+    # rewrite the caller's request. Enable only for deployments that
+    # deliberately tolerate rewritten arguments.
+    redact_request_params: bool = False
+    # Byte-size cap on the payload handed to the redaction transformer.
+    # Redaction runs ~11 regexes over the full (untruncated) payload, so
+    # without a cap a multi-MB payload would burn hundreds of ms of CPU per
+    # call. Payloads beyond the cap skip redaction and pass through
+    # unchanged, flagged `redaction_skipped=size` in the audit span. This is
+    # a safe trade-off: scanner BLOCK decisions still apply (they run on the
+    # head+tail scan_windows), so block-grade secrets in an over-cap payload
+    # are still denied by the RegexScanner upstream — only the best-effort
+    # masking of ALLOW-grade PII is skipped.
+    redaction_max_bytes: int = 256 * 1024
+
     # --- PromptGuard (ONNX, always on) ---
     # The ONNX model is public + non-gated, so HF_TOKEN is NOT required.
     # Default: model.onnx (full-precision, ~350MB, accuracy 98.01%).
@@ -168,6 +192,9 @@ class GuardrailConfig:
             enable_regex_scanner=_env_bool("ENABLE_REGEX_SCANNER", True),
             enable_promptguard=_env_bool("ENABLE_PROMPTGUARD", True),
             enable_agent_alignment=_env_bool("ENABLE_AGENT_ALIGNMENT", False),
+            enable_redaction=_env_bool("ENABLE_REDACTION", True),
+            redact_request_params=_env_bool("REDACT_REQUEST_PARAMS", False),
+            redaction_max_bytes=_env_int("REDACTION_MAX_BYTES", 256 * 1024),
             lf_onnx_model=os.environ.get(
                 "LF_ONNX_MODEL", "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
             ),

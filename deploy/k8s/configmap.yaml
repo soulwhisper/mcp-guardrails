@@ -164,6 +164,14 @@ data:
     #                            (excess is truncated + flagged in the audit span)
     #   SCAN_TAIL_BYTES        - extra tail window scanned on over-budget payloads
     #                            (default 8192; 0 disables; closes truncation bypass)
+    #   ENABLE_REDACTION       - structural secret/PII redaction on allowed payloads,
+    #                            forwarded via the proto `mutated` oneof (default on)
+    #   REDACT_REQUEST_PARAMS  - also redact params.arguments on the request side
+    #                            (default off; secrets in requests should BLOCK)
+    #   REDACTION_MAX_BYTES    - payload byte cap for the redaction sweep
+    #                            (default 262144; over-cap payloads skip redaction,
+    #                            flagged redaction_skipped=size in audit; scanner
+    #                            BLOCKs still apply via the head+tail scan windows)
     #   SCANNER_TIMEOUT_MS     - per-engine-call deadline; exceeded -> failure_mode
     #   INVARIANT_WINDOW       - sliding-window size for ToxicFlowRule / LoopRule
     #   INVARIANT_MAX_TRACES   - max distinct per-route trace windows (default 1024)

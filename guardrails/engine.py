@@ -11,7 +11,10 @@ This is the heart of the sidecar. For each MCP exchange it:
    when a first-stage scanner flagged HUMAN_REVIEW — the design's cost-control
    for the LLM-based alignment check.
 5. Hands all results to the :class:`DecisionAggregator` (fail-closed by
-   default) and returns a :class:`Decision`.
+   default). When nothing blocked and no review is pending, the redaction
+   transformer structurally masks secrets/PII and attaches the rewritten
+   payload as ``Decision.mutated`` (the proto ``mutated`` oneof).
+6. Returns the :class:`Decision`.
 
 The engine is concurrency-safe: invariant traces are isolated per route
 (route name / first service name), guarded by the ``RulePack`` lock on swap
@@ -21,6 +24,7 @@ and a dedicated lock on append/evaluate.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -37,6 +41,7 @@ from .models import (
     ScanResult,
 )
 from .otel import Observability, configure_logging
+from .redaction import RedactionScanner
 from .rules import RulePack
 from .scanners import (
     AgentAlignmentScanner,
@@ -62,6 +67,10 @@ class EngineComponents:
     request_scanners: list[Scanner] = field(default_factory=list)
     response_scanners: list[Scanner] = field(default_factory=list)
     second_stage_scanners: list[Scanner] = field(default_factory=list)
+    # Mutation-stage transformer. None -> the engine builds a default
+    # RedactionScanner when config.enable_redaction is set; supply a stub in
+    # tests to control substitutions deterministically.
+    redactor: RedactionScanner | None = None
     invariant: InvariantEngine | None = None
     aggregator: DecisionAggregator = field(default_factory=lambda: DecisionAggregator())
     observability: Observability | None = None
@@ -77,6 +86,9 @@ class GuardrailEngine:
         if components.observability is None:
             components.observability = Observability()
         self._obs: Observability = components.observability
+        self._redactor: RedactionScanner | None = None
+        if config.enable_redaction:
+            self._redactor = components.redactor or RedactionScanner()
         self._ready = False
 
     # ------------------------------------------------------------------
@@ -271,13 +283,26 @@ class GuardrailEngine:
             if self._c.invariant is not None:
                 trace_key = route_name or (service_names[0] if service_names else "")
                 async with self._trace_lock:
-                    self._c.invariant.record(
-                        tool_name, params.get("arguments", {}), key=trace_key
-                    )
+                    self._c.invariant.record(tool_name, params.get("arguments", {}), key=trace_key)
                     inv_result = self._c.invariant.evaluate_or_allow(key=trace_key)
                 results.append(inv_result)
 
             decision = self._c.aggregator.aggregate(results)
+
+            # Mutation stage (opt-in on the request side): redact secrets/PII
+            # inside params.arguments. Only runs when nothing blocked and no
+            # review is pending.
+            if self._cfg.redact_request_params:
+                args = params.get("arguments")
+                if args is not None:
+                    mutated_args, n = await self._redact(args, decision, attrs)
+                    if n:
+                        decision = replace(
+                            decision,
+                            mutated={**dict(params), "arguments": mutated_args},
+                            reason=_redaction_reason(decision.reason, n),
+                        )
+
             attrs["outcome"] = (
                 "deny" if decision.deny else ("mutated" if decision.is_mutated else "allow")
             )
@@ -321,7 +346,9 @@ class GuardrailEngine:
             first_stage: list[ScanResult] = []
             flagged_chunks: list[str] = []
             for text in texts:
-                chunk_results = await self._run_scanners(text, "assistant", self._c.response_scanners)
+                chunk_results = await self._run_scanners(
+                    text, "assistant", self._c.response_scanners
+                )
                 first_stage.extend(chunk_results)
                 if any(r.outcome is ScanOutcome.HUMAN_REVIEW for r in chunk_results):
                     flagged_chunks.append(text)
@@ -342,6 +369,19 @@ class GuardrailEngine:
             # No Invariant on the response side; toxic-flow is a request-time
             # property. Response-side is purely content (indirect injection).
             decision = self._c.aggregator.aggregate(results)
+
+            # Mutation stage: structurally redact secrets/PII in the result.
+            # Runs only when every scanner ALLOWed — a BLOCK always wins and
+            # a HUMAN_REVIEW payload is passed+warned unmutated so the review
+            # semantics stay intact.
+            mutated_result, n = await self._redact(result, decision, attrs)
+            if mutated_result is not None:
+                decision = replace(
+                    decision,
+                    mutated=mutated_result,
+                    reason=_redaction_reason(decision.reason, n),
+                )
+
             attrs["outcome"] = (
                 "deny" if decision.deny else ("mutated" if decision.is_mutated else "allow")
             )
@@ -358,6 +398,43 @@ class GuardrailEngine:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    async def _redact(
+        self, value: Any, decision: Decision, attrs: dict[str, Any]
+    ) -> tuple[Any | None, int]:
+        """Run the redaction transformer when policy permits mutation.
+
+        Returns ``(redacted_value, substitutions)``; ``redacted_value`` is
+        ``None`` when redaction is disabled, the decision is a deny or a
+        human-review pass (mutation would conflict with review semantics),
+        the payload exceeds ``config.redaction_max_bytes``, or nothing
+        matched. On hits the span gets a ``redactions=N`` attribute; the
+        audit line picks it up via the span exit hook.
+
+        Two guards keep redaction off the request hot path:
+
+        - **Size cap** — payloads larger than ``REDACTION_MAX_BYTES``
+          (default 256KiB) skip redaction entirely and pass through
+          unchanged, flagged ``redaction_skipped=size`` in the audit span.
+          Safe because scanner BLOCK decisions still apply upstream: an
+          over-cap payload carrying block-grade secrets is denied by the
+          RegexScanner on the head+tail ``scan_windows`` before redaction
+          would ever run. Only best-effort masking of ALLOW-grade PII is
+          skipped.
+        - **Thread offload** — the ~11-pattern regex sweep runs via
+          :func:`asyncio.to_thread`, so a large (but under-cap) payload
+          cannot stall the event loop and starve concurrent exchanges.
+        """
+        if self._redactor is None or decision.deny or decision.human_review:
+            return None, 0
+        if _payload_bytes(value) > self._cfg.redaction_max_bytes:
+            attrs["redaction_skipped"] = "size"
+            return None, 0
+        redacted, n = await asyncio.to_thread(self._redactor.redact_value, value)
+        if n == 0:
+            return None, 0
+        attrs["redactions"] = n
+        return redacted, n
 
     async def _run_scanners(
         self,
@@ -376,9 +453,7 @@ class GuardrailEngine:
 
         async def _scan_one(scanner: Scanner) -> ScanResult:
             name = getattr(scanner, "name", repr(scanner))
-            with self._obs.span(
-                f"scanner.{name}", scanner=name, role=role
-            ) as attrs:
+            with self._obs.span(f"scanner.{name}", scanner=name, role=role) as attrs:
                 attrs["outcome"] = "unknown"
                 try:
                     result = await asyncio.wait_for(
@@ -389,9 +464,7 @@ class GuardrailEngine:
                     return result
                 except asyncio.TimeoutError:
                     attrs["outcome"] = "timeout"
-                    return self._failure_result(
-                        name, f"timeout>{self._cfg.scanner_timeout_ms}ms"
-                    )
+                    return self._failure_result(name, f"timeout>{self._cfg.scanner_timeout_ms}ms")
                 except Exception as exc:
                     attrs["outcome"] = "error"
                     attrs["error"] = f"{type(exc).__name__}:{exc}"
@@ -408,6 +481,29 @@ class GuardrailEngine:
         if self._cfg.failure_mode is FailureMode.FAIL_CLOSED:
             return ScanResult.block(scanner_name, reason, score=1.0)
         return ScanResult.review(scanner_name, f"failopen:{reason}")
+
+
+def _payload_bytes(value: Any) -> int:
+    """Approximate serialized byte size of a redaction candidate.
+
+    Used to enforce ``REDACTION_MAX_BYTES`` before running the regex sweep.
+    Strings are measured directly; structured values go through
+    :func:`json.dumps` (C-speed, so even a multi-MB payload costs far less
+    than one regex pass). Underserializable values return 0 — they cannot
+    contain redactable strings the JSON wire would carry anyway.
+    """
+    if isinstance(value, str):
+        return len(value.encode("utf-8", "ignore"))
+    try:
+        return len(json.dumps(value, default=str).encode("utf-8", "ignore"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _redaction_reason(reason: str, n: int) -> str:
+    """Fold a redaction hit-count marker into a decision reason for audit."""
+    tag = f"redaction:{n} substitution(s)"
+    return f"{reason};{tag}" if reason else tag
 
 
 def _with_truncated(ctx: McpCallContext, truncated: bool) -> McpCallContext:

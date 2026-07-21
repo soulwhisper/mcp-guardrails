@@ -5,6 +5,24 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Bug Fixes
+
+* **redaction:** offload the redaction regex sweep to a worker thread
+  (`asyncio.to_thread`) and cap redactable payload size via the new
+  `REDACTION_MAX_BYTES` env var (default 256KiB); over-cap payloads skip
+  redaction, pass through unchanged, and are flagged
+  `redaction_skipped=size` in the audit span. Scanner BLOCKs still apply
+  via the head+tail scan windows, so blocking capability is unaffected.
+
+### Upgrade Notes
+
+* **metrics:** with redaction enabled, the `mcp.guardrails.decisions`
+  counter's `outcome` label gains a `"mutated"` value. Dashboards/alerts
+  counting successful decisions as `outcome="allow"` should be widened to
+  `allow|mutated`.
+
 ## [0.3.4](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.3...v0.3.4) (2026-07-14)
 
 
