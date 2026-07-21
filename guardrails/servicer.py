@@ -8,14 +8,14 @@ Two RPCs:
 * ``CheckResponse`` — deserialises ``McpResponse.mcp_response`` (raw JSON-RPC
   result) and delegates to :meth:`GuardrailEngine.check_response`.
 
-Both map the engine's :class:`Decision` to the protobuf oneof
-``{allowed, mutated, error}``:
+Both map the engine's :class:`Decision` to the upstream protobuf oneof
+``{pass, mutated, error}``:
 
 * deny        -> ``error`` with ``PERMISSION_DENIED``
-* mutated     -> ``mutated`` (JSON-encoded bytes)
-* otherwise   -> ``allowed`` (Pass)
+* mutated     -> ``mutated`` (raw JSON bytes)
+* otherwise   -> ``pass`` (Pass)
 
-Malformed payloads map to ``INVALID_ARGUMENT`` (fail-closed on parse failure).
+Malformed payloads map to ``INVALID`` (fail-closed on parse failure).
 """
 
 from __future__ import annotations
@@ -24,6 +24,8 @@ import json
 import logging
 from typing import Any
 
+from google.protobuf.json_format import MessageToDict
+
 from .engine import GuardrailEngine
 from .models import Decision
 from .proto_bridge import pb, pbg
@@ -31,10 +33,12 @@ from .proto_bridge import pb, pbg
 logger = logging.getLogger("mcp.guardrails.servicer")
 
 
-def _safe_json_loads(raw: bytes) -> tuple[Any, str]:
+def _safe_json_loads(raw: bytes, *, allow_absent: bool = False) -> tuple[Any, str]:
     """Return ``(parsed_or_None, error_message)``."""
     if not raw:
-        return {}, ""
+        if allow_absent:
+            return {}, ""
+        return None, "empty json payload"
     try:
         return json.loads(raw), ""
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -42,58 +46,74 @@ def _safe_json_loads(raw: bytes) -> tuple[Any, str]:
 
 
 def _extract_metadata(request: Any) -> tuple[str, str]:
-    """Pull (upstream_transport, route_name) from the MetadataContext if present."""
-    transport = ""
-    route = ""
-    md = getattr(request, "metadata_context", None)
-    if md is not None:
-        transport = getattr(md, "upstream_transport", "") or ""
-        route = getattr(md, "route_name", "") or ""
+    """Pull (upstream_transport, route_name) from the Struct metadata context."""
+    try:
+        if not request.HasField("metadata_context"):
+            return "", ""
+        md = MessageToDict(request.metadata_context)
+    except (ValueError, TypeError):
+        return "", ""
+    transport = str(md.get("upstream_transport", "") or "")
+    route = str(md.get("route_name", "") or "")
     return transport, route
+
+
+def _request_pass() -> Any:
+    # `pass` is a Python keyword, so it cannot be used as a protobuf
+    # constructor kwarg. Set the oneof member through getattr instead.
+    result = pb.McpRequestResult()
+    getattr(result, "pass").CopyFrom(pb.Pass())
+    return result
+
+
+def _response_pass() -> Any:
+    result = pb.McpResponseResult()
+    getattr(result, "pass").CopyFrom(pb.Pass())
+    return result
 
 
 def _build_request_result(decision: Decision, parse_error: str):
     if parse_error:
         return pb.McpRequestResult(
             error=pb.AuthorizationError(
-                code=pb.AuthorizationError.INVALID_ARGUMENT,
-                message=parse_error,
+                code=pb.AuthorizationError.INVALID,
+                reason=parse_error,
             )
         )
     if decision.deny:
         return pb.McpRequestResult(
             error=pb.AuthorizationError(
                 code=pb.AuthorizationError.PERMISSION_DENIED,
-                message=decision.reason or "denied",
+                reason=decision.reason or "denied",
             )
         )
     if decision.is_mutated:
         return pb.McpRequestResult(
-            mutated=pb.Mutated(mutated=json.dumps(decision.mutated).encode("utf-8"))
+            mutated=json.dumps(decision.mutated).encode("utf-8")
         )
-    return pb.McpRequestResult(allowed=pb.Pass())
+    return _request_pass()
 
 
 def _build_response_result(decision: Decision, parse_error: str):
     if parse_error:
         return pb.McpResponseResult(
             error=pb.AuthorizationError(
-                code=pb.AuthorizationError.INVALID_ARGUMENT,
-                message=parse_error,
+                code=pb.AuthorizationError.INVALID,
+                reason=parse_error,
             )
         )
     if decision.deny:
         return pb.McpResponseResult(
             error=pb.AuthorizationError(
                 code=pb.AuthorizationError.PERMISSION_DENIED,
-                message=decision.reason or "denied",
+                reason=decision.reason or "denied",
             )
         )
     if decision.is_mutated:
         return pb.McpResponseResult(
-            mutated=pb.Mutated(mutated=json.dumps(decision.mutated).encode("utf-8"))
+            mutated=json.dumps(decision.mutated).encode("utf-8")
         )
-    return pb.McpResponseResult(allowed=pb.Pass())
+    return _response_pass()
 
 
 class ExtMcpServicer(pbg.ExtMcpServicer):
@@ -103,7 +123,11 @@ class ExtMcpServicer(pbg.ExtMcpServicer):
         self._e = engine
 
     async def CheckRequest(self, request, context):
-        params, parse_error = _safe_json_loads(request.mcp_request)
+        has_payload = request.HasField("mcp_request")
+        params, parse_error = _safe_json_loads(
+            request.mcp_request if has_payload else b"",
+            allow_absent=not has_payload,
+        )
         transport, route = _extract_metadata(request)
         if parse_error:
             return _build_request_result(Decision(deny=False), parse_error)
@@ -112,7 +136,9 @@ class ExtMcpServicer(pbg.ExtMcpServicer):
         if request.method == "tools/call" and isinstance(params, dict):
             tool_name = str(params.get("name", ""))
 
-        headers = {h.key: h.value for h in request.headers}
+        headers = {
+            h.key: h.value.decode("utf-8", errors="replace") for h in request.headers
+        }
 
         try:
             decision = await self._e.check_request(
