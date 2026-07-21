@@ -1,100 +1,130 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mcp-guardrails"
 version = "0.3.4"
-description = "agentgateway ExtMcp guardrail sidecar — PromptGuard + Invariant rules behind a gRPC policy server"
+description = "ExtMcp gRPC guardrail sidecar for agentgateway — ONNX PromptGuard + Invariant Guardrails"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-authors = [{ name = "soulwhisper" }]
-keywords = ["mcp", "guardrail", "promptguard", "invariant", "grpc", "agentgateway"]
+license = { text = "Apache-2.0" }
+authors = [{ name = "Soul Whisper" }]
+keywords = ["agentgateway", "mcp", "guardrails", "promptguard", "onnx", "llm-security"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Security",
+    "Typing :: Typed",
 ]
 dependencies = [
-    # --- gRPC stack (wire-compat critical) ---
+    # grpcio/protobuf lower bounds are wire-compat critical: the committed
+    # stubs are generated with grpcio-tools 1.82.1 (protobuf 7.35.x gencode),
+    # and protobuf refuses to load gencode newer than its own runtime.
     "grpcio>=1.82.1,<2",
     "grpcio-health-checking>=1.82.1,<2",
-    # protobuf runtime must be at least as new as the gencode embedded in
-    # proto/ext_mcp_pb2.py (grpcio-tools 1.82.1 -> protobuf 7.35.x gencode).
     "protobuf>=7.35",
-    # --- Transformers + ONNX Runtime for PromptGuard-2-86M inference ---
-    "transformers>=4.51.3",
-    "onnxruntime>=1.20.0",
-    # --- OpenAI client for AgentAlignment LLM (second-stage, opt-in) ---
-    "openai>=1.76.0",
-    # --- HuggingFace Hub (model downloads at image-build time) ---
-    "huggingface-hub>=0.30.2",
-    # --- hf-xet: Xet storage client for HF Hub downloads (auto-detected). ---
-    "hf-xet>=1.5",
-    # --- OpenTelemetry (optional at runtime; sidecar degrades to stdout audit
-    #     if these are absent) ---
+    # OpenTelemetry — always available; degrades gracefully to audit-log-only
+    # when no OTLP endpoint is configured.
     "opentelemetry-sdk>=1.28.0",
     "opentelemetry-exporter-otlp>=1.28.0",
 ]
 
 [project.optional-dependencies]
-# Dev deps WITHOUT the heavy ML stack (onnxruntime/torch/transformers) so that
-# `pip install -e .[dev]` and `make test` run in regex-only mode. CI uses this
-# extra for the same reason — see .github/workflows/ci.yml.
+# ONNX PromptGuard — the primary semantic scanner. Uses the public, non-gated
+# ONNX model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) via ONNX Runtime.
+# Truly torch-free: we load the .onnx graph with onnxruntime directly and
+# tokenise with transformers (tokenizer-only — no torch extra). optimum is
+# intentionally NOT used because it hard-requires torch (~750MB).
+# hf-xet enables Xet storage transfers (auto-detected when installed).
+onnx = [
+    "transformers>=4.51.3",
+    "onnxruntime>=1.20.0",
+    "huggingface-hub>=0.30.2",
+    "hf-xet>=1.5",
+]
+
+# AgentAlignment LLM — opt-in second-stage deep inspection. Calls an
+# OpenAI-compatible LLM API when PromptGuard flags HUMAN_REVIEW.
+alignment = [
+    "openai>=1.76.0",
+]
 dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-cov>=5.0.0",
-    "ruff>=0.6.0",
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5",
+    "ruff>=0.6",
     "grpcio-tools>=1.82.1,<1.83",
 ]
 
-[project.scripts]
-mcp-guardrails = "server:main"
-
-[build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
+[project.urls]
+Homepage = "https://github.com/soulwhisper/mcp-guardrails"
+Issues = "https://github.com/soulwhisper/mcp-guardrails/issues"
 
 [tool.setuptools]
-packages = ["guardrails", "proto"]
 py-modules = ["server"]
 
+[tool.setuptools.packages.find]
+include = ["guardrails*"]
+exclude = ["tests*", "proto*"]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
+minversion = "8.0"
 testpaths = ["tests"]
-# Fail on unknown marks and bad ini keys so typos don't silently disable tests.
-addopts = "--strict-markers --strict-config"
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: end-to-end tests requiring a live gRPC server",
+]
 filterwarnings = [
     "error",
+    'ignore::DeprecationWarning:grpc.*',
 ]
+
+# ---------------------------------------------------------------------------
+# ruff (lint + format)
+# ---------------------------------------------------------------------------
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+extend-exclude = ["proto/ext_mcp_pb2.py", "proto/ext_mcp_pb2_grpc.py"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM"]
-ignore = ["E501"]
-
-[tool.ruff.lint.isort]
-known-first-party = ["guardrails", "proto"]
+select = [
+    "E", "F", "W",   # pycodestyle / pyflakes
+    "I",              # isort
+    "UP",             # pyupgrade
+    "B",              # bugbear
+    "SIM",            # simplify
+    "RUF",            # ruff-specific
+]
+ignore = [
+    "E501",   # line length handled by formatter
+    "B008",   # function call in default argument (dataclass field factories)
+]
 
 [tool.ruff.lint.per-file-ignores]
-# Generated protobuf stubs are not linted (third-party style).
-"proto/*_pb2*.py" = ["E", "F"]
+"tests/*" = ["S101", "B017"]
+"server.py" = ["E402"]
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
 
 [tool.coverage.run]
-branch = true
 source = ["guardrails", "server"]
-omit = ["proto/*_pb2*.py", "tests/*"]
+omit = ["guardrails/proto_bridge.py", "proto/*"]
 
 [tool.coverage.report]
 exclude_lines = [
     "pragma: no cover",
     "raise NotImplementedError",
+    "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
-    "if not TYPE_CHECKING:",
-    "def __repr__",
 ]
