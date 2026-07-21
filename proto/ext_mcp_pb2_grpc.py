@@ -5,7 +5,7 @@ import warnings
 
 import ext_mcp_pb2 as ext__mcp__pb2
 
-GRPC_GENERATED_VERSION = '1.71.2'
+GRPC_GENERATED_VERSION = '1.82.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -18,17 +18,17 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + f' but the generated code in ext_mcp_pb2_grpc.py depends on'
+        + ' but the generated code in ext_mcp_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
     )
 
 
-class ExtMcpStub(object):
-    """ExtMcp is implemented by the guardrail sidecar. Both RPCs MUST be
-    non-blocking and SHOULD complete well under the gateway-side processor
-    timeout (recommended sidecar deadline 500ms, gateway 800-1000ms).
+class ExtMcpStub:
+    """ExtMcp is the wire protocol for an MCP-aware external policy server.
+    Modeled on Envoy ext_authz, but at the MCP method layer.
+    Covers both gating and mutation.
     """
 
     def __init__(self, channel):
@@ -38,36 +38,31 @@ class ExtMcpStub(object):
             channel: A grpc.Channel.
         """
         self.CheckRequest = channel.unary_unary(
-                '/agentgateway.ext_mcp.v1alpha1.ExtMcp/CheckRequest',
+                '/agentgateway.dev.ext_mcp.ExtMcp/CheckRequest',
                 request_serializer=ext__mcp__pb2.McpRequest.SerializeToString,
                 response_deserializer=ext__mcp__pb2.McpRequestResult.FromString,
                 _registered_method=True)
         self.CheckResponse = channel.unary_unary(
-                '/agentgateway.ext_mcp.v1alpha1.ExtMcp/CheckResponse',
+                '/agentgateway.dev.ext_mcp.ExtMcp/CheckResponse',
                 request_serializer=ext__mcp__pb2.McpResponse.SerializeToString,
                 response_deserializer=ext__mcp__pb2.McpResponseResult.FromString,
                 _registered_method=True)
 
 
-class ExtMcpServicer(object):
-    """ExtMcp is implemented by the guardrail sidecar. Both RPCs MUST be
-    non-blocking and SHOULD complete well under the gateway-side processor
-    timeout (recommended sidecar deadline 500ms, gateway 800-1000ms).
+class ExtMcpServicer:
+    """ExtMcp is the wire protocol for an MCP-aware external policy server.
+    Modeled on Envoy ext_authz, but at the MCP method layer.
+    Covers both gating and mutation.
     """
 
     def CheckRequest(self, request, context):
-        """CheckRequest inspects an outbound MCP request (the agent -> upstream
-        direction). The sidecar may pass, mutate the params, or deny.
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def CheckResponse(self, request, context):
-        """CheckResponse inspects an inbound MCP response (upstream -> agent). This
-        is the primary defence against indirect prompt injection carried in tool
-        output, tool descriptions, prompt bodies and resource contents.
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -87,16 +82,16 @@ def add_ExtMcpServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'agentgateway.ext_mcp.v1alpha1.ExtMcp', rpc_method_handlers)
+            'agentgateway.dev.ext_mcp.ExtMcp', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('agentgateway.ext_mcp.v1alpha1.ExtMcp', rpc_method_handlers)
+    server.add_registered_method_handlers('agentgateway.dev.ext_mcp.ExtMcp', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class ExtMcp(object):
-    """ExtMcp is implemented by the guardrail sidecar. Both RPCs MUST be
-    non-blocking and SHOULD complete well under the gateway-side processor
-    timeout (recommended sidecar deadline 500ms, gateway 800-1000ms).
+class ExtMcp:
+    """ExtMcp is the wire protocol for an MCP-aware external policy server.
+    Modeled on Envoy ext_authz, but at the MCP method layer.
+    Covers both gating and mutation.
     """
 
     @staticmethod
@@ -113,7 +108,7 @@ class ExtMcp(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/agentgateway.ext_mcp.v1alpha1.ExtMcp/CheckRequest',
+            '/agentgateway.dev.ext_mcp.ExtMcp/CheckRequest',
             ext__mcp__pb2.McpRequest.SerializeToString,
             ext__mcp__pb2.McpRequestResult.FromString,
             options,
@@ -140,7 +135,7 @@ class ExtMcp(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/agentgateway.ext_mcp.v1alpha1.ExtMcp/CheckResponse',
+            '/agentgateway.dev.ext_mcp.ExtMcp/CheckResponse',
             ext__mcp__pb2.McpResponse.SerializeToString,
             ext__mcp__pb2.McpResponseResult.FromString,
             options,
