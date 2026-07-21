@@ -178,7 +178,7 @@ To add a rule:
    deployment-specific policy.
 3. **Use matchers wisely.**
    - Tool matchers: exact string (safest), regex string (heuristic — any
-     string containing regex meta-characters are compiled and `.search()`ed),
+     string containing regex meta-characters is compiled and `.search()`ed),
      compiled `re.Pattern`, or callable `(tool_name) -> bool`.
    - Arg value matchers: same heuristic, plus callables for arbitrary
      predicates.
