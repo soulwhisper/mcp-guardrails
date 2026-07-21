@@ -312,7 +312,9 @@ Two invariants hold by construction:
 1. **`BLOCK` always wins.** No `HUMAN_REVIEW_MODE` setting can downgrade a
    `BLOCK` to a pass. This is the load-bearing security property.
 2. **Mutation passthrough.** If the engine supplies a `mutated` payload
-   (e.g. a future PII-redaction pass) and no scanner blocks, the aggregator
+   (as the implemented redaction stage does — see
+   [Response lifecycle (CheckResponse)](#response-lifecycle-checkresponse))
+   and no scanner blocks, the aggregator
    forwards the mutation unchanged. The mutation is the engine's
    responsibility; the aggregator never synthesises one.
 
@@ -467,7 +469,8 @@ atomically:
 - Rule objects themselves are immutable (dataclasses with frozen-ish
   semantics via `__post_init__` normalisation), so once a snapshot is
   taken for evaluation the rule list cannot be mutated mid-evaluation.
-- The `InvariantEngine._trace` deque is guarded separately by an
+- The `InvariantEngine._traces` per-route trace map (LRU-bounded by
+  `INVARIANT_MAX_TRACES`) is guarded separately by an
   `asyncio.Lock` in the engine, so the trace append/evaluate pair is
   atomic with respect to other concurrent requests.
 
@@ -669,7 +672,7 @@ flowchart TD
     end
 
     subgraph Engine
-        ENG --> EXT[extract_text + truncate]
+        ENG --> EXT[extract_text + scan_windows (head+tail)]
         EXT --> RX[RegexScanner<br/>hidden-ascii / PII / secrets]
         EXT --> LF[OnnxPromptGuardScanner<br/>PromptGuard-2]
         EXT --> INV[InvariantEngine<br/>trace record + evaluate]

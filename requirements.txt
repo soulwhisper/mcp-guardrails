@@ -7,9 +7,9 @@
 # The ONNX PromptGuard model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) is
 # public and non-gated — NO HF_TOKEN required.
 
-# --- gRPC stack (wire-compat critical; committed stubs generated with grpcio-tools 1.71.2) ---
-grpcio>=1.82,<1.83
-grpcio-health-checking>=1.82,<1.83
+# --- gRPC stack (wire-compat critical; committed stubs generated with grpcio-tools 1.82.1) ---
+grpcio>=1.82.1,<1.83
+grpcio-health-checking>=1.82.1,<1.83
 # grpcio-tools is a BUILD-TIME / DEV dependency only — NOT listed here.
 
 # protobuf runtime must be at least as new as the gencode embedded in
@@ -21,17 +21,17 @@ protobuf>=7.35
 # .onnx graph with onnxruntime directly and tokenise with transformers
 # (tokenizer-only). optimum is NOT used — it hard-requires torch (~750MB),
 # which would defeat the ONNX path's size advantage. Truly torch-free.
-transformers>=4.51.3
-onnxruntime>=1.20.0
+transformers>=4.51.3,<5
+onnxruntime>=1.20,<2
 
 # --- OpenAI client for AgentAlignment LLM (second-stage, opt-in) ---
 # Only needed when ENABLE_AGENT_ALIGNMENT=1. The LLM client reads the API key
 # directly from LF_ALIGNMENT_API_KEY.
-openai>=1.76.0
+openai>=1.76,<2
 
 # --- HuggingFace Hub (transitive via transformers, but listed for clarity) ---
 # Used by the Dockerfile models stage to snapshot_download the ONNX model.
-huggingface-hub>=0.30.2
+huggingface-hub>=0.30.2,<1
 
 # --- hf-xet: Xet storage client for HF Hub downloads (auto-detected). ---
 hf-xet>=1.5
