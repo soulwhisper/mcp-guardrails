@@ -212,7 +212,10 @@ self._c.request_scanners)`:
      `BLOCK` `ScanResult`, otherwise `ALLOW`.
 5. **`DecisionAggregator.aggregate(results)`** — combines every
    `ScanResult` into a single `Decision` (see
-   [The DecisionAggregator](#the-decisionaggregator)).
+   [The DecisionAggregator](#the-decisionaggregator)). Request-side
+   redaction of `params.arguments` exists (`REDACT_REQUEST_PARAMS=1`) but is
+   **off by default** — a secret in tool-call params is BLOCKed by the
+   `RegexScanner`, not rewritten.
 6. **Observability** — set span outcome (`deny` / `mutated` / `allow`),
    `record_decision(phase="request", method, tool_name, ctx, decision)`
    emits the JSONL audit line and bumps the
@@ -267,7 +270,28 @@ self._c.second_stage_scanners)` runs and the results are appended to the
 5. **No Invariant on the response side** — toxic-flow is a request-time
    property. The trace records `(tool, args)` on the request; the response
    carries no tool identity to record.
-6. **Aggregate, observe, map to oneof** — same as the request path, but
+6. **Redaction (mutation stage)** — `GuardrailEngine._redact(...)` runs the
+   `RedactionScanner` transformer ([`guardrails/redaction.py`](guardrails/redaction.py))
+   over the result **only when the aggregate decision is neither a deny nor
+   a human-review pass** (a `BLOCK` always wins; review payloads pass+warn
+   unmutated so review semantics stay intact). The transformer recursively
+   walks the result JSON and rewrites string values, replacing secret/PII
+   matches (emails, credit cards, cloud/chat/LLM tokens, PEM private-key
+   blocks) with `[REDACTED:<TYPE>]` placeholders. Because it walks the
+   structure rather than the flattened scan text, the mutated payload is
+   always valid JSON with the same shape as the original. On any
+   substitution the engine attaches it as `Decision.mutated`, adds a
+   `redaction:N substitution(s)` marker to the reason, and sets the
+   `redactions=N` span attribute; the servicer maps it to
+   `McpResponseResult{mutated=<raw json bytes>}`. No substitutions -> plain
+   `pass`. Disabled with `ENABLE_REDACTION=0`. The regex sweep runs via
+   `asyncio.to_thread` (a multi-MB payload must not stall the event loop),
+   and payloads larger than `REDACTION_MAX_BYTES` (default 256KiB) skip
+   redaction entirely — they pass through unchanged with
+   `redaction_skipped=size` in the audit span. Skipping is safe: block-grade
+   secrets in an over-cap payload are still denied by the RegexScanner on
+   the head+tail scan windows before redaction would run.
+7. **Aggregate, observe, map to oneof** — same as the request path, but
    `phase="response"` in the audit record and counter.
 
 ## The DecisionAggregator
