@@ -182,7 +182,7 @@ scan + invariant trace). The call graph, step by step:
    ([`guardrails/engine.py`](guardrails/engine.py))
    - Build an `McpCallContext` carrying method, service_names, tool_name,
      params, headers, transport, route.
-   - `text, truncated = truncate(extract_text(params), max_content_bytes)` —
+   - `texts, truncated = scan_windows(extract_text(params), max_content_bytes, scan_tail_bytes)` —
      `extract_text` flattens the params dict to a scan string with
      `ensure_ascii=False` (critical: hidden Unicode in argument values
      survives to the regex scanner). `truncate` cuts on a UTF-8 boundary
@@ -205,9 +205,9 @@ self._c.request_scanners)`:
      [Failure and timeout handling](#failure-and-timeout-handling)).
 4. **Invariant trace** — under `self._trace_lock` (serialises concurrent
    requests so traces cannot interleave half-calls):
-   - `self._c.invariant.record(tool_name, params.get("arguments", {}))` —
+   - `self._c.invariant.record(tool_name, params.get("arguments", {}), key=route_name or service_names[0])` —
      appends a `TraceEntry(tool, args)` to the bounded `deque(maxlen=64)`.
-   - `self._c.invariant.evaluate_or_allow()` — runs every rule in priority
+   - `self._c.invariant.evaluate_or_allow(key=...)` — runs every rule in priority
      order against the resulting trace; first-match wins and returns a
      `BLOCK` `ScanResult`, otherwise `ALLOW`.
 5. **`DecisionAggregator.aggregate(results)`** — combines every
@@ -239,7 +239,7 @@ The call graph:
 2. **`GuardrailEngine.check_response(...)`**:
    - Build `McpCallContext` (no `tool_name` on the response side; the
      method + result are what we have).
-   - `text, truncated = truncate(extract_text(result), max_content_bytes)` —
+   - `texts, truncated = scan_windows(extract_text(result), max_content_bytes, scan_tail_bytes)` —
      `extract_text` for a `tools/call` result pulls `content[].text` out of
      the result envelope; for a `tools/list` result it concatenates every
      tool's `description` + JSON-dumped `inputSchema` (to catch description
@@ -306,11 +306,20 @@ required.
 
 ### Sliding window
 
-The trace is a `collections.deque(maxlen=window)` (default `window=64`).
-`record(tool, args)` appends a `TraceEntry(tool, args)`. When the deque is
-full, the oldest entry is evicted automatically — this caps memory and
-rule-evaluation cost. The window should be large enough to span a typical
-agent tool-use chain (the design default of 64 covers most homelab flows).
+Traces are **isolated per route**: the engine keys each trace by the request's
+route name (falling back to the first service name), and the InvariantEngine
+keeps one `collections.deque(maxlen=window)` (default `window=64`) per key in
+an LRU map bounded by `INVARIANT_MAX_TRACES` (default 1024, least-recently-used
+tenant evicted). This prevents cross-tenant contamination: interleaved calls
+from different agents can neither assemble a cross-tenant toxic flow nor trip
+a loop rule against each other's history, and a key-flooding client cannot
+grow memory without bound.
+
+`record(tool, args, key=...)` appends a `TraceEntry(tool, args)` to the key's
+deque. When the deque is full, the oldest entry is evicted automatically —
+this caps memory and rule-evaluation cost. The window should be large enough
+to span a typical agent tool-use chain (the design default of 64 covers most
+homelab flows).
 
 ### Ordered subsequence matching (`ToxicFlowRule`)
 
@@ -412,11 +421,14 @@ engine.
 ### Large result truncation
 
 Tool output can be multi-MB; scanning it whole blows the inference latency
-budget and risks OOM. `truncate(text, MAX_CONTENT_BYTES)` cuts on a UTF-8
-boundary (default 32 KiB) and returns a `truncated` flag that is folded
-into the audit record (`truncated: true` in the JSONL line) and the OTel
-span attribute. 32 KiB covers the attacker-relevant head of any payload —
-an injection lives at the top of the response, not buried 10 MB in.
+budget and risks OOM. `scan_windows(text, MAX_CONTENT_BYTES, SCAN_TAIL_BYTES)`
+cuts a UTF-8-safe head window (default 32 KiB) and — for over-budget payloads —
+a second UTF-8-safe tail window (default 8 KiB). Both chunks are scanned; the
+`truncated` flag is folded into the audit record (`truncated: true` in the
+JSONL line) and the OTel span attribute. The tail window closes the
+**truncation bypass**: an attacker padding the payload so the injection lands
+beyond the 32 KiB head is caught by the tail scan. Set `SCAN_TAIL_BYTES=0` to
+revert to head-only scanning.
 
 ## Hot-reload
 

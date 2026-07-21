@@ -93,6 +93,10 @@ class GuardrailConfig:
 
     # --- Content budget ---
     max_content_bytes: int = 32 * 1024
+    # Extra bytes scanned from the TAIL of an over-budget payload, closing the
+    # truncation bypass (an attacker padding a payload so the injection lands
+    # beyond the scanned head). 0 disables tail scanning.
+    scan_tail_bytes: int = 8 * 1024
 
     # --- Scanner enable flags ---
     enable_regex_scanner: bool = True
@@ -119,6 +123,10 @@ class GuardrailConfig:
 
     # --- Invariant ---
     invariant_window: int = 64
+    # Max distinct per-route trace windows kept by the InvariantEngine before
+    # the least-recently-used tenant trace is evicted. Bounds memory against
+    # trace-key flooding.
+    invariant_max_traces: int = 1024
 
     # --- Timing ---
     scanner_timeout_ms: int = 500
@@ -156,6 +164,7 @@ class GuardrailConfig:
             failure_mode=failure_mode,
             human_review_mode=human_review_mode,
             max_content_bytes=_env_int("MAX_CONTENT_BYTES", 32 * 1024),
+            scan_tail_bytes=_env_int("SCAN_TAIL_BYTES", 8 * 1024),
             enable_regex_scanner=_env_bool("ENABLE_REGEX_SCANNER", True),
             enable_promptguard=_env_bool("ENABLE_PROMPTGUARD", True),
             enable_agent_alignment=_env_bool("ENABLE_AGENT_ALIGNMENT", False),
@@ -174,6 +183,7 @@ class GuardrailConfig:
             ),
             lf_alignment_api_key=os.environ.get("LF_ALIGNMENT_API_KEY") or None,
             invariant_window=_env_int("INVARIANT_WINDOW", 64),
+            invariant_max_traces=_env_int("INVARIANT_MAX_TRACES", 1024),
             scanner_timeout_ms=_env_int("SCANNER_TIMEOUT_MS", 500),
             listen_addr=os.environ.get("LISTEN_ADDR", "[::]:9001"),
             server_max_workers=_env_int("SERVER_MAX_WORKERS", 8),

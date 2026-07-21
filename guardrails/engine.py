@@ -13,8 +13,9 @@ This is the heart of the sidecar. For each MCP exchange it:
 5. Hands all results to the :class:`DecisionAggregator` (fail-closed by
    default) and returns a :class:`Decision`.
 
-The engine is concurrency-safe: the invariant trace is guarded by the
-``RulePack`` lock on swap and a dedicated lock on append/evaluate.
+The engine is concurrency-safe: invariant traces are isolated per route
+(route name / first service name), guarded by the ``RulePack`` lock on swap
+and a dedicated lock on append/evaluate.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ from .scanners import (
     Scanner,
     StubScanner,
     extract_text,
-    truncate,
+    scan_windows,
 )
 
 logger = logging.getLogger("mcp.guardrails.engine")
@@ -150,7 +151,11 @@ class GuardrailEngine:
                 )
 
         rule_pack = RulePack.from_env()
-        invariant = InvariantEngine(rule_pack.rules, window=config.invariant_window)
+        invariant = InvariantEngine(
+            rule_pack.rules,
+            window=config.invariant_window,
+            max_traces=config.invariant_max_traces,
+        )
 
         aggregator = DecisionAggregator(human_review_mode=config.human_review_mode)
 
@@ -240,7 +245,9 @@ class GuardrailEngine:
             upstream_transport=upstream_transport,
             route_name=route_name,
         )
-        text, truncated = truncate(extract_text(params), self._cfg.max_content_bytes)
+        texts, truncated = scan_windows(
+            extract_text(params), self._cfg.max_content_bytes, self._cfg.scan_tail_bytes
+        )
         ctx_with_trunc = _with_truncated(ctx, truncated)
 
         with self._obs.span(
@@ -251,17 +258,23 @@ class GuardrailEngine:
         ) as attrs:
             results: list[ScanResult] = []
 
-            # Content scanners on the params text.
-            scan_results = await self._run_scanners(text, "tool", self._c.request_scanners)
-            results.extend(scan_results)
+            # Content scanners on the params text (head + tail windows when
+            # over budget, so padding cannot hide an injection past the cut).
+            for text in texts:
+                scan_results = await self._run_scanners(text, "tool", self._c.request_scanners)
+                results.extend(scan_results)
 
-            # Invariant: record + evaluate toxic flow. Trace mutation must be
-            # serialised so concurrent requests can't interleave half-calls.
+            # Invariant: record + evaluate toxic flow against THIS route's
+            # trace. Trace mutation must be serialised so concurrent requests
+            # can't interleave half-calls.
             inv_result: ScanResult | None = None
             if self._c.invariant is not None:
+                trace_key = route_name or (service_names[0] if service_names else "")
                 async with self._trace_lock:
-                    self._c.invariant.record(tool_name, params.get("arguments", {}))
-                    inv_result = self._c.invariant.evaluate_or_allow()
+                    self._c.invariant.record(
+                        tool_name, params.get("arguments", {}), key=trace_key
+                    )
+                    inv_result = self._c.invariant.evaluate_or_allow(key=trace_key)
                 results.append(inv_result)
 
             decision = self._c.aggregator.aggregate(results)
@@ -294,7 +307,9 @@ class GuardrailEngine:
             upstream_transport=upstream_transport,
             route_name=route_name,
         )
-        text, truncated = truncate(extract_text(result), self._cfg.max_content_bytes)
+        texts, truncated = scan_windows(
+            extract_text(result), self._cfg.max_content_bytes, self._cfg.scan_tail_bytes
+        )
         ctx_with_trunc = _with_truncated(ctx, truncated)
 
         with self._obs.span(
@@ -303,17 +318,25 @@ class GuardrailEngine:
             transport=upstream_transport,
         ) as attrs:
             results: list[ScanResult] = []
-            first_stage = await self._run_scanners(text, "assistant", self._c.response_scanners)
+            first_stage: list[ScanResult] = []
+            flagged_chunks: list[str] = []
+            for text in texts:
+                chunk_results = await self._run_scanners(text, "assistant", self._c.response_scanners)
+                first_stage.extend(chunk_results)
+                if any(r.outcome is ScanOutcome.HUMAN_REVIEW for r in chunk_results):
+                    flagged_chunks.append(text)
             results.extend(first_stage)
 
             # Second stage: only when a first-stage scanner flagged HUMAN_REVIEW
-            # and a second-stage (AgentAlignment) is configured. This bounds the
-            # LLM-based alignment cost to suspicious responses only.
-            if self._c.second_stage_scanners and any(
-                r.outcome is ScanOutcome.HUMAN_REVIEW for r in first_stage
-            ):
-                second = await self._run_scanners(text, "assistant", self._c.second_stage_scanners)
-                results.extend(second)
+            # and a second-stage (AgentAlignment) is configured. Only the
+            # flagged chunk(s) are re-scanned, bounding the LLM-based alignment
+            # cost to suspicious content only.
+            if self._c.second_stage_scanners and flagged_chunks:
+                for text in flagged_chunks:
+                    second = await self._run_scanners(
+                        text, "assistant", self._c.second_stage_scanners
+                    )
+                    results.extend(second)
                 attrs["second_stage"] = True
 
             # No Invariant on the response side; toxic-flow is a request-time

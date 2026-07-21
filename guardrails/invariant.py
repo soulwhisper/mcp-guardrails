@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Union
@@ -226,12 +226,26 @@ class InvariantEngine:
     The window (``maxlen``) should be large enough to span a typical agent
     tool-use chain (the design default of 64 covers most homelab flows) but
     bounded to cap memory and rule-evaluation cost.
+
+    Traces are isolated per *trace key* (the engine passes the route name /
+    first service name): one compromised or noisy tenant cannot poison the
+    sliding window another tenant's rules are evaluated against, and
+    interleaved calls from different agents can no longer assemble a
+    cross-tenant toxic flow or trip a loop rule. The number of distinct keys
+    is bounded by ``max_traces`` with LRU eviction, so a key-flooding client
+    cannot grow memory without limit.
     """
 
-    def __init__(self, rules: Iterable[ToxicFlowRule], window: int = 64):
+    def __init__(
+        self,
+        rules: Iterable[ToxicFlowRule],
+        window: int = 64,
+        max_traces: int = 1024,
+    ):
         self._rules: list[ToxicFlowRule] = list(rules)
-        self._trace: deque[TraceEntry] = deque(maxlen=window)
+        self._traces: OrderedDict[str, deque[TraceEntry]] = OrderedDict()
         self._window = window
+        self._max_traces = max(1, max_traces)
 
     @property
     def rules(self) -> tuple[ToxicFlowRule, ...]:
@@ -240,6 +254,23 @@ class InvariantEngine:
     @property
     def window(self) -> int:
         return self._window
+
+    @property
+    def max_traces(self) -> int:
+        return self._max_traces
+
+    def _get_trace(self, key: str) -> deque[TraceEntry]:
+        """Return the deque for ``key``, creating / LRU-refreshing it."""
+        trace = self._traces.get(key)
+        if trace is None:
+            if len(self._traces) >= self._max_traces:
+                # Evict the least-recently-used tenant trace.
+                self._traces.popitem(last=False)
+            trace = deque(maxlen=self._window)
+            self._traces[key] = trace
+        else:
+            self._traces.move_to_end(key)
+        return trace
 
     def set_rules(self, rules: Iterable[ToxicFlowRule]) -> None:
         """Atomically swap the active rule list.
@@ -251,25 +282,36 @@ class InvariantEngine:
         """
         self._rules = list(rules)
 
-    def reset(self) -> None:
-        self._trace.clear()
+    def reset(self, key: str | None = None) -> None:
+        """Clear one tenant's trace, or all traces when ``key`` is None."""
+        if key is None:
+            self._traces.clear()
+        else:
+            self._traces.pop(key, None)
 
-    def record(self, tool: str, args: Mapping[str, Any] | None = None) -> None:
-        """Append a tool call to the trace.
+    def record(
+        self,
+        tool: str,
+        args: Mapping[str, Any] | None = None,
+        *,
+        key: str = "",
+    ) -> None:
+        """Append a tool call to the trace for ``key``.
 
         Called by the engine on every ``tools/call`` request *before* rule
         evaluation, so the current call participates in matching.
         """
-        self._trace.append(TraceEntry(tool=tool, args=dict(args or {})))
+        self._get_trace(key).append(TraceEntry(tool=tool, args=dict(args or {})))
 
-    def evaluate(self) -> ScanResult | None:
-        """Run all rules against the current trace.
+    def evaluate(self, *, key: str = "") -> ScanResult | None:
+        """Run all rules against the current trace for ``key``.
 
         Returns the first matching rule as a BLOCK ``ScanResult``, or ``None``
         if no rule fires. First-match wins; rule order in the config therefore
         expresses priority.
         """
-        snapshot = list(self._trace)
+        trace = self._traces.get(key)
+        snapshot = list(trace) if trace is not None else []
         for rule in self._rules:
             hit = rule.match(snapshot)
             if hit is not None:
@@ -279,10 +321,11 @@ class InvariantEngine:
                 )
         return None
 
-    def evaluate_or_allow(self) -> ScanResult:
+    def evaluate_or_allow(self, *, key: str = "") -> ScanResult:
         """Convenience: evaluate, returning ALLOW if nothing fires."""
-        return self.evaluate() or ScanResult.allow("invariant")
+        return self.evaluate(key=key) or ScanResult.allow("invariant")
 
-    def snapshot(self) -> tuple[TraceEntry, ...]:
-        """Return an immutable copy of the current trace (for tests/audit)."""
-        return tuple(self._trace)
+    def snapshot(self, *, key: str = "") -> tuple[TraceEntry, ...]:
+        """Return an immutable copy of a trace (for tests/audit)."""
+        trace = self._traces.get(key)
+        return tuple(trace) if trace is not None else ()

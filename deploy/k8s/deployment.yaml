@@ -87,6 +87,10 @@ spec:
               value: "false"
             - name: INVARIANT_WINDOW
               value: "64"
+            # - name: INVARIANT_MAX_TRACES   # max per-route trace windows (default 1024)
+            #   value: "1024"
+            # - name: SCAN_TAIL_BYTES        # tail window scanned on over-budget payloads (default 8192)
+            #   value: "8192"
             - name: INVARIANT_RULES_PATH
               value: "/etc/guardrails/rules.policy"
             - name: SCANNER_TIMEOUT_MS
