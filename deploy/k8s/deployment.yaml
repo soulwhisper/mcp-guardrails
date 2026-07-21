@@ -91,6 +91,12 @@ spec:
             #   value: "1024"
             # - name: SCAN_TAIL_BYTES        # tail window scanned on over-budget payloads (default 8192)
             #   value: "8192"
+            # - name: ENABLE_REDACTION       # secret/PII redaction on allowed payloads (default true)
+            #   value: "true"
+            # - name: REDACT_REQUEST_PARAMS  # also redact params.arguments on requests (default false)
+            #   value: "false"
+            # - name: REDACTION_MAX_BYTES    # payload byte cap for redaction; over-cap -> skip + redaction_skipped=size (default 262144)
+            #   value: "262144"
             - name: INVARIANT_RULES_PATH
               value: "/etc/guardrails/rules.policy"
             - name: SCANNER_TIMEOUT_MS
