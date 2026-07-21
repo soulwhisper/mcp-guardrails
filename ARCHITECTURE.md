@@ -28,7 +28,7 @@ ExtMcp Guardrail is a policy sidecar that sits between agentgateway and the
 upstream MCP servers an agent's LLM can reach. agentgateway invokes the
 sidecar twice per MCP exchange — once on the request path (before forwarding
 to the upstream), once on the response path (before returning to the agent).
-Each call returns one of three states: **allowed** (forward unchanged),
+Each call returns one of three states: **pass** (forward unchanged),
 **mutated** (replace the payload), or **error** (deny).
 
 The sidecar composes two complementary policy layers:
@@ -67,27 +67,28 @@ service ExtMcp {
 
 ```proto
 message McpRequest {
-  string method = 1;                  // MCP JSON-RPC method, e.g. "tools/call"
-  repeated string service_names = 2;  // resolved MCP service identifiers
-  bytes mcp_request = 3;              // raw JSON-RPC params, UTF-8 bytes
-  repeated HeaderValue headers = 4;   // empty for stdio upstreams
-  MetadataContext metadata_context = 5;
+  repeated string service_names = 1;  // resolved MCP service identifiers
+  string method = 2;                  // MCP JSON-RPC method, e.g. "tools/call"
+  google.protobuf.Struct metadata_context = 3;
+  optional bytes mcp_request = 4;     // raw JSON-RPC params, UTF-8 bytes
+  repeated McpHeader headers = 5;     // empty for stdio upstreams
 }
 ```
 
 `mcp_request` is the raw JSON-RPC `params` object, serialised as bytes. For
 `tools/call` this looks like `{"name": "...", "arguments": {...}}`. The
-servicer deserialises it with `json.loads` and a malformed payload maps to
-`AuthorizationError{INVALID_ARGUMENT}` (fail-closed on parse failure).
+servicer treats an absent `mcp_request` as an empty params object and maps a
+malformed payload to `AuthorizationError{INVALID}` (fail-closed on parse
+failure).
 
 ### McpResponse
 
 ```proto
 message McpResponse {
-  string method = 1;
-  repeated string service_names = 2;
-  bytes mcp_response = 3;              // raw JSON-RPC result, UTF-8 bytes
-  MetadataContext metadata_context = 4;
+  repeated string service_names = 1;
+  string method = 2;
+  google.protobuf.Struct metadata_context = 3;
+  bytes mcp_response = 4;              // raw JSON-RPC result, UTF-8 bytes
 }
 ```
 
@@ -96,40 +97,36 @@ looks like `{"content": [{"type": "text", "text": "..."}], "isError": bool}`.
 
 ### The result oneof
 
-Both `McpRequestResult` and `McpResponseResult` use the same `oneof result`:
+Both `McpRequestResult` and `McpResponseResult` use the same upstream
+`oneof result` shape:
 
 ```proto
 message McpRequestResult {
   oneof result {
-    Pass allowed = 1;            // forward unchanged
-    Mutated mutated = 2;         // replace the payload with the supplied bytes
-    AuthorizationError error = 3;  // deny; agentgateway surfaces JSON-RPC -32001
+    Pass pass = 1;                    // forward unchanged
+    bytes mutated = 2;                // replace payload with raw JSON bytes
+    AuthorizationError error = 3;     // deny / invalid / resource exhausted
   }
+  HeaderMutation header_mutation = 4;
+  google.protobuf.Struct metadata = 5;
 }
+
+// McpResponseResult has the same pass/mutated/error oneof, without the
+// request-side header_mutation/metadata extension fields.
 ```
 
-### Field-naming note: `allowed` vs `pass`
+The sidecar currently emits only `pass`, `mutated`, and `error`.
+`header_mutation` and `metadata` are parsed/ignored safely and reserved for
+future policy outputs.
 
-The "forward unchanged" oneof member is named **`allowed`** rather than
-`pass`. This is a Python-side cosmetic choice with **zero wire-compat
-impact**: only protobuf field numbers participate in the wire format, so
-the field numbered `1` in this oneof is wire-identical whether the source
-proto spells it `pass` (as agentgateway's upstream proto does) or `allowed`
-(as we do). The rename exists because the generated Python stub exposes the
-oneof member as a kwarg on the message constructor:
+### Upstream contract note
 
-```python
-# upstream proto field name -> Python syntax error
-pb.McpRequestResult(pass=pb.Pass())        # SyntaxError: 'pass' is a keyword
-
-# our proto field name -> fine
-pb.McpRequestResult(allowed=pb.Pass())     # OK
-```
-
-The `Pass` message type itself is unchanged. When vendoring against a
-pinned agentgateway release, you can regenerate from the upstream proto via
-`make proto` and overwrite the committed stubs — the wire format stays the
-same; only the Python-side kwarg name changes.
+`proto/ext_mcp.proto` is vendored from `agentgateway/agentgateway` at commit
+`1e0c75efc930187fb6048ac5c05fe7b62b787352`
+(`crates/protos/proto/ext_mcp.proto`). The "forward unchanged" oneof member
+is named `pass`; the Python servicer sets it via `getattr(result, "pass")`
+because `pass` is a Python keyword. Only protobuf field numbers and types
+participate in the wire format.
 
 ### AuthorizationError codes
 
@@ -137,40 +134,36 @@ same; only the Python-side kwarg name changes.
 message AuthorizationError {
   enum Code {
     UNKNOWN = 0;
-    PERMISSION_DENIED = 1;   // call not permitted by policy
-    INVALID_ARGUMENT = 2;    // payload malformed / not deserialisable
-    UNAUTHENTICATED = 3;     // reserved for future authn use
+    PERMISSION_DENIED = 1;    // call not permitted by policy
+    RESOURCE_EXHAUSTED = 2;   // rate/size/resource exhaustion
+    INVALID = 3;              // payload malformed / not deserialisable
   }
   Code code = 1;
-  string message = 2;
+  string reason = 2;
+  optional bytes mcp_error = 3;
 }
 ```
 
-The servicer emits `PERMISSION_DENIED` for any aggregator deny, and
-`INVALID_ARGUMENT` for any JSON parse failure on the incoming
-`mcp_request` / `mcp_response` bytes. agentgateway maps both to JSON-RPC
-`-32001` on the agent-facing side.
+The servicer emits `PERMISSION_DENIED` for aggregator denies and `INVALID`
+for JSON parse failures on the incoming `mcp_request` / `mcp_response`
+bytes. `mcp_error` is reserved for future use when the sidecar needs to
+return a full JSON-RPC error body.
 
-### HeaderValue and MetadataContext
+### McpHeader and metadata context
 
 ```proto
-message HeaderValue {
+message McpHeader {
   string key = 1;
-  string value = 2;
-}
-
-message MetadataContext {
-  string upstream_transport = 1;  // "stdio" | "sse" | "streamable_http"
-  string route_name = 2;
-  map<string, string> entries = 3;
+  bytes value = 2;
 }
 ```
 
-`headers` is empty when `metadata_context.upstream_transport == "stdio"` —
+`headers` is empty when `metadata_context["upstream_transport"] == "stdio"` —
 stdio MCP servers do not have HTTP headers. The servicer pulls
-`upstream_transport` and `route_name` out of the metadata context and
-threads them through to the engine for audit logging; it does **not** rely
-on headers for any authn/authz decision.
+`upstream_transport` and `route_name` out of the
+`google.protobuf.Struct metadata_context` and threads them through to the
+engine for audit logging; it does **not** rely on headers for any
+authn/authz decision.
 
 ## Request lifecycle (CheckRequest)
 
@@ -180,9 +173,9 @@ scan + invariant trace). The call graph, step by step:
 1. **`ExtMcpServicer.CheckRequest(request, context)`**
    ([`guardrails/servicer.py`](guardrails/servicer.py))
    - `_safe_json_loads(request.mcp_request)` — if parse fails, return
-     `McpRequestResult{error=INVALID_ARGUMENT}` immediately.
+     `McpRequestResult{error=INVALID}` immediately.
    - `_extract_metadata(request)` — pull `upstream_transport` and
-     `route_name` out of the `MetadataContext`.
+     `route_name` out of the `google.protobuf.Struct metadata_context`.
    - For `tools/call`: extract `tool_name = params["name"]`.
    - Extract request headers into a plain dict.
 2. **`GuardrailEngine.check_request(...)`**
@@ -226,8 +219,8 @@ self._c.request_scanners)`:
    `mcp.guardrails.decisions{phase="request",outcome,method}` counter.
 7. **`ExtMcpServicer` maps the `Decision` to the proto oneof**:
    - `decision.deny` -> `McpRequestResult{error=PERMISSION_DENIED}`.
-   - `decision.is_mutated` -> `McpRequestResult{mutated=Mutated{...}}`.
-   - otherwise -> `McpRequestResult{allowed=Pass()}`.
+   - `decision.is_mutated` -> `McpRequestResult{mutated=<raw json bytes>}`.
+   - otherwise -> `McpRequestResult{pass=Pass()}`.
 
 ## Response lifecycle (CheckResponse)
 
@@ -242,7 +235,7 @@ The call graph:
 
 1. **`ExtMcpServicer.CheckResponse(request, context)`** — same shape as
    `CheckRequest` but deserialises `request.mcp_response`. Malformed ->
-   `McpResponseResult{error=INVALID_ARGUMENT}`.
+   `McpResponseResult{error=INVALID}`.
 2. **`GuardrailEngine.check_response(...)`**:
    - Build `McpCallContext` (no `tool_name` on the response side; the
      method + result are what we have).
@@ -412,7 +405,7 @@ sidecar.
 ### Malformed JSON
 
 The servicer's `_safe_json_loads` catches `json.JSONDecodeError` and
-`UnicodeDecodeError` and maps both to `AuthorizationError{INVALID_ARGUMENT}`.
+`UnicodeDecodeError` and maps both to `AuthorizationError{INVALID}`.
 This is fail-closed on parse failure: a malformed payload cannot reach the
 engine.
 
@@ -475,7 +468,7 @@ line per decision. Defaults to stdout when `AUDIT_LOG_PATH` is unset or
   "method": "tools/call",
   "tool": "email_send",
   "outcome": "deny",
-  "reason": "regex:hidden_ascii:block:hidden/control unicode detected (match='\u202e')",
+  "reason": "regex:hidden_ascii:block:hidden/control unicode detected (match='‮')",
   "truncated": false,
   "upstream_transport": "streamable_http",
   "route": "filesystem-mcp",
@@ -579,7 +572,7 @@ each row.
 | Scanner stack          | Regex (always) + PromptGuard ONNX (opt-in) | Regex catches hidden ASCII / PII / secrets with zero deps. PromptGuard ONNX adds semantic injection detection via `onnxruntime` (~15MB); no torch needed. Both on by default; degrades gracefully to regex-only. |
 | Content budget         | 32 KiB per scan                           | Tool output can be multi-MB; scanning it whole blows latency and risks OOM. 32 KiB covers the attacker-relevant head of any payload (injections live at the top).                       |
 | Scanner timeout        | 500 ms                                    | Strictly less than the agentgateway processor timeout (recommended 800-1000ms). Sidecar decides first; gateway timeout is the backstop.                                                 |
-| Proto field naming     | `allowed` (not `pass`)                    | Wire-compatible with agentgateway via field numbers. Renamed to avoid Python `pass`-keyword kwarg collision in the generated stubs. Pure cosmetic.                                      |
+| Proto contract         | Vendored from agentgateway main           | `proto/ext_mcp.proto` matches upstream `agentgateway.dev.ext_mcp`. The Python servicer handles the `pass` keyword collision via `getattr(result, "pass")`.                    |
 | Hot-reload mechanism   | SIGHUP -> RulePack.reload()               | Operators swap rules without dropping the gRPC server. Lock-guarded swap; in-flight evaluations see the old rule tuple to completion.                                                   |
 | stdio upstream headers | Treat as untrusted / empty                | agentgateway forwards an empty header set for stdio upstreams. Do not rely on headers for authn/authz when `upstream_transport == "stdio"`.                                             |
 
@@ -606,15 +599,15 @@ sequenceDiagram
     Sidecar->>INV: record(tool, args) + evaluate()
     PG-->>Sidecar: ScanDecision
     INV-->>Sidecar: ScanResult
-    Sidecar-->>GW: McpRequestResult{allowed|mutated|error}
-    alt allowed / mutated
+    Sidecar-->>GW: McpRequestResult{pass|mutated|error}
+    alt pass / mutated
         GW->>MCP: forward JSON-RPC
         MCP-->>GW: result
         GW->>Sidecar: CheckResponse(McpResponse)
         Sidecar->>PG: scan(result, role=ASSISTANT)
         PG-->>Sidecar: ScanDecision
-        Sidecar-->>GW: McpResponseResult{allowed|mutated|error}
-        alt allowed / mutated
+        Sidecar-->>GW: McpResponseResult{pass|mutated|error}
+        alt pass / mutated
             GW-->>Agent: result
         else error
             GW-->>Agent: JSON-RPC -32001
