@@ -181,8 +181,8 @@ async def test_request_scanning(stub: pbg.ExtMcpStub) -> None:
         "req_clean",
     )
     check(
-        "clean request → allowed",
-        r.WhichOneof("result") == "allowed",
+        "clean request → pass",
+        r.WhichOneof("result") == "pass",
         f"got {r.WhichOneof('result')}",
     )
 
@@ -254,8 +254,8 @@ async def test_request_scanning(stub: pbg.ExtMcpStub) -> None:
         "req_code",
     )
     check(
-        "code request → allowed",
-        r.WhichOneof("result") == "allowed",
+        "code request → pass",
+        r.WhichOneof("result") == "pass",
         f"got {r.WhichOneof('result')}",
     )
 
@@ -283,8 +283,8 @@ async def test_response_scanning(stub: pbg.ExtMcpStub) -> None:
         "resp_clean",
     )
     check(
-        "clean response → allowed",
-        r.WhichOneof("result") == "allowed",
+        "clean response → pass",
+        r.WhichOneof("result") == "pass",
         f"got {r.WhichOneof('result')}",
     )
 
@@ -345,8 +345,8 @@ async def test_response_scanning(stub: pbg.ExtMcpStub) -> None:
         "resp_tools_list_clean",
     )
     check(
-        "clean tools/list → allowed",
-        r.WhichOneof("result") == "allowed",
+        "clean tools/list → pass",
+        r.WhichOneof("result") == "pass",
         f"got {r.WhichOneof('result')}",
     )
 
@@ -364,7 +364,7 @@ async def test_invariant_engine(stub: pbg.ExtMcpStub) -> None:
                 ).encode(),
             )
         )
-    check("2 identical calls → allowed", r.WhichOneof("result") == "allowed")
+    check("2 identical calls → pass", r.WhichOneof("result") == "pass")
 
     # Different args should NOT trigger loop rule — test this BEFORE the
     # repeated-identical-calls test so the trace window is clean.
@@ -378,8 +378,8 @@ async def test_invariant_engine(stub: pbg.ExtMcpStub) -> None:
             )
         )
     check(
-        "parameterized search (6x diff args) → allowed",
-        r.WhichOneof("result") == "allowed",
+        "parameterized search (6x diff args) → pass",
+        r.WhichOneof("result") == "pass",
         "different args must not trigger loop rule",
     )
 
@@ -395,7 +395,7 @@ async def test_invariant_engine(stub: pbg.ExtMcpStub) -> None:
         )
     is_blocked = r.WhichOneof("result") == "error"
     print(
-        f"  🔍 10x identical http_get → {'blocked' if is_blocked else 'allowed'} (loop rule threshold=3)"
+        f"  🔍 10x identical http_get → {'blocked' if is_blocked else 'pass'} (loop rule threshold=3)"
     )
 
 
