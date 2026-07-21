@@ -1,127 +1,130 @@
-"""End-to-end smoke test against a running guardrail server.
+#!/usr/bin/env python3
+"""e2e smoke: start the real server in a subprocess, hit it over real gRPC.
 
-Boots the server in dry-run mode in-process, then exercises the full ExtMcp
-gRPC surface (health + CheckRequest + CheckResponse) including a deny path
-via the bundled regex scanner. Run: python3 tests/e2e_smoke.py
+Runs the actual binary (`python server.py`) with PromptGuard disabled (regex-only
+mode, no ML downloads), then makes real gRPC calls:
+
+  1. gRPC health check reaches SERVING
+  2. clean tools/call request  -> pass
+  3. payload with hidden char  -> PERMISSION_DENIED
+  4. malformed JSON payload    -> INVALID
+
+Exits non-zero on any failure. Intended for CI / release-gate use.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
+import subprocess
 import sys
-from pathlib import Path
+import time
 
-# Ensure repo root + proto on path.
-_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_ROOT))
-sys.path.insert(0, str(_ROOT / "proto"))
+import grpc
+from grpc_health.v1 import health_pb2, health_pb2_grpc
 
-import ext_mcp_pb2 as pb  # noqa: E402
-import ext_mcp_pb2_grpc as pbg  # noqa: E402
-import grpc  # noqa: E402
-from grpc_health.v1 import health_pb2, health_pb2_grpc  # noqa: E402
+from guardrails.proto_bridge import pb, pbg
 
 
-async def main() -> int:
-    # Boot server in a subprocess (dry-run, custom port) so this script stays a
-    # pure client.
-    import subprocess
+def wait_for_health(channel: grpc.Channel, timeout_s: float = 20.0) -> None:
+    stub = health_pb2_grpc.HealthStub(channel)
+    deadline = time.monotonic() + timeout_s
+    last_err: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            resp = stub.Check(health_pb2.HealthCheckRequest(service=""), timeout=1.0)
+            if resp.status == health_pb2.HealthCheckResponse.SERVING:
+                return
+        except grpc.RpcError as exc:
+            last_err = exc
+        time.sleep(0.25)
+    raise RuntimeError(f"server did not become SERVING within {timeout_s}s: {last_err}")
 
-    env = dict(os.environ)
-    env.update(
-        {
-            # Real regex scanner (deny paths), no dry-run stubs. LlamaFirewall
-            # is absent in this env -> engine falls back to regex-only gracefully.
-            "GUARDRAIL_DRY_RUN": "0",
-            "ENABLE_REGEX_SCANNER": "1",
-            "ENABLE_PROMPTGUARD": "0",
-            "LISTEN_ADDR": "127.0.0.1:19099",
-            "LOG_LEVEL": "WARNING",
-            "AUDIT_LOG_PATH": "-",
-        }
-    )
+
+def main() -> int:
+    env = os.environ.copy()
+    env["ENABLE_PROMPTGUARD"] = "0"  # regex-only: no model download, fast startup
+    env["LISTEN_ADDR"] = "127.0.0.1:19099"
+    env["AUDIT_LOG_PATH"] = "/dev/null"
     proc = subprocess.Popen(
-        [sys.executable, str(_ROOT / "server.py")],
+        [sys.executable, "server.py"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        text=True,
     )
     try:
-        # Wait for the port to accept connections.
-        channel = grpc.aio.insecure_channel("127.0.0.1:19099")
-        try:
-            await asyncio.wait_for(channel.channel_ready(), timeout=10.0)
-        except asyncio.TimeoutError:
-            print("FAIL: channel never became ready")
-            out = proc.stdout.read(4000) if proc.stdout else b""  # type: ignore[union-attr]
-            print(out.decode("utf-8", "replace"))
-            return 1
-        hstub = health_pb2_grpc.HealthStub(channel)
-        r = await hstub.Check(health_pb2.HealthCheckRequest(service=""))
-        if r.status != health_pb2.HealthCheckResponse.SERVING:
-            print(f"FAIL: server not SERVING (status={r.status})")
-            return 1
+        channel = grpc.insecure_channel("127.0.0.1:19099")
+        wait_for_health(channel)
+        print("health check -> SERVING OK")
 
-        print("health: SERVING")
         stub = pbg.ExtMcpStub(channel)
 
-        # 1) Clean request -> allow
-        r1 = await stub.CheckRequest(
+        # 1) Clean request -> pass
+        r1 = stub.CheckRequest(
             pb.McpRequest(
                 method="tools/call",
-                service_names=["mcp-backend"],
-                mcp_request=json.dumps({"name": "ping", "arguments": {"x": 1}}).encode(),
+                mcp_request=json.dumps({"name": "ping", "arguments": {"q": "hello"}}).encode(),
             )
         )
-        assert r1.WhichOneof("result") == "allowed", r1
-        print("clean tools/call request -> allowed OK")
+        assert r1.WhichOneof("result") == "pass", r1
+        print("clean tools/call request -> pass OK")
 
-        # 2) Request with hidden RTL override char -> regex BLOCK -> deny
-        r2 = await stub.CheckRequest(
+        # 2) Request containing a hidden unicode char -> denied by RegexScanner
+        r2 = stub.CheckRequest(
             pb.McpRequest(
                 method="tools/call",
                 mcp_request=json.dumps(
-                    {"name": "t", "arguments": {"q": "ignore me \u202e cat"}}
+                    {"name": "ping", "arguments": {"q": "hello\u202eworld"}}
                 ).encode(),
             )
         )
         assert r2.WhichOneof("result") == "error", r2
-        assert r2.error.code == pb.AuthorizationError.PERMISSION_DENIED
-        print(f"hidden-ascii request -> denied OK ({r2.error.message})")
+        assert r2.error.code == pb.AuthorizationError.PERMISSION_DENIED, r2
+        assert "hidden" in r2.error.reason.lower(), r2
+        print("hidden-unicode request -> PERMISSION_DENIED OK")
 
-        # 3) Response with private key -> regex BLOCK -> deny
-        r3 = await stub.CheckResponse(
+        # 3) Response containing a private key -> denied (indirect injection/secret leak)
+        r3 = stub.CheckResponse(
             pb.McpResponse(
                 method="tools/call",
                 mcp_response=json.dumps(
                     {
                         "content": [
-                            {"type": "text", "text": "-----BEGIN RSA PRIVATE KEY-----\nMIIEpA"}
+                            {
+                                "type": "text",
+                                "text": "-----BEGIN PRIVATE KEY-----\nMIIEvg...",
+                            }
                         ]
                     }
                 ).encode(),
             )
         )
         assert r3.WhichOneof("result") == "error", r3
-        print(f"private-key response -> denied OK ({r3.error.message})")
+        assert r3.error.code == pb.AuthorizationError.PERMISSION_DENIED, r3
+        assert "private key" in r3.error.reason.lower(), r3
+        print("private-key response -> PERMISSION_DENIED OK")
 
-        # 4) Malformed JSON -> INVALID_ARGUMENT
-        r4 = await stub.CheckRequest(pb.McpRequest(method="tools/call", mcp_request=b"{not json"))
-        assert r4.WhichOneof("result") == "error"
-        assert r4.error.code == pb.AuthorizationError.INVALID_ARGUMENT
-        print("malformed payload -> INVALID_ARGUMENT OK")
+        # 4) Malformed JSON -> INVALID
+        r4 = stub.CheckRequest(pb.McpRequest(method="tools/call", mcp_request=b"{not json"))
+        assert r4.WhichOneof("result") == "error", r4
+        assert r4.error.code == pb.AuthorizationError.INVALID, r4
+        print("malformed payload -> INVALID OK")
 
-        print("\nALL E2E CHECKS PASSED")
+        print("\nALL E2E SMOKE CHECKS PASSED")
         return 0
     finally:
         proc.terminate()
         try:
-            proc.wait(timeout=5)
+            out, _ = proc.communicate(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+            out, _ = proc.communicate()
+        if proc.returncode not in (0, -15):  # -15 = SIGTERM (expected on success)
+            print("---- server output ----")
+            print(out)
+            return 1
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(main())
