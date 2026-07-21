@@ -57,7 +57,7 @@ class Scanner(Protocol):
 # pictures / RTL override / zero-width chars used to hide instructions.
 _HIDDEN_ASCII = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f"
-    r"\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]"
+    r" -‏‪-‮⁠-⁯\ufeff]"
 )
 
 # Common secret shapes (conservative — false-positive-averse).
@@ -93,7 +93,7 @@ _FORMAT_INJECTION = re.compile(
 )
 # Connection strings with embedded credentials — common leak vector.
 _CONNECTION_STRING = re.compile(
-    r"(?i)\b(?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis|amqps?)://[^\s\"'<>{10,}",
+    r"(?i)\b(?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis|amqps?)://[^\s\"'<>]{10,}",
 )
 # Generic key=value credential pairs.  Catches inline secrets like
 #   PASSWORD=hunter2   token: sk-xxx   secret=abc123
