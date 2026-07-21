@@ -49,14 +49,14 @@ sequenceDiagram
     Sidecar->>INV: record(tool, args) + evaluate()
     PG-->>Sidecar: ScanDecision
     INV-->>Sidecar: ScanResult
-    Sidecar-->>GW: McpRequestResult{allowed|mutated|error}
+    Sidecar-->>GW: McpRequestResult{pass|mutated|error}
     alt allowed / mutated
         GW->>MCP: forward JSON-RPC
         MCP-->>GW: result
         GW->>Sidecar: CheckResponse(McpResponse)
         Sidecar->>PG: scan(result, role=ASSISTANT)
         PG-->>Sidecar: ScanDecision
-        Sidecar-->>GW: McpResponseResult{allowed|mutated|error}
+        Sidecar-->>GW: McpResponseResult{pass|mutated|error}
         alt allowed / mutated
             GW-->>Agent: result
         else error
@@ -110,21 +110,18 @@ agentgateway invokes the sidecar twice per MCP exchange through the
 
 Both RPCs return one of three states via a protobuf `oneof`:
 
-- **`allowed` (`Pass`)** — forward the payload unchanged.
-- **`mutated` (`Mutated`)** — replace the payload with the supplied bytes
-  (used for future redaction / masking passes; not emitted by the default
-  scanners).
+- **`pass` (`Pass`)** — forward the payload unchanged.
+- **`mutated` (`bytes`)** — replace the payload with the supplied raw JSON
+  bytes (used for future redaction / masking passes; not emitted by the
+  default scanners).
 - **`error` (`AuthorizationError`)** — deny. agentgateway surfaces this to
-  the agent as a JSON-RPC error with code `-32001`.
+  the agent as a JSON-RPC error.
 
-> **Field-naming note.** The proto's "forward unchanged" oneof member is named
-> `allowed` rather than `pass`. Only protobuf field **numbers** participate in
-> the wire format, so this cosmetic name difference has zero wire-compat impact
-> against agentgateway's upstream proto. The rename exists to keep the generated
-> Python stubs free of `pass`-keyword collisions (`pb.McpRequestResult(pass=...)`
-> is a syntax error; `pb.McpRequestResult(allowed=...)` is not). The `Pass`
-> message type is unchanged. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the
-> full proto reproduction.
+> **Upstream contract note.** `proto/ext_mcp.proto` is vendored from
+> `agentgateway/agentgateway` (`crates/protos/proto/ext_mcp.proto`). The
+> "forward unchanged" oneof member is named `pass`; the Python servicer sets
+> it via `getattr(result, "pass")` because `pass` is a Python keyword. See
+> [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full proto contract.
 
 ### Fail-closed by default
 
@@ -284,7 +281,7 @@ python3 tests/e2e_smoke.py
 Boots a live server in a subprocess (regex-only) and exercises the full
 ExtMcp gRPC surface: health check, `CheckRequest` allow + deny (hidden
 Unicode), `CheckResponse` deny (private key), malformed-payload
-`INVALID_ARGUMENT`.
+`INVALID`.
 
 ## Configuration
 
@@ -446,7 +443,7 @@ Unicode preservation), the engine (timeout / exception handling, second-stage
 gating), the gRPC servicer (in-process round-trip + wire mapping), and the
 rule loader. The e2e smoke boots a live server, exercises health +
 `CheckRequest` (allow + deny on hidden Unicode) + `CheckResponse` (deny on
-private key) + malformed `INVALID_ARGUMENT`, and exits non-zero on any
+private key) + malformed `INVALID`, and exits non-zero on any
 mismatch.
 
 All 81 unit tests and the e2e smoke are green on a fresh clone.
@@ -480,7 +477,7 @@ markdown table.
 | Scanner raises / exceeds `SCANNER_TIMEOUT_MS` | `failClosed` -> `BLOCK` -> aggregator denies -> `error` oneof -> agentgateway returns JSON-RPC `-32001`. `failOpen` -> `HUMAN_REVIEW` -> forwarded with audit warning. |
 | Sidecar Pod unreachable                       | agentgateway's mcp-guardrails processor fails closed -> MCP exchange denied -> JSON-RPC `-32001` returned to the agent.                                                |
 | Model load failure (PromptGuard-2)            | Pod readiness probe stays `NOT_SERVING`; the Pod is removed from the Service endpoints. No traffic reaches a half-initialised sidecar.                                 |
-| Malformed JSON-RPC payload                    | Servicer returns `AuthorizationError{INVALID_ARGUMENT}` (fail-closed on parse failure).                                                                                |
+| Malformed JSON-RPC payload                    | Servicer returns `AuthorizationError{INVALID}` (fail-closed on parse failure).                                                                                |
 | Tool output > `MAX_CONTENT_BYTES`             | Text is truncated on a UTF-8 boundary; the decision is flagged `truncated=true` in the audit span. 32KiB default covers the attacker-relevant head of any payload.     |
 | stdio upstream                                | agentgateway forwards an empty header set for stdio upstreams. Do **not** rely on headers for authn/authz when `metadata_context.upstream_transport == "stdio"`.       |
 

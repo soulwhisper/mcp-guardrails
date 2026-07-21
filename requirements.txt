@@ -12,8 +12,9 @@ grpcio>=1.82,<1.83
 grpcio-health-checking>=1.82,<1.83
 # grpcio-tools is a BUILD-TIME / DEV dependency only — NOT listed here.
 
-# protobuf runtime is backward-compatible: newer runtime loads older gencode.
-protobuf>=5.29
+# protobuf runtime must be at least as new as the gencode embedded in
+# proto/ext_mcp_pb2.py (grpcio-tools 1.82.1 -> protobuf 7.35.x gencode).
+protobuf>=7.35
 
 # --- Transformers + ONNX Runtime for PromptGuard-2-86M inference ---
 # The ONNX model is public + non-gated, so no HF_TOKEN is needed. We load the

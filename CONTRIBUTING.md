@@ -66,8 +66,8 @@ landing the regenerated stubs.
 If you only rename a field (without touching field numbers), the generated
 stubs will diff but the wire format is unchanged — still commit the regen.
 Field **numbers** are the wire-compat surface; field **names** are cosmetic
-(this is why the proto's oneof member is named `allowed` rather than `pass` —
-see the field-naming note in [`README.md`](README.md)).
+(the local proto is vendored from upstream `agentgateway/agentgateway`; see
+the upstream contract note in [`README.md`](README.md)).
 
 ## Lint and test
 
@@ -97,7 +97,7 @@ The 72 unit tests cover:
 - `tests/test_engine.py` — timeout / exception handling per failure mode,
   second-stage gating on HUMAN_REVIEW, invariant trace serialisation.
 - `tests/test_servicer.py` — in-process gRPC round-trip + wire mapping
-  (allowed / mutated / error oneof, INVALID_ARGUMENT on malformed JSON).
+  (pass / mutated / error oneof, INVALID on malformed JSON).
 
 ## Adding a scanner
 
