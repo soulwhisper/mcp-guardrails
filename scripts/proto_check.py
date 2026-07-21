@@ -77,6 +77,27 @@ def normalize(text: str) -> list[str]:
     # 5. Python-2-style ``class X(object):`` -> Python-3 ``class X:``.
     #    Newer grpcio-tools drops the ``(object)`` base; older keeps it.
     text = re.sub(r"^class (\w+)\(object\):", r"class \1:", text, flags=re.MULTILINE)
+    # 6. Canonicalize the AddSerializedFile bytes literal. protobuf patch
+    #    releases sometimes flip the escaping of individual bytes (e.g. a raw
+    #    ``"`` vs ``\\"``) without changing the encoded descriptor. Decode
+    #    the literal and re-emit it via ``repr`` so the comparison is against
+    #    the canonical escaping, not the toolchain's whim.
+    import ast
+
+    def _canon_serialized(match: re.Match) -> str:
+        try:
+            raw = ast.literal_eval(match.group(1))
+        except (SyntaxError, ValueError):
+            return match.group(0)
+        if not isinstance(raw, bytes):
+            return match.group(0)
+        return "AddSerializedFile(" + repr(raw) + ")"
+
+    text = re.sub(
+        r"AddSerializedFile\((b'(?:[^'\\]|\\.)*')\)",
+        _canon_serialized,
+        text,
+    )
     return text.splitlines(keepends=True)
 
 
