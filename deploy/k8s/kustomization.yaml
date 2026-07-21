@@ -12,9 +12,9 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 metadata:
-  name: extmcp-guardrails
+  name: mcp-guardrails
 commonLabels:
-  app.kubernetes.io/name: extmcp-guardrails
+  app.kubernetes.io/name: mcp-guardrails
   app.kubernetes.io/part-of: agentgateway
   app.kubernetes.io/managed-by: kustomize
 resources:
