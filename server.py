@@ -38,7 +38,12 @@ async def serve() -> None:
     engine = GuardrailEngine.from_config(config)
     await engine.awarm()
 
-    server = grpc_aio_server(engine, max_workers=config.server_max_workers)
+    server = grpc_aio_server(
+        engine,
+        max_workers=config.server_max_workers,
+        max_recv_bytes=config.grpc_max_recv_bytes,
+        max_concurrent_rpcs=config.grpc_max_concurrent_rpcs,
+    )
     server.add_insecure_port(config.listen_addr)
 
     # Health check: SERVING only after the engine is warmed up so the
@@ -79,10 +84,26 @@ async def serve() -> None:
     await server.wait_for_termination()
 
 
-def grpc_aio_server(engine: GuardrailEngine, max_workers: int = 8):
+def grpc_aio_server(
+    engine: GuardrailEngine,
+    max_workers: int = 8,
+    max_recv_bytes: int = 8 * 1024 * 1024,
+    max_concurrent_rpcs: int = 128,
+):
     import grpc
 
-    server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=max_workers))
+    # DoS hardening (S-M4): bound the accepted message size and the number of
+    # in-flight RPCs so a runaway or hostile caller cannot exhaust memory or
+    # starve the asyncio loop. Both are env-tunable (GRPC_MAX_RECV_BYTES /
+    # GRPC_MAX_CONCURRENT_RPCS, see GuardrailConfig).
+    server = grpc.aio.server(
+        futures.ThreadPoolExecutor(max_workers=max_workers),
+        options=[
+            ("grpc.max_receive_message_length", max_recv_bytes),
+            ("grpc.max_send_message_length", max_recv_bytes),
+        ],
+        maximum_concurrent_rpcs=max_concurrent_rpcs,
+    )
     pbg.add_ExtMcpServicer_to_server(ExtMcpServicer(engine), server)
     return server
 
