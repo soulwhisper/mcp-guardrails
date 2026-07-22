@@ -294,9 +294,7 @@ class GuardrailConfig:
             audit_log_path=os.environ.get("AUDIT_LOG_PATH") or None,
             audit_caller_headers=tuple(
                 h.strip().lower()
-                for h in os.environ.get(
-                    "AUDIT_CALLER_HEADERS", "x-forwarded-user,x-session-id"
-                ).split(",")
+                for h in os.environ.get("AUDIT_CALLER_HEADERS", "x-forwarded-user").split(",")
                 if h.strip()
             ),
             sidecar_version=os.environ.get("GUARDRAIL_VERSION", ""),
