@@ -213,8 +213,18 @@ async def test_block_wins_over_redaction():
 
 @pytest.mark.asyncio
 async def test_human_review_suppresses_mutation():
-    """HUMAN_REVIEW payloads pass+warn WITHOUT redaction (review semantics win)."""
-    engine = _response_engine([ScriptedScanner("sus", [ScanResult.review("sus", "sketchy")])])
+    """REDACT_ON_REVIEW=0: HUMAN_REVIEW payloads pass+warn WITHOUT redaction
+    (legacy behaviour — review semantics win)."""
+    config = GuardrailConfig(
+        failure_mode=FailureMode.FAIL_CLOSED,
+        human_review_mode=HumanReviewMode.PASS,
+        max_content_bytes=4096,
+        scanner_timeout_ms=500,
+        redact_on_review=False,
+    )
+    engine = _response_engine(
+        [ScriptedScanner("sus", [ScanResult.review("sus", "sketchy")])], config=config
+    )
     decision = await engine.check_response(
         method="tools/call",
         service_names=["svc"],
@@ -223,6 +233,25 @@ async def test_human_review_suppresses_mutation():
     assert not decision.deny
     assert decision.human_review
     assert not decision.is_mutated
+
+
+@pytest.mark.asyncio
+async def test_human_review_still_redacts_by_default():
+    """S-H3 / REDACT_ON_REVIEW=1 (default): a HUMAN_REVIEW payload keeps its
+    review verdict AND is redacted — review-grade PII no longer passes
+    through verbatim."""
+    engine = _response_engine([ScriptedScanner("sus", [ScanResult.review("sus", "sketchy")])])
+    decision = await engine.check_response(
+        method="tools/call",
+        service_names=["svc"],
+        result={"content": [{"type": "text", "text": f"mail {EMAIL}"}]},
+    )
+    assert not decision.deny
+    assert decision.human_review  # review semantics preserved
+    assert decision.is_mutated  # ...and the payload is redacted
+    text = decision.mutated["content"][0]["text"]
+    assert EMAIL not in text
+    assert "[REDACTED:EMAIL]" in text
 
 
 @pytest.mark.asyncio
