@@ -116,3 +116,13 @@ class McpCallContext:
     # audit record so operators can spot under-scanned giant payloads.
     scanned_bytes: int = 0
     total_bytes: int = 0
+    # A-P0-1: audit-only correlation id for the MCP exchange, extracted by
+    # the servicer from trusted agentgateway-injected channels
+    # (metadata_context / x-request-id header, uuid8 fallback) — never from
+    # the attacker-controlled payload. Independent of ``Decision.ref``,
+    # which is always an engine-minted random uuid8 (PR-#65 semantics).
+    exchange_id: str = ""
+    # A-P1-1: whitelisted caller identity header (see
+    # ``GuardrailConfig.audit_caller_headers``). Request side only — the
+    # CheckResponse proto carries no headers.
+    caller: str = ""

@@ -24,9 +24,12 @@ and a dedicated lock on append/evaluate.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import time
 import uuid
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -73,6 +76,9 @@ class EngineComponents:
     # tests to control substitutions deterministically.
     redactor: RedactionScanner | None = None
     invariant: InvariantEngine | None = None
+    # The rule pack the invariant engine was built from; tracked so the audit
+    # record can carry ``rules_version`` (A-P1-1). None -> version omitted.
+    rule_pack: RulePack | None = None
     aggregator: DecisionAggregator = field(default_factory=lambda: DecisionAggregator())
     observability: Observability | None = None
 
@@ -91,6 +97,21 @@ class GuardrailEngine:
         if config.enable_redaction:
             self._redactor = components.redactor or RedactionScanner()
         self._ready = False
+        # A-P1-1: rules_version surfaced in every audit line. reload_rules
+        # swaps in a FRESH RulePack (whose internal version restarts at 0),
+        # so the engine keeps a monotonic version: the pack's version at
+        # construction plus one per successful reload.
+        self._rules_version: int | str = (
+            components.rule_pack.version if components.rule_pack is not None else ""
+        )
+        # A-P1-1: sidecar version for the audit line (env override via
+        # GUARDRAIL_VERSION, else the package __version__).
+        self._sidecar_version = config.sidecar_version or _package_version()
+        # A-P0-4: sliding window of recent scan outcomes (True = ok,
+        # False = error/timeout) feeding the runtime health verdict.
+        self._scan_health: deque[bool] = deque(
+            maxlen=max(1, config.unhealthy_scanner_window)
+        )
 
     # ------------------------------------------------------------------
     # Factories
@@ -186,6 +207,7 @@ class GuardrailEngine:
             response_scanners=response_scanners,
             second_stage_scanners=second_stage,
             invariant=invariant,
+            rule_pack=rule_pack,
             aggregator=aggregator,
             observability=obs,
         )
@@ -250,6 +272,28 @@ class GuardrailEngine:
     def ready(self) -> bool:
         return self._ready
 
+    @property
+    def healthy(self) -> bool:
+        """Runtime health verdict (A-P0-4), driving gRPC health.
+
+        False when (a) warmup has not completed (``awarm`` still running —
+        the server must stay out of rotation), or (b) the sliding-window
+        scanner error/timeout rate exceeds
+        ``config.unhealthy_scanner_error_rate`` once at least
+        ``config.unhealthy_scanner_min_samples`` scan invocations were
+        recorded. The verdict recovers automatically as old failures age out
+        of the window. Tracked independently of ``FAILURE_MODE``: under
+        ``failOpen`` exchanges still flow, but the degradation flips health
+        to NOT_SERVING so the dataplane/orchestrator can see it.
+        """
+        if not self._ready:
+            return False
+        samples = len(self._scan_health)
+        if samples < max(1, self._cfg.unhealthy_scanner_min_samples):
+            return True
+        errors = sum(1 for ok in self._scan_health if not ok)
+        return (errors / samples) <= self._cfg.unhealthy_scanner_error_rate
+
     def reload_rules(self) -> int:
         """Hot-reload the Invariant rule pack (SIGHUP handler).
 
@@ -259,12 +303,41 @@ class GuardrailEngine:
         engine is configured. Safe to call while requests are in flight:
         :meth:`InvariantEngine.set_rules` replaces the rule-list reference, so
         an evaluation already in progress keeps iterating the old list.
+
+        A-P1-3: success AND failure both emit a ``rules_reload`` audit line
+        (with the new ``rules_version`` / error detail) and bump the
+        ``mcp.guardrails.rules_reload{result}`` counter, so a broken reload
+        is visible in the durable audit record — not just stderr.
         """
         if self._c.invariant is None:
             return 0
-        fresh = RulePack.from_env()
+        try:
+            fresh = RulePack.from_env()
+        except Exception as exc:
+            self._obs.record_reload_audit(
+                ok=False,
+                rules_version=self._rules_version,
+                error=f"{type(exc).__name__}:{exc}",
+                sidecar_version=self._sidecar_version,
+            )
+            raise
         self._c.invariant.set_rules(fresh.rules)
-        logger.info("invariant rules reloaded (v%s, %d rules)", fresh.version, len(fresh.rules))
+        # The fresh pack's internal version restarts at 0 (it is a new
+        # object), so the engine keeps its own monotonic version.
+        if isinstance(self._rules_version, int):
+            self._rules_version += 1
+        else:
+            self._rules_version = fresh.version
+        self._c.rule_pack = fresh
+        self._obs.record_reload_audit(
+            ok=True,
+            rules_version=self._rules_version,
+            rule_count=len(fresh.rules),
+            sidecar_version=self._sidecar_version,
+        )
+        logger.info(
+            "invariant rules reloaded (v%s, %d rules)", self._rules_version, len(fresh.rules)
+        )
         return len(fresh.rules)
 
     # ------------------------------------------------------------------
@@ -281,7 +354,10 @@ class GuardrailEngine:
         headers: Mapping[str, str],
         upstream_transport: str = "",
         route_name: str = "",
+        exchange_id: str = "",
     ) -> Decision:
+        start = time.perf_counter()
+        caller = _whitelisted_caller(headers, self._cfg.audit_caller_headers)
         ctx = McpCallContext(
             method=method,
             service_names=tuple(service_names),
@@ -290,9 +366,18 @@ class GuardrailEngine:
             headers=dict(headers),
             upstream_transport=upstream_transport,
             route_name=route_name,
+            exchange_id=exchange_id,
+            caller=caller,
         )
+        # PR-#65 semantics: the ref is ALWAYS an engine-minted random uuid8
+        # (unique, unguessable) — it is what the wire deny reason exposes.
+        # The servicer-supplied exchange_id is a separate audit-only
+        # correlation field; it must never become the wire ref, otherwise a
+        # dataplane-supplied (potentially guessable) id leaks onto the wire.
         ref = uuid.uuid4().hex[:8]
-        texts, truncated, scanned_bytes, total_bytes = self._scan_chunks(extract_text(params))
+        extracted = extract_text(params)
+        texts, truncated, scanned_bytes, total_bytes = self._scan_chunks(extracted)
+        payload_sha256 = _payload_digest(extracted)
         ctx_with_trunc = _with_scan_coverage(ctx, truncated, scanned_bytes, total_bytes)
 
         with self._obs.span(
@@ -301,6 +386,11 @@ class GuardrailEngine:
             tool=tool_name,
             transport=upstream_transport,
         ) as attrs:
+            attrs["exchange_id"] = exchange_id or ref
+            if caller:
+                attrs["caller"] = caller
+            attrs["payload_sha256"] = payload_sha256
+            attrs["rules_version"] = self._rules_version
             results: list[ScanResult] = []
             results.extend(self._payload_size_results(total_bytes, scanned_bytes))
 
@@ -353,6 +443,10 @@ class GuardrailEngine:
                 tool_name=tool_name,
                 ctx=ctx_with_trunc,
                 decision=decision,
+                payload_sha256=payload_sha256,
+                rules_version=self._rules_version,
+                sidecar_version=self._sidecar_version,
+                duration_ms=(time.perf_counter() - start) * 1000.0,
             )
             return decision
 
@@ -364,16 +458,25 @@ class GuardrailEngine:
         result: Any,
         upstream_transport: str = "",
         route_name: str = "",
+        exchange_id: str = "",
     ) -> Decision:
+        start = time.perf_counter()
         ctx = McpCallContext(
             method=method,
             service_names=tuple(service_names),
             result=result,
             upstream_transport=upstream_transport,
             route_name=route_name,
+            exchange_id=exchange_id,
         )
+        # A-P0-1 / PR-#65: ref is always an engine-minted random uuid8 (see
+        # check_request). When the dataplane supplies the same exchange_id on
+        # both RPCs of an exchange, the two audit lines still grep together
+        # via the exchange_id field.
         ref = uuid.uuid4().hex[:8]
-        texts, truncated, scanned_bytes, total_bytes = self._scan_chunks(extract_text(result))
+        extracted = extract_text(result)
+        texts, truncated, scanned_bytes, total_bytes = self._scan_chunks(extracted)
+        payload_sha256 = _payload_digest(extracted)
         ctx_with_trunc = _with_scan_coverage(ctx, truncated, scanned_bytes, total_bytes)
 
         with self._obs.span(
@@ -381,6 +484,9 @@ class GuardrailEngine:
             method=method,
             transport=upstream_transport,
         ) as attrs:
+            attrs["exchange_id"] = exchange_id or ref
+            attrs["payload_sha256"] = payload_sha256
+            attrs["rules_version"] = self._rules_version
             results: list[ScanResult] = []
             results.extend(self._payload_size_results(total_bytes, scanned_bytes))
             first_stage: list[ScanResult] = []
@@ -432,9 +538,16 @@ class GuardrailEngine:
             self._obs.record_decision(
                 phase="response",
                 method=method,
+                # Response side has no tool name on the wire (the JSON-RPC
+                # envelope id is not forwarded); the exchange_id, method and
+                # route provide the correlation instead (A-P0-1).
                 tool_name="",
                 ctx=ctx_with_trunc,
                 decision=decision,
+                payload_sha256=payload_sha256,
+                rules_version=self._rules_version,
+                sidecar_version=self._sidecar_version,
+                duration_ms=(time.perf_counter() - start) * 1000.0,
             )
             return decision
 
@@ -518,6 +631,7 @@ class GuardrailEngine:
         if n == 0:
             return None, 0
         attrs["redactions"] = n
+        self._obs.record_redactions(n)  # A-P1-2: redactions_total counter
         return redacted, n
 
     async def _run_scanners(
@@ -545,13 +659,16 @@ class GuardrailEngine:
                         timeout=timeout,
                     )
                     attrs["outcome"] = result.outcome.value
+                    self._scan_health.append(True)  # A-P0-4
                     return result
                 except asyncio.TimeoutError:
                     attrs["outcome"] = "timeout"
+                    self._scan_health.append(False)  # A-P0-4
                     return self._failure_result(name, f"timeout>{self._cfg.scanner_timeout_ms}ms")
                 except Exception as exc:
                     attrs["outcome"] = "error"
                     attrs["error"] = f"{type(exc).__name__}:{exc}"
+                    self._scan_health.append(False)  # A-P0-4
                     return self._failure_result(name, f"error:{type(exc).__name__}:{exc}")
 
         return list(await asyncio.gather(*(_scan_one(s) for s in scanners)))
@@ -597,3 +714,43 @@ def _with_scan_coverage(
     return replace(
         ctx, truncated=truncated, scanned_bytes=scanned_bytes, total_bytes=total_bytes
     )
+
+
+def _package_version() -> str:
+    """Sidecar version for audit lines; empty string when unresolvable."""
+    try:
+        from . import __version__
+
+        return __version__
+    except Exception:  # pragma: no cover - defensive
+        return ""
+
+
+def _whitelisted_caller(
+    headers: Mapping[str, str], whitelist: Sequence[str]
+) -> str:
+    """Return the first whitelisted caller header value (A-P1-1).
+
+    Header lookup is case-insensitive (HTTP/2 lowercases, but tests and
+    alternate dataplanes may not). Only headers named in
+    ``GuardrailConfig.audit_caller_headers`` are ever copied — arbitrary
+    headers can carry bearer tokens / cookies and must not reach the audit
+    log.
+    """
+    if not whitelist:
+        return ""
+    lowered = {str(k).lower(): v for k, v in headers.items()}
+    for name in whitelist:
+        value = lowered.get(name.lower())
+        if value:
+            return str(value)[:256]
+    return ""
+
+
+def _payload_digest(text: str) -> str:
+    """12-hex-char SHA-256 prefix of the scanned text (A-P1-1).
+
+    Lets an operator prove two audit lines saw the same payload without the
+    audit log storing any payload content.
+    """
+    return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()[:12]

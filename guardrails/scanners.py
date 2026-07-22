@@ -389,8 +389,11 @@ class AgentAlignmentScanner:
             return ScanResult.review(self.name, f"config_error:{exc}")
         except Exception as exc:
             # LLM API failure — return HUMAN_REVIEW (fail-soft, the aggregator
-            # resolves per HUMAN_REVIEW_MODE)
-            return ScanResult.review(self.name, f"llm_error:{type(exc).__name__}:{exc}")
+            # resolves per HUMAN_REVIEW_MODE). The reason records the
+            # exception TYPE only: SDK exception text can embed request
+            # content / credentials / endpoint details that must not reach
+            # the audit log.
+            return ScanResult.review(self.name, f"llm_error:{type(exc).__name__}")
         return result
 
     def _evaluate(self, content: str) -> ScanResult:
@@ -423,13 +426,28 @@ class AgentAlignmentScanner:
             compromised = bool(parsed.get("conclusion", False))
             observation = str(parsed.get("observation", ""))
         except (json.JSONDecodeError, KeyError):
-            # Can't parse LLM output — treat as HUMAN_REVIEW (conservative)
-            return ScanResult.review(self.name, f"unparseable_llm_output:{raw[:100]}")
+            # Can't parse LLM output — treat as HUMAN_REVIEW (conservative).
+            # A-P0-2: the raw LLM text is attacker-influenced (the scanned
+            # content is part of the prompt) and must NOT land in the audit
+            # log. Record only the parse failure plus a length fingerprint
+            # (LLM output is free text -> low-entropy tier: length only, no
+            # digest), so operators can correlate repeats without storing
+            # model output verbatim.
+            return ScanResult.review(
+                self.name,
+                "unparseable_llm_output "
+                f"({_match_fingerprint(raw, high_entropy=False)})",
+            )
 
         if compromised:
+            # A-P0-2: the LLM ``observation`` is free text derived from
+            # attacker-influenced content — never write it into the reason
+            # (which is persisted verbatim in the audit log). Record the
+            # verdict plus a length fingerprint only.
             return ScanResult.block(
                 self.name,
-                f"AgentAlignment: compromised — {observation}",
+                "AgentAlignment: compromised "
+                f"(observation {_match_fingerprint(observation, high_entropy=False)})",
                 0.95,
             )
         return ScanResult.allow(self.name)

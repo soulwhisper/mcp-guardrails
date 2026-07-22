@@ -201,6 +201,32 @@ class GuardrailConfig:
     otel_endpoint: str | None = None
     otel_service_name: str = "mcp-guardrails"
     audit_log_path: str | None = None
+    # A-P1-1: whitelist of request headers (case-insensitive, first match
+    # wins) whose value is copied into the audit line's ``caller`` field.
+    # Anything NOT in this list never reaches the audit log (headers may
+    # carry bearer tokens / cookies). The default deliberately excludes
+    # ``x-session-id``: a session id is a quasi-credential (session
+    # hijacking / cross-log correlation) and must not land in the durable
+    # audit log unless an operator explicitly opts in.
+    audit_caller_headers: tuple[str, ...] = ("x-forwarded-user",)
+    # Sidecar version string recorded in every audit line
+    # (``sidecar_version``). Defaults to the package ``__version__``; the env
+    # override exists for builds that stamp a different release identity
+    # (e.g. an internal fork tag).
+    sidecar_version: str = ""
+
+    # --- Runtime health degradation (A-P0-4) ---
+    # Sliding-window scanner error/timeout rate: when the rate over the last
+    # ``unhealthy_scanner_window`` scan invocations exceeds
+    # ``unhealthy_scanner_error_rate`` (and at least
+    # ``unhealthy_scanner_min_samples`` invocations were seen), the engine
+    # reports unhealthy and the gRPC health service flips to NOT_SERVING
+    # (recovering automatically once the rate drops below the threshold).
+    # Tracked regardless of FAILURE_MODE — failOpen still surfaces the
+    # degradation via health/metrics.
+    unhealthy_scanner_error_rate: float = 0.5
+    unhealthy_scanner_window: int = 100
+    unhealthy_scanner_min_samples: int = 20
 
     # --- Misc ---
     dry_run: bool = False
@@ -266,6 +292,15 @@ class GuardrailConfig:
             otel_endpoint=otel,
             otel_service_name=os.environ.get("OTEL_SERVICE_NAME", "mcp-guardrails"),
             audit_log_path=os.environ.get("AUDIT_LOG_PATH") or None,
+            audit_caller_headers=tuple(
+                h.strip().lower()
+                for h in os.environ.get("AUDIT_CALLER_HEADERS", "x-forwarded-user").split(",")
+                if h.strip()
+            ),
+            sidecar_version=os.environ.get("GUARDRAIL_VERSION", ""),
+            unhealthy_scanner_error_rate=_env_float("UNHEALTHY_SCANNER_ERROR_RATE", 0.5),
+            unhealthy_scanner_window=_env_int("UNHEALTHY_SCANNER_WINDOW", 100),
+            unhealthy_scanner_min_samples=_env_int("UNHEALTHY_SCANNER_MIN_SAMPLES", 20),
             dry_run=_env_bool("GUARDRAIL_DRY_RUN", False),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         )

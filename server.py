@@ -46,12 +46,39 @@ async def serve() -> None:
     )
     server.add_insecure_port(config.listen_addr)
 
-    # Health check: SERVING only after the engine is warmed up so the
-    # readinessProbe keeps the Pod out of rotation during model load.
+    # Health check: starts NOT_SERVING and is driven by a background task
+    # that follows ``engine.healthy`` — SERVING only after warmup completes,
+    # and flipped back to NOT_SERVING when the sliding-window scanner
+    # error/timeout rate exceeds UNHEALTHY_SCANNER_ERROR_RATE (A-P0-4).
+    # Recovers automatically once the failure rate drops back below the
+    # threshold. The readinessProbe keeps the Pod out of rotation during
+    # model load; the same signal now also drains an unhealthy sidecar.
     health_servicer = health.aio.HealthServicer()
     health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
-    await health_servicer.set("", health_pb2.HealthCheckResponse.SERVING)
-    await health_servicer.set("ExtMcp", health_pb2.HealthCheckResponse.SERVING)
+    await health_servicer.set("", health_pb2.HealthCheckResponse.NOT_SERVING)
+    await health_servicer.set("ExtMcp", health_pb2.HealthCheckResponse.NOT_SERVING)
+
+    async def _health_watchdog(period_s: float = 2.0) -> None:
+        last: bool | None = None
+        while True:
+            healthy = engine.healthy
+            if healthy != last:
+                status = (
+                    health_pb2.HealthCheckResponse.SERVING
+                    if healthy
+                    else health_pb2.HealthCheckResponse.NOT_SERVING
+                )
+                await health_servicer.set("", status)
+                await health_servicer.set("ExtMcp", status)
+                if last is not None:
+                    logger.warning(
+                        "health transitioned to %s (scanner error-rate degradation)",
+                        "SERVING" if healthy else "NOT_SERVING",
+                    )
+                last = healthy
+            await asyncio.sleep(period_s)
+
+    health_task = asyncio.create_task(_health_watchdog())
 
     stop_event = asyncio.Event()
 
@@ -79,6 +106,9 @@ async def serve() -> None:
 
     await stop_event.wait()
     logger.info("draining connections (grace=%ss)", _GRACE_SECS)
+    health_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await health_task
     await server.stop(grace=_GRACE_SECS)
     await health_servicer.enter_graceful_shutdown()
     await server.wait_for_termination()

@@ -442,6 +442,18 @@ stays `NOT_SERVING`, the readiness probe never passes, and the Pod is
 removed from the Service endpoints. No traffic reaches a half-initialised
 sidecar.
 
+The same health signal doubles as a **runtime degradation** verdict
+(A-P0-4): a background watchdog re-evaluates `engine.healthy` every 2s.
+The engine keeps a sliding window of the last
+`UNHEALTHY_SCANNER_WINDOW` (default 100) scanner invocations; once at
+least `UNHEALTHY_SCANNER_MIN_SAMPLES` (default 20) invocations are
+recorded and the error/timeout fraction exceeds
+`UNHEALTHY_SCANNER_ERROR_RATE` (default 0.5), health flips to
+`NOT_SERVING` — and flips back automatically as the failures age out of
+the window. The rate is tracked under `failOpen` too, so a degraded
+scanner is visible to the orchestrator even when exchanges are still
+being allowed.
+
 ### Malformed JSON
 
 The servicer's `_safe_json_loads` catches `json.JSONDecodeError` and
@@ -502,7 +514,11 @@ kubectl exec -n agent-system deploy/mcp-guardrails -- kill -HUP 1
 
 If the new rule pack fails to load (syntax error, missing `RULES`
 attribute), the handler logs a warning and the old rules stay active — a
-broken reload cannot leave the sidecar rule-less.
+broken reload cannot leave the sidecar rule-less. Both outcomes are also
+recorded durably: every reload attempt emits a
+`{"event": "rules_reload", "ok": …, "rules_version": …, "error": …}` audit
+line and bumps the `mcp.guardrails.rules_reload{result=success|error}`
+counter (A-P1-3).
 
 ## Observability
 
@@ -517,12 +533,22 @@ line per decision. Defaults to stdout when `AUDIT_LOG_PATH` is unset or
 ```json
 {
   "ts": 1730000000,
+  "ts_ms": 1730000000123.456,
   "phase": "request",
   "method": "tools/call",
   "tool": "email_send",
   "outcome": "deny",
-  "reason": "regex:hidden_ascii:block:hidden/control unicode detected (match='‮')",
+  "reason": "regex:hidden_ascii:block:hidden/control unicode detected (match_len=1 match_sha256=a1b2c3d4e5f6)",
+  "ref": "f9c27670",
+  "exchange_id": "gw-req-42",
+  "caller": "alice",
+  "payload_sha256": "0a1b2c3d4e5f",
+  "rules_version": 3,
+  "sidecar_version": "0.3.5",
+  "duration_ms": 4.21,
   "truncated": false,
+  "scanned_bytes": 512,
+  "total_bytes": 512,
   "upstream_transport": "streamable_http",
   "route": "filesystem-mcp",
   "scanners": [
@@ -536,6 +562,39 @@ line per decision. Defaults to stdout when `AUDIT_LOG_PATH` is unset or
   ]
 }
 ```
+
+Field notes (Wave-2 audit expansion):
+
+- `ts` is epoch **seconds** as an int; millisecond precision is available
+  via the sibling `ts_ms` field (epoch milliseconds, float). Both are
+  sampled from the same `time.time()` call.
+- `ref` and `exchange_id` are two **distinct** ids. `ref` is always an
+  engine-minted random uuid8: the JSON-RPC payload `id` is
+  attacker-controlled and is never trusted, so the wire deny reason
+  (`denied by content policy (ref …)`) can never be pre-computed or
+  spoofed by a caller. `exchange_id` is the cross-line correlation id,
+  resolved by the servicer only from trusted, dataplane-injected channels:
+  an agentgateway `metadata_context` key (`exchange_id` / `request_id` /
+  `x_request_id` / `trace_id`), else the `x-request-id` header, else a
+  fresh uuid8 fallback. Every accepted candidate is sanitised before use
+  (whitespace stripped, CR/LF and all other C0/C1 control characters
+  removed to prevent audit-log line injection, length capped at 64
+  chars). When the dataplane supplies a stable id, the request- and
+  response-side lines of one MCP exchange grep together on `exchange_id`.
+- `caller` is copied only from the `AUDIT_CALLER_HEADERS` whitelist
+  (default `x-forwarded-user` only — `x-session-id` is a quasi-credential
+  and must be opted in explicitly); other headers never reach the
+  audit log. The response side has no headers on the wire, so `caller` is
+  empty there — correlate via `exchange_id` instead.
+- `payload_sha256` is the 12-hex-char SHA-256 prefix of the scanned text
+  (correlation without storing payload content); `rules_version` is the
+  monotonic rule-pack version; `sidecar_version` the build version
+  (`GUARDRAIL_VERSION` override, else the package version); `duration_ms`
+  the decision latency.
+- Scanner reasons never embed raw matches or LLM output: regex matches use
+  the `match_len` / `match_sha256|match_hmac` fingerprint, and
+  AgentAlignment verdicts record only a length fingerprint
+  (`match_len=N`) — raw LLM observations are never persisted.
 
 The audit log is the durable, GitOps-friendly record that survives even
 when OTel collection is down. In K8s, point `AUDIT_LOG_PATH` at a mounted
@@ -553,9 +612,23 @@ importable, `Observability._init_otel` wires up:
   `method`, `tool`, `transport`, `outcome`, `reason`, `duration_ms`, and
   (on the response side) `second_stage` attributes.
 - A `MeterProvider` with a `PeriodicExportingMetricReader` (15s export
-  interval) over `OTLPMetricExporter`. One counter is registered:
-  `mcp.guardrails.decisions{unit=1}` with attributes
-  `{phase, outcome, method}`.
+  interval) over `OTLPMetricExporter`. Instruments registered (all labels
+  are low-cardinality by construction — see the cardinality rule below):
+
+  | Instrument | Type | Labels |
+  |---|---|---|
+  | `mcp.guardrails.decisions` | counter | `phase`, `outcome`, `method` |
+  | `mcp.guardrails.decision_duration_ms` | histogram (ms) | `phase`, `outcome` |
+  | `mcp.guardrails.scanner_results` | counter | `scanner`, `outcome` (incl. `error` / `timeout`) |
+  | `mcp.guardrails.redactions` | counter | — |
+  | `mcp.guardrails.invariant_hits` | counter | `rule` (rule-pack names only) |
+  | `mcp.guardrails.rules_reload` | counter | `result` (`success` / `error`) |
+
+  **Cardinality rule:** metric labels are restricted to bounded enums —
+  phase/outcome/method, configured scanner names, loaded rule-pack rule
+  names, reload result. Per-exchange values (`ref` / `exchange_id`, tool
+  name, caller, payload hashes) must NEVER become metric labels; they
+  belong in the audit log only.
 
 If the SDK is absent or the endpoint is unreachable, the sidecar degrades
 to audit-only operation (a warning is logged at startup). The audit log is

@@ -190,6 +190,20 @@ data:
     #                                   (default: mcp-guardrails)
     #   AUDIT_LOG_PATH               - JSONL audit sink path
     #                                   (default: stdout; set to /dev/null to silence)
+    #   AUDIT_CALLER_HEADERS         - comma-separated whitelist of request
+    #                                   headers copied to the audit `caller`
+    #                                   field (default: x-forwarded-user only;
+    #                                   x-session-id is a quasi-credential and
+    #                                   must be opted in explicitly)
+    #   GUARDRAIL_VERSION            - override for the audit `sidecar_version`
+    #                                   field (default: package version)
+    #
+    # Health degradation (A-P0-4): the gRPC health service flips to
+    # NOT_SERVING when the sliding-window scanner error/timeout rate exceeds
+    # the threshold (and recovers automatically):
+    #   UNHEALTHY_SCANNER_ERROR_RATE   - rate threshold (default: 0.5)
+    #   UNHEALTHY_SCANNER_WINDOW       - sliding window size (default: 100)
+    #   UNHEALTHY_SCANNER_MIN_SAMPLES  - min samples before verdict (default: 20)
     #
     # The rule pack above is the ONLY file-driven config; everything else is
     # knobs on the container env.
