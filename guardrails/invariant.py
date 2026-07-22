@@ -7,7 +7,12 @@ complement to :mod:`guardrails.scanners` (the semantic content layer).
 A rule is a :class:`ToxicFlowRule` describing an ordered *sequence* of tool
 calls that, when observed within the sliding window, indicates a dangerous
 agent behaviour — for example ``inbox_read`` followed by ``email_send`` to an
-external recipient (data exfiltration via an email tool).
+external recipient (data exfiltration via an email tool). Companion rule
+shapes cover the non-sequential signatures: :class:`LoopRule` (identical-call
+retry storms), :class:`RateLimitRule` (per-tool sliding time-window call
+rate) and :class:`AggregateRule` (sliding time-window cumulative budget over
+an argument field). ``FlowStep(negate=True)`` adds negative guards to
+sequences ("A then C with no B between").
 
 The engine is deliberately dependency-free and synchronous; rule evaluation is
 microsecond-order, so no ``to_thread`` wrapping is required.
@@ -75,11 +80,23 @@ class FlowStep:
     ``args_any`` — if True, the step matches any args (only the tool name is
                    checked). Defaults to False; when ``args`` is empty the step
                    also matches any args.
+    ``negate``   — if True, the step is a *negative guard* instead of a
+                   positive step: it never advances the sequence, but while
+                   it is armed (between the previously matched positive step
+                   and the next positive step) any trace entry matching it
+                   VOIDS the whole match in progress. Use this for
+                   "A then C, with no B in between" patterns (e.g.
+                   inbox_read -> email_send with no approval call between).
+                   Negate steps at the start of a rule guard from the
+                   beginning of the window; trailing negate steps are armed
+                   until the rule completes (which it does as soon as no
+                   positive steps remain).
     """
 
     tool: ToolMatcher
     args: Mapping[str, ValueMatcher] = field(default_factory=dict)
     args_any: bool = False
+    negate: bool = False
     _tool_fn: Callable[[str], bool] = field(init=False, repr=False)
     _arg_fns: tuple[tuple[str, Callable[[Any], bool]], ...] = field(init=False, repr=False)
 
@@ -169,16 +186,47 @@ class ToxicFlowRule:
         flow matched; the engine keeps that progress in its sticky map so a
         flow whose early steps slide out of the rolling window is not lost
         (S-H4). A full match returns ``(self.name, len(self.steps))``.
+
+        Negate guards (``FlowStep(negate=True)``): while armed — between the
+        previously matched positive step and the next positive step — an
+        entry matching a negate step VOIDS the progress made so far: matching
+        restarts from step 0 with the remaining trace (so a later clean
+        sequence can still fire in the same pass). If nothing re-matches,
+        ``(None, 0)`` results; because 0 < ``start_step`` the engine then
+        also drops any parked sticky progress for this rule — a voided flow
+        cannot resume from the negated prefix.
         """
         if not self.steps or start_step >= len(self.steps):
             return None, start_step
         step_idx = start_step
         for entry in trace:
-            step = self.steps[step_idx]
+            # Resolve the next positive step, collecting the negate guards
+            # armed between the last matched positive step and it.
+            pos = step_idx
+            while pos < len(self.steps) and self.steps[pos].negate:
+                pos += 1
+            # Negate guards: a hit voids the progress made so far and
+            # matching restarts from step 0 with the entries that follow.
+            if any(
+                self.steps[guard].matches(entry.tool, entry.args) for guard in range(step_idx, pos)
+            ):
+                step_idx = 0
+                continue
+            if pos >= len(self.steps):
+                # Only trailing negate guards remain and none fired on this
+                # entry: the flow completed when the last positive step
+                # matched.
+                return self.name, len(self.steps)
+            step = self.steps[pos]
             if step.matches(entry.tool, entry.args):
-                step_idx += 1
-                if step_idx == len(self.steps):
-                    return self.name, step_idx
+                step_idx = pos + 1
+                # Completion: no positive steps remain (trailing negate
+                # guards stay armed only until this point).
+                nxt = step_idx
+                while nxt < len(self.steps) and self.steps[nxt].negate:
+                    nxt += 1
+                if nxt >= len(self.steps):
+                    return self.name, len(self.steps)
         return None, step_idx
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
@@ -238,11 +286,19 @@ class TraceEntry:
     ``args`` may be a size-bounded copy (see :func:`_truncate_args`); the
     fingerprint is computed from the FULL original args at record time and
     stored in ``fp`` so loop detection is unaffected by truncation.
+
+    ``ts`` is the :func:`time.monotonic` timestamp of when the call was
+    recorded, written by :meth:`InvariantEngine.record`. Time-windowed rules
+    (:class:`RateLimitRule`, :class:`AggregateRule`) consume it. It defaults
+    to ``0.0`` for backwards compatibility with hand-constructed entries;
+    windowed rules treat a ``0.0`` timestamp as "now" (legacy entries count
+    as inside the current window).
     """
 
     tool: str
     args: Mapping[str, Any] = field(default_factory=dict)
     fp: str = ""
+    ts: float = 0.0
 
     def fingerprint(self) -> str:
         """Stable identity for loop detection — tool + sorted args JSON.
@@ -286,8 +342,148 @@ class LoopRule:
         return f"LoopRule(name={self.name!r}, threshold={self.threshold})"
 
 
+def _window_cutoff(now: float, window_s: float) -> float:
+    return now - max(0.0, window_s)
+
+
+def _entry_ts(entry: TraceEntry, now: float) -> float:
+    """Effective timestamp: legacy entries (``ts == 0.0``) count as "now".
+
+    Hand-constructed entries predate the ``ts`` field; treating them as
+    current keeps old tests/packs meaningful under time-windowed rules.
+    """
+    return entry.ts if entry.ts > 0.0 else now
+
+
+@dataclass
+class RateLimitRule:
+    """Sliding time-window rate limit, counted per tool name.
+
+    Fires when, within the trace for one key, any single tool whose name
+    matches ``tool`` is called more than ``max_calls`` times inside the last
+    ``window_s`` seconds (by ``TraceEntry.ts``). Counting is grouped per
+    concrete tool name, so with the wildcard matcher (``"*"`` — the only
+    matcher treated as match-everything here) each tool gets its own budget
+    rather than all tools sharing one.
+
+    Unlike :class:`LoopRule` (identical args) this models volumetric abuse
+    with *varying* args — e.g. a compromised agent enumerating records or
+    spraying messages as fast as the gateway allows. Evaluation recomputes
+    the window from entry timestamps on every call, so entries sliding out
+    of the time window stop counting immediately (no persistent ledger).
+    """
+
+    name: str
+    tool: ToolMatcher = "*"
+    window_s: float = 60.0
+    max_calls: int = 30
+    description: str = ""
+    _tool_fn: Callable[[str], bool] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.max_calls < 1:
+            raise ValueError("RateLimitRule max_calls must be >= 1")
+        if self.window_s <= 0:
+            raise ValueError("RateLimitRule window_s must be > 0")
+        if self.tool == "*":
+            self._tool_fn = lambda _name: True
+        else:
+            self._tool_fn = _compile_tool(self.tool)
+
+    def match(self, trace: Sequence[TraceEntry]) -> str | None:
+        now = time.monotonic()
+        cutoff = _window_cutoff(now, self.window_s)
+        counts: dict[str, int] = {}
+        for entry in trace:
+            if not self._tool_fn(entry.tool):
+                continue
+            if _entry_ts(entry, now) < cutoff:
+                continue
+            counts[entry.tool] = counts.get(entry.tool, 0) + 1
+            if counts[entry.tool] > self.max_calls:
+                return self.name
+        return None
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"RateLimitRule(name={self.name!r}, max_calls={self.max_calls}, "
+            f"window_s={self.window_s})"
+        )
+
+
+@dataclass
+class AggregateRule:
+    """Sliding time-window SUM of a numeric argument field, per trace key.
+
+    Fires when the sum of ``cast(args[field])`` over calls matching ``tool``
+    within the last ``window_s`` seconds exceeds ``max_total``. Typical uses
+    are cumulative-budget policies that a per-call rule cannot express:
+    total bytes exfiltrated (``args.size``), total recipients contacted,
+    total rows read — an agent staying under every per-call limit but
+    bleeding the budget over many calls.
+
+    The window is recomputed from entry timestamps on every evaluation
+    (same approach as :class:`RateLimitRule`): contributions slide out of
+    the time window exactly — decrementing is implicit, there is no
+    persistent accumulator to drift or reset. This was chosen over a
+    TTL-reset ledger because the semantics are trivially explainable
+    ("sum over the last N seconds") and identical across restarts.
+
+    ``cast`` converts the resolved field value to a number (default
+    ``float``); entries whose field is missing, ``None``, or fails the cast
+    contribute 0 (they do not fire the rule and are not errors).
+    """
+
+    name: str
+    field: str
+    max_total: float
+    tool: ToolMatcher = "*"
+    window_s: float = 3600.0
+    cast: Callable[[Any], float] = float
+    description: str = ""
+    _tool_fn: Callable[[str], bool] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if not self.field:
+            raise ValueError("AggregateRule field must be non-empty")
+        if self.max_total <= 0:
+            raise ValueError("AggregateRule max_total must be > 0")
+        if self.window_s <= 0:
+            raise ValueError("AggregateRule window_s must be > 0")
+        if self.tool == "*":
+            self._tool_fn = lambda _name: True
+        else:
+            self._tool_fn = _compile_tool(self.tool)
+
+    def match(self, trace: Sequence[TraceEntry]) -> str | None:
+        now = time.monotonic()
+        cutoff = _window_cutoff(now, self.window_s)
+        total = 0.0
+        for entry in trace:
+            if not self._tool_fn(entry.tool):
+                continue
+            if _entry_ts(entry, now) < cutoff:
+                continue
+            value = _resolve_path(entry.args, self.field)
+            if value is None:
+                continue
+            try:
+                total += float(self.cast(value))
+            except (TypeError, ValueError):
+                continue
+            if total > self.max_total:
+                return self.name
+        return None
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"AggregateRule(name={self.name!r}, field={self.field!r}, "
+            f"max_total={self.max_total}, window_s={self.window_s})"
+        )
+
+
 # Any object exposing ``match(trace) -> Optional[str]`` and a ``name``.
-Rule = ToxicFlowRule | LoopRule
+Rule = ToxicFlowRule | LoopRule | RateLimitRule | AggregateRule
 
 
 class InvariantEngine:
@@ -311,13 +507,13 @@ class InvariantEngine:
 
     def __init__(
         self,
-        rules: Iterable[ToxicFlowRule],
+        rules: Iterable[Rule],
         window: int = 256,
         max_traces: int = 1024,
         args_max_bytes: int = 4 * 1024,
         sticky_ttl_s: float = 600.0,
     ):
-        self._rules: list[ToxicFlowRule] = list(rules)
+        self._rules: list[Rule] = list(rules)
         self._traces: OrderedDict[str, deque[TraceEntry]] = OrderedDict()
         self._window = window
         self._max_traces = max(1, max_traces)
@@ -332,7 +528,7 @@ class InvariantEngine:
         self._sticky: OrderedDict[tuple[str, str], tuple[int, float]] = OrderedDict()
 
     @property
-    def rules(self) -> tuple[ToxicFlowRule, ...]:
+    def rules(self) -> tuple[Rule, ...]:
         return tuple(self._rules)
 
     @property
@@ -356,7 +552,7 @@ class InvariantEngine:
             self._traces.move_to_end(key)
         return trace
 
-    def set_rules(self, rules: Iterable[ToxicFlowRule]) -> None:
+    def set_rules(self, rules: Iterable[Rule]) -> None:
         """Atomically swap the active rule list.
 
         Replaces the ``self._rules`` reference wholesale rather than mutating
@@ -425,7 +621,7 @@ class InvariantEngine:
         full_args = dict(args or {})
         fp = f"{tool}:{json.dumps(full_args, sort_keys=True, default=str)}"
         stored = _truncate_args(full_args, self._args_max_bytes)
-        self._get_trace(key).append(TraceEntry(tool=tool, args=stored, fp=fp))
+        self._get_trace(key).append(TraceEntry(tool=tool, args=stored, fp=fp, ts=time.monotonic()))
 
     def evaluate(self, *, key: str = "") -> ScanResult | None:
         """Run all rules against the current trace for ``key``.
@@ -453,6 +649,11 @@ class InvariantEngine:
                     # Only new advancement refreshes the TTL — parked progress
                     # that is not extended ages out per sticky_ttl_s.
                     self._set_sticky(key, rule.name, progress, now)
+                elif progress < start:
+                    # A negate guard fired: match_from returns progress 0 to
+                    # signal "void" — drop the parked sticky prefix too, so a
+                    # negated flow cannot resume from the negated progress.
+                    self._sticky.pop((key, rule.name), None)
                 continue
             hit = rule.match(snapshot)
             if hit is not None:
