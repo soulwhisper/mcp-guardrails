@@ -115,9 +115,16 @@ message McpRequestResult {
 // request-side header_mutation/metadata extension fields.
 ```
 
-The sidecar currently emits only `pass`, `mutated`, and `error`.
-`header_mutation` and `metadata` are parsed/ignored safely and reserved for
-future policy outputs.
+The sidecar emits `pass`, `mutated`, and `error`, and populates
+`McpRequestResult.metadata` on every request-side verdict with
+`guardrail.scan_score` (max scanner score), `guardrail.rules_hit`
+(invariant rules that fired), `guardrail.redactions` (substitution count),
+`guardrail.exchange_id` and `guardrail.outcome` (`allow` / `mutated` /
+`deny`). `McpResponseResult` has no `metadata` field in the proto, so
+metadata is request-side only. `header_mutation` is deliberately not
+emitted: a caller-visible `x-guardrail-ref` header adds nothing over the
+wire `ref` already present in the deny reason (documented in
+`guardrails/servicer.py::_result_metadata`).
 
 ### Upstream contract note
 
@@ -146,8 +153,11 @@ message AuthorizationError {
 
 The servicer emits `PERMISSION_DENIED` for aggregator denies and `INVALID`
 for JSON parse failures on the incoming `mcp_request` / `mcp_response`
-bytes. `mcp_error` is reserved for future use when the sidecar needs to
-return a full JSON-RPC error body.
+bytes. On policy denies (`PERMISSION_DENIED`), `mcp_error` carries a
+structured JSON-RPC 2.0 error body: `code: -32001`, `message` equal to the
+generalised wire `reason` (same correlation `ref`), and `data` with a
+generalised policy `category` + `remedy` hint — pattern names, rule
+internals and match detail never leave the audit log.
 
 ### McpHeader and metadata context
 
@@ -190,8 +200,14 @@ scan + invariant trace). The call graph, step by step:
      flag that is folded back into the context for audit.
    - Open an OTel span `guardrail.check_request` with `method`, `tool`,
      `transport` attributes.
-3. **Content scanners** — `_run_scanners(text, role="tool",
-self._c.request_scanners)`:
+3. **Tool ACL** (before any scanner) — for `tools/call` with a non-empty
+   tool name, `_tool_acl_violation(tool, ALLOW_TOOLS, DENY_TOOLS)` denies
+   immediately (`tool_acl` scanner result): DENY list wins, and a non-empty
+   ALLOW list acts as a whitelist (`prefix/*` wildcards supported). An ACL
+   deny short-circuits the content scanners.
+4. **Content scanners** — `_run_scanners(text, role="tool",
+self._c.request_scanners, context=ctx)` (the `McpCallContext` is threaded
+into every scanner's `context` kwarg):
    - `RegexScanner` (zero-dep, always on unless `ENABLE_REGEX_SCANNER=0`)
      — first-match-wins over `default_patterns()`: hidden ASCII, private
      keys, AWS / GitHub / GitLab / Slack tokens, high-entropy blobs,
@@ -203,24 +219,27 @@ self._c.request_scanners)`:
      deadline set to `SCANNER_TIMEOUT_MS / 1000`. Timeouts and exceptions
      are translated per `FAILURE_MODE` (see
      [Failure and timeout handling](#failure-and-timeout-handling)).
-4. **Invariant trace** — under `self._trace_lock` (serialises concurrent
+5. **Invariant trace** — under `self._trace_lock` (serialises concurrent
    requests so traces cannot interleave half-calls):
-   - `self._c.invariant.record(tool_name, params.get("arguments", {}), key=route_name or service_names[0])` —
-     appends a `TraceEntry(tool, args)` to the bounded `deque(maxlen=64)`.
+   - `self._c.invariant.record(tool_name, params.get("arguments", {}), key=trace_key)` —
+     appends a `TraceEntry(tool, args)` to the bounded `deque(maxlen=256)`,
+     only for `tools/call` with a non-empty tool name; `trace_key` is the
+     route name (or `route|header=value` when
+     `INVARIANT_TRACE_KEY_HEADERS` matches).
    - `self._c.invariant.evaluate_or_allow(key=...)` — runs every rule in priority
      order against the resulting trace; first-match wins and returns a
      `BLOCK` `ScanResult`, otherwise `ALLOW`.
-5. **`DecisionAggregator.aggregate(results)`** — combines every
+6. **`DecisionAggregator.aggregate(results)`** — combines every
    `ScanResult` into a single `Decision` (see
    [The DecisionAggregator](#the-decisionaggregator)). Request-side
    redaction of `params.arguments` exists (`REDACT_REQUEST_PARAMS=1`) but is
    **off by default** — a secret in tool-call params is BLOCKed by the
    `RegexScanner`, not rewritten.
-6. **Observability** — set span outcome (`deny` / `mutated` / `allow`),
+7. **Observability** — set span outcome (`deny` / `mutated` / `allow`),
    `record_decision(phase="request", method, tool_name, ctx, decision)`
    emits the JSONL audit line and bumps the
    `mcp.guardrails.decisions{phase="request",outcome,method}` counter.
-7. **`ExtMcpServicer` maps the `Decision` to the proto oneof**:
+8. **`ExtMcpServicer` maps the `Decision` to the proto oneof**:
    - `decision.deny` -> `McpRequestResult{error=PERMISSION_DENIED}`.
    - `decision.is_mutated` -> `McpRequestResult{mutated=<raw json bytes>}`.
    - otherwise -> `McpRequestResult{pass=Pass()}`.
@@ -339,18 +358,31 @@ required.
 
 Traces are **isolated per route**: the engine keys each trace by the request's
 route name (falling back to the first service name), and the InvariantEngine
-keeps one `collections.deque(maxlen=window)` (default `window=64`) per key in
+keeps one `collections.deque(maxlen=window)` (default `window=256`) per key in
 an LRU map bounded by `INVARIANT_MAX_TRACES` (default 1024, least-recently-used
-tenant evicted). This prevents cross-tenant contamination: interleaved calls
+tenant evicted). The trace key is the route name by default; when
+`INVARIANT_TRACE_KEY_HEADERS` is configured and the header is present, the key
+becomes `route|header=value` for per-session isolation (missing header ->
+route dimension). Only `tools/call` requests with a non-empty tool name are
+recorded. This prevents cross-tenant contamination: interleaved calls
 from different agents can neither assemble a cross-tenant toxic flow nor trip
 a loop rule against each other's history, and a key-flooding client cannot
 grow memory without bound.
 
 `record(tool, args, key=...)` appends a `TraceEntry(tool, args)` to the key's
 deque. When the deque is full, the oldest entry is evicted automatically —
-this caps memory and rule-evaluation cost. The window should be large enough
-to span a typical agent tool-use chain (the design default of 64 covers most
-homelab flows).
+this caps memory and rule-evaluation cost (bound: window x
+`INVARIANT_ARGS_MAX_BYTES` x `INVARIANT_MAX_TRACES`). The window should be
+large enough to span a typical agent tool-use chain; the default of 256
+covers long multi-step plans.
+
+**Sticky partial-match progress (S-H4).** When a `ToxicFlowRule` matches a
+PREFIX of its steps (e.g. step 0 of 2), the progress is parked in a sticky
+map keyed `(trace_key, rule_name)` with a TTL (`INVARIANT_STICKY_TTL_S`,
+default 600s) and the same LRU bound as the trace map. Later evaluations
+resume matching from the parked step, so a flow whose early steps slide out
+of the window still completes. Progress that is not extended ages out; a
+full match clears the entry.
 
 ### Ordered subsequence matching (`ToxicFlowRule`)
 
