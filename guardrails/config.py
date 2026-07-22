@@ -93,10 +93,16 @@ class GuardrailConfig:
 
     # --- Content budget ---
     max_content_bytes: int = 32 * 1024
-    # Extra bytes scanned from the TAIL of an over-budget payload, closing the
-    # truncation bypass (an attacker padding a payload so the injection lands
-    # beyond the scanned head). 0 disables tail scanning.
+    # Extra bytes scanned from the MID and TAIL of an over-budget payload,
+    # closing the truncation bypass (an attacker padding a payload so the
+    # injection lands beyond the scanned head — or between the head and
+    # tail windows). 0 disables mid/tail scanning.
     scan_tail_bytes: int = 8 * 1024
+    # Hard payload cap (S-H2). Payloads whose extracted text exceeds this are
+    # still scanned (head/mid/tail windows) but the engine additionally flags
+    # a HUMAN_REVIEW "payload_size" result — HUMAN_REVIEW_MODE then decides
+    # pass+warn vs deny. Bounds the unscanned fraction of giant payloads.
+    scan_max_payload_bytes: int = 1024 * 1024
 
     # --- Scanner enable flags ---
     enable_regex_scanner: bool = True
@@ -107,10 +113,17 @@ class GuardrailConfig:
     # When enabled, the engine structurally rewrites secret/PII material in
     # otherwise-allowed payloads, replacing each match with a fixed
     # `[REDACTED:<TYPE>]` placeholder and forwarding the result via the
-    # proto `mutated` oneof. Runs only after every content scanner has
-    # ALLOWed the exchange — any BLOCK still wins, and HUMAN_REVIEW payloads
-    # are passed+warned without mutation so review semantics are untouched.
+    # proto `mutated` oneof. Runs only when no scanner BLOCKed the exchange
+    # (a BLOCK always wins). HUMAN_REVIEW payloads are also redacted by
+    # default (see redact_on_review).
     enable_redaction: bool = True
+    # S-H3: when True (default), HUMAN_REVIEW payloads still flow through the
+    # redaction transformer — the exchange keeps its review verdict (pass+warn
+    # or deny per HUMAN_REVIEW_MODE) AND carries the mutated payload, so a
+    # review-grade credit card / key=value credential is masked in what the
+    # upstream sees instead of passing through verbatim. False restores the
+    # legacy behaviour (review payloads pass unmutated).
+    redact_on_review: bool = True
     # Request-side redaction is OFF by default: a secret in tool-call params
     # is a signal to BLOCK (the RegexScanner already does), not to silently
     # rewrite the caller's request. Enable only for deployments that
@@ -122,7 +135,7 @@ class GuardrailConfig:
     # call. Payloads beyond the cap skip redaction and pass through
     # unchanged, flagged `redaction_skipped=size` in the audit span. This is
     # a safe trade-off: scanner BLOCK decisions still apply (they run on the
-    # head+tail scan_windows), so block-grade secrets in an over-cap payload
+    # head/mid/tail scan_windows), so block-grade secrets in an over-cap payload
     # are still denied by the RegexScanner upstream — only the best-effort
     # masking of ALLOW-grade PII is skipped.
     redaction_max_bytes: int = 256 * 1024
@@ -138,6 +151,20 @@ class GuardrailConfig:
     # skips the runtime download. None -> resolve via the HF hub cache.
     lf_onnx_local_dir: str | None = None
     lf_promptguard_block_threshold: float = 0.9
+    # PromptGuard sliding-window cap (PG_MAX_WINDOWS). The window budget is
+    # adaptive — it grows with the payload's token length
+    # (clamp(ceil(tokens/step)+1, 4, pg_max_windows)) — and this value is the
+    # hard cap, i.e. the per-chunk latency bound. Default 16: at 512-token
+    # windows / 64-token stride this covers ~7.7K tokens per chunk; larger
+    # payloads still rely on the byte-level head/mid/tail split.
+    pg_max_windows: int = 16
+    # Supply-chain pin (S-M6): HF revision (commit sha) for runtime hub
+    # fetches when LF_ONNX_LOCAL_DIR is unset. The image pre-bakes the model
+    # at build time pinned via the PG2_REVISION build-arg; from_env pins the
+    # same default commit here. If you override LF_ONNX_MODEL you MUST also
+    # set LF_ONNX_REVISION (or "" for latest main, which re-opens the
+    # re-tagging risk).
+    lf_onnx_revision: str | None = None
 
     # --- AgentAlignment LLM (second-stage, opt-in) ---
     # The LLM client reads the API key directly from lf_alignment_api_key.
@@ -151,6 +178,13 @@ class GuardrailConfig:
     # the least-recently-used tenant trace is evicted. Bounds memory against
     # trace-key flooding.
     invariant_max_traces: int = 1024
+    # DoS bound (S-M4): per-entry cap on the arguments copy stored in the
+    # Invariant trace window. Entries whose serialised args exceed this keep
+    # their structure but have long string values truncated, so toxic-flow
+    # arg matchers keep working while a multi-MB argument cannot bloat the
+    # rolling window. The full-args fingerprint is computed BEFORE
+    # truncation, so loop detection is unaffected.
+    invariant_args_max_bytes: int = 4 * 1024
 
     # --- Timing ---
     scanner_timeout_ms: int = 500
@@ -158,6 +192,10 @@ class GuardrailConfig:
     # --- Networking ---
     listen_addr: str = "[::]:9001"
     server_max_workers: int = 8
+    # gRPC hardening (S-M4): bound message size and in-flight RPCs so a
+    # single runaway caller cannot exhaust memory / starve the event loop.
+    grpc_max_recv_bytes: int = 8 * 1024 * 1024
+    grpc_max_concurrent_rpcs: int = 128
 
     # --- Observability ---
     otel_endpoint: str | None = None
@@ -189,11 +227,13 @@ class GuardrailConfig:
             human_review_mode=human_review_mode,
             max_content_bytes=_env_int("MAX_CONTENT_BYTES", 32 * 1024),
             scan_tail_bytes=_env_int("SCAN_TAIL_BYTES", 8 * 1024),
+            scan_max_payload_bytes=_env_int("SCAN_MAX_PAYLOAD_BYTES", 1024 * 1024),
             enable_regex_scanner=_env_bool("ENABLE_REGEX_SCANNER", True),
             enable_promptguard=_env_bool("ENABLE_PROMPTGUARD", True),
             enable_agent_alignment=_env_bool("ENABLE_AGENT_ALIGNMENT", False),
             enable_redaction=_env_bool("ENABLE_REDACTION", True),
             redact_request_params=_env_bool("REDACT_REQUEST_PARAMS", False),
+            redact_on_review=_env_bool("REDACT_ON_REVIEW", True),
             redaction_max_bytes=_env_int("REDACTION_MAX_BYTES", 256 * 1024),
             lf_onnx_model=os.environ.get(
                 "LF_ONNX_MODEL", "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
@@ -201,6 +241,12 @@ class GuardrailConfig:
             lf_onnx_file=os.environ.get("LF_ONNX_FILE", "model.onnx"),
             lf_onnx_local_dir=os.environ.get("LF_ONNX_LOCAL_DIR") or None,
             lf_promptguard_block_threshold=_env_float("LF_PROMPTGUARD_BLOCK_THRESHOLD", 0.9),
+            pg_max_windows=_env_int("PG_MAX_WINDOWS", 16),
+            # Default pin matches the Dockerfile PG2_REVISION build-arg.
+            lf_onnx_revision=os.environ.get(
+                "LF_ONNX_REVISION", "45a05fbd5337a864edc608f994911f009c37ca57"
+            )
+            or None,
             lf_alignment_model=os.environ.get(
                 "LF_ALIGNMENT_MODEL",
                 "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
@@ -211,9 +257,12 @@ class GuardrailConfig:
             lf_alignment_api_key=os.environ.get("LF_ALIGNMENT_API_KEY") or None,
             invariant_window=_env_int("INVARIANT_WINDOW", 64),
             invariant_max_traces=_env_int("INVARIANT_MAX_TRACES", 1024),
+            invariant_args_max_bytes=_env_int("INVARIANT_ARGS_MAX_BYTES", 4 * 1024),
             scanner_timeout_ms=_env_int("SCANNER_TIMEOUT_MS", 500),
             listen_addr=os.environ.get("LISTEN_ADDR", "[::]:9001"),
             server_max_workers=_env_int("SERVER_MAX_WORKERS", 8),
+            grpc_max_recv_bytes=_env_int("GRPC_MAX_RECV_BYTES", 8 * 1024 * 1024),
+            grpc_max_concurrent_rpcs=_env_int("GRPC_MAX_CONCURRENT_RPCS", 128),
             otel_endpoint=otel,
             otel_service_name=os.environ.get("OTEL_SERVICE_NAME", "mcp-guardrails"),
             audit_log_path=os.environ.get("AUDIT_LOG_PATH") or None,
