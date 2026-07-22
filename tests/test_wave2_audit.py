@@ -4,7 +4,8 @@ Covers:
 * A-P0-1 exchange_id correlation (servicer extraction -> engine ref -> wire
   reason -> both audit lines),
 * A-P1-1 audit field expansion (caller, payload_sha256, rules_version,
-  sidecar_version, duration_ms, ms-float ts) + OTel span sync,
+  sidecar_version, duration_ms, int-second ts + float-ms ts_ms) + OTel
+  span sync,
 * A-P0-2 AgentAlignment LLM-output redaction in audit reasons,
 * A-P1-3 rules_reload audit line + counter on success AND failure,
 * A-P0-4 sliding-window scanner error-rate health degradation,
@@ -245,10 +246,14 @@ async def test_audit_line_carries_new_fields():
     assert "rules_version" in rec
     assert rec["sidecar_version"]
     assert isinstance(rec["duration_ms"], float) and rec["duration_ms"] >= 0
-    # ts is now epoch MILLISECONDS as a float.
-    assert isinstance(rec["ts"], float)
-    assert rec["ts"] > 1_000_000_000_000  # > 2001 in ms
-    assert abs(rec["ts"] - time.time() * 1000.0) < 60_000
+    # ts is epoch SECONDS as an int; ts_ms is epoch milliseconds as a
+    # float, sampled from the same clock reading.
+    assert isinstance(rec["ts"], int)
+    assert rec["ts"] > 1_000_000_000  # > 2001 in s
+    assert abs(rec["ts"] - time.time()) < 60
+    assert isinstance(rec["ts_ms"], float)
+    assert rec["ts_ms"] > 1_000_000_000_000  # > 2001 in ms
+    assert abs(rec["ts_ms"] - rec["ts"] * 1000.0) < 1_000
     assert "exchange_id" in rec
 
 
