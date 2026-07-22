@@ -83,6 +83,10 @@ class Decision:
     mutated: Any | None = None
     human_review: bool = False
     scanners: tuple[ScanResult, ...] = field(default_factory=tuple)
+    # Short correlation id minted by the engine per exchange. Recorded in the
+    # audit decision line AND reused by the servicer's generalised deny reason,
+    # so a tenant-reported ``ref`` always greps to the full internal record.
+    ref: str = ""
 
     @property
     def is_mutated(self) -> bool:
@@ -107,3 +111,8 @@ class McpCallContext:
     upstream_transport: str = ""
     route_name: str = ""
     truncated: bool = False
+    # Scan coverage (S-H2): how many UTF-8 bytes of the extracted text the
+    # scanners actually saw vs the payload's total size. Surfaced in the
+    # audit record so operators can spot under-scanned giant payloads.
+    scanned_bytes: int = 0
+    total_bytes: int = 0
