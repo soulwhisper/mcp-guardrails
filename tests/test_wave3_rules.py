@@ -95,6 +95,20 @@ def test_rate_limit_legacy_zero_ts_counts_as_now():
     assert rule.match(trace) == "rl"
 
 
+def test_rate_limit_negative_ts_slides_out_low_uptime_runner():
+    # Regression: on fresh CI runners time.monotonic() < age_s, so
+    # ``time.monotonic() - 60`` is negative. Only ts == 0.0 may count as
+    # "now"; negative ts is "long ago" and must slide out of the window.
+    rule = RateLimitRule(name="rl", tool="*", window_s=30.0, max_calls=2)
+    trace = [
+        TraceEntry(tool="t", ts=-3.858),
+        TraceEntry(tool="t", ts=-3.857),
+        TraceEntry(tool="t", ts=time.monotonic()),
+    ]
+    assert rule.match(trace) is None
+    assert rule.match([_entry("t") for _ in range(3)]) == "rl"
+
+
 def test_rate_limit_validation():
     with pytest.raises(ValueError):
         RateLimitRule(name="rl", max_calls=0)
@@ -142,6 +156,19 @@ def test_aggregate_window_slides_out_exactly():
     ]
     assert rule.match(trace) is None
     # Two in-window contributions summing over the budget fire.
+    trace.append(_entry("fs_read", {"size": 20}))
+    assert rule.match(trace) == "agg"
+
+
+def test_aggregate_negative_ts_slides_out_low_uptime_runner():
+    # Regression: same low-uptime CI scenario as the rate-limit test —
+    # a negative monotonic timestamp is "long ago", not "now".
+    rule = AggregateRule(name="agg", field="size", max_total=100, window_s=30.0)
+    trace = [
+        TraceEntry(tool="fs_read", args={"size": 90}, ts=-63.82),
+        TraceEntry(tool="fs_read", args={"size": 90}, ts=time.monotonic()),
+    ]
+    assert rule.match(trace) is None
     trace.append(_entry("fs_read", {"size": 20}))
     assert rule.match(trace) == "agg"
 
