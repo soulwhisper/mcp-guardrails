@@ -57,9 +57,8 @@ def review_result() -> ScanResult:
 # subprocess-based server lifecycle and are not pytest-test functions.
 collect_ignore = ["field_test.py", "load_test.py"]
 
-# TEMP-DEBUG: CI bisect - ignore new wave3 test files to isolate culprit.
+# TEMP-DEBUG: CI bisect cycle 2 - rules re-enabled; still ignoring scanners+redteam.
 collect_ignore += [
-    "test_wave3_rules.py",
     "test_wave3_scanners.py",
     "test_redteam.py",
 ]
