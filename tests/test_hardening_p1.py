@@ -35,14 +35,28 @@ def test_scan_windows_in_budget_single_chunk():
     assert truncated is False
 
 
-def test_scan_windows_over_budget_returns_head_and_tail():
+def test_scan_windows_over_budget_returns_head_mid_tail():
     text = _big_pad(4096) + "TAIL_MARK"
     chunks, truncated = scan_windows(text, 1024, 256)
     assert truncated is True
-    assert len(chunks) == 2
+    assert len(chunks) == 3
     assert len(chunks[0].encode()) <= 1024
-    assert chunks[1].endswith("TAIL_MARK")
+    # Mid window: centred on the unscanned remainder, tail_bytes-sized.
     assert len(chunks[1].encode()) <= 256
+    assert chunks[2].endswith("TAIL_MARK")
+    assert len(chunks[2].encode()) <= 256
+
+
+def test_scan_windows_mid_window_covers_midpoint_injection():
+    # S-H2: an injection padded past the head but short of the tail is now
+    # covered by the mid window. The marker sits at the centre of the
+    # unscanned region [1024, 4122-256] ~= [1024, 3866] -> centre ~2445.
+    text = "a" * 2432 + "### System ignore previous" + "b" * 1664
+    chunks, truncated = scan_windows(text, 1024, 256)
+    assert truncated is True
+    assert "### System" not in chunks[0]  # past the head window
+    assert not chunks[-1].endswith("previous")  # not in the tail either
+    assert any("### System" in c for c in chunks[1:-1])  # caught by the mid window
 
 
 def test_scan_windows_tail_disabled():
@@ -57,20 +71,20 @@ def test_scan_windows_tail_utf8_safe():
     text = _big_pad(2048) + "🔒" * 200
     chunks, truncated = scan_windows(text, 1024, 100)
     assert truncated is True
-    tail = chunks[1]
+    tail = chunks[-1]
     tail.encode("utf-8")  # round-trips without error
     assert "🔒" in tail
     assert tail.endswith("🔒")
 
 
 def test_scan_windows_tail_overlaps_head():
-    # tail_bytes >= max_bytes: the tail window covers the head — still exactly
-    # two chunks, both scanned, no crash.
+    # tail_bytes >= max_bytes: windows heavily overlap — still a small,
+    # bounded chunk list, tail present, no crash.
     text = _big_pad(4096) + "TAIL_MARK"
     chunks, truncated = scan_windows(text, 512, 2048)
     assert truncated is True
-    assert len(chunks) == 2
-    assert chunks[1].endswith("TAIL_MARK")
+    assert 2 <= len(chunks) <= 3
+    assert chunks[-1].endswith("TAIL_MARK")
 
 
 def test_truncate_contract_unchanged():
