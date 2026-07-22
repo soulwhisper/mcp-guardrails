@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 from google.protobuf.json_format import MessageToDict
@@ -57,6 +58,75 @@ def _extract_metadata(request: Any) -> tuple[str, str]:
     transport = str(md.get("upstream_transport", "") or "")
     route = str(md.get("route_name", "") or "")
     return transport, route
+
+
+# metadata_context keys probed for a per-exchange correlation id, in priority
+# order. agentgateway deployments can inject any of these (e.g. from an
+# x-request-id header at the gateway edge) to make the request/response
+# audit lines of one MCP exchange grep together.
+_EXCHANGE_ID_METADATA_KEYS = ("exchange_id", "request_id", "x_request_id", "trace_id")
+
+
+def _sanitize_exchange_id(value: Any) -> str:
+    """Reduce a candidate correlation id to a log-safe token.
+
+    Strips whitespace, removes CR/LF and every other C0/C1 control character
+    (a raw ``\\n`` would otherwise allow audit-log line injection), and caps
+    the length at 64 chars so a garbage id cannot bloat the audit line.
+    Returns "" when nothing usable remains (caller falls through to the next
+    resolution source / uuid8).
+    """
+    text = str(value).strip()
+    # C0 controls (incl. \r \n \t), DEL and C1 controls.
+    cleaned = "".join(
+        ch for ch in text if ch >= " " and ch != "\x7f" and not "\x80" <= ch <= "\x9f"
+    )
+    return cleaned[:64]
+
+
+def _extract_exchange_id(request: Any, headers: Mapping[str, str] | None = None) -> str:
+    """Resolve the exchange correlation id (A-P0-1).
+
+    ``McpRequest.mcp_request`` / ``McpResponse.mcp_response`` carry the
+    JSON-RPC ``params`` / ``result`` BODY — attacker-controlled data — so
+    the payload is NEVER consulted for a correlation id (an ``id`` member
+    there could be forged to pin one tenant's deny on another tenant's
+    exchange). Only trusted, agentgateway-injected channels are used.
+    Resolution order:
+
+    1. a correlation key in the agentgateway ``metadata_context`` Struct
+       (``exchange_id`` / ``request_id`` / ``x_request_id`` / ``trace_id``).
+       TRUST ASSUMPTION: ``metadata_context`` is populated by the
+       agentgateway dataplane (e.g. from an edge ``x-request-id``), not by
+       the end client — deployments must not let callers set these keys;
+    2. the ``x-request-id`` header (request side only — the CheckResponse
+       proto carries no headers), likewise forwarded by the gateway;
+    3. a fresh uuid8, guaranteeing uniqueness per side.
+
+    Every accepted candidate is sanitised (control chars removed, length
+    capped) before use. The returned id rides the audit record's
+    ``exchange_id`` field only; the engine mints its own random uuid8
+    ``ref`` for the wire deny reason, so a correlation id supplied here can
+    never be used to pre-compute or spoof a wire ref.
+    """
+    try:
+        if request.HasField("metadata_context"):
+            md = MessageToDict(request.metadata_context)
+            for key in _EXCHANGE_ID_METADATA_KEYS:
+                value = md.get(key)
+                if value not in (None, ""):
+                    candidate = _sanitize_exchange_id(value)
+                    if candidate:
+                        return candidate
+    except (ValueError, TypeError):
+        pass
+    if headers:
+        for key, value in headers.items():
+            if key.lower() == "x-request-id" and value:
+                candidate = _sanitize_exchange_id(value)
+                if candidate:
+                    return candidate
+    return uuid.uuid4().hex[:8]
 
 
 def _request_pass() -> Any:
@@ -161,6 +231,7 @@ class ExtMcpServicer(pbg.ExtMcpServicer):
         headers = {
             h.key: h.value.decode("utf-8", errors="replace") for h in request.headers
         }
+        exchange_id = _extract_exchange_id(request, headers)
 
         try:
             decision = await self._e.check_request(
@@ -171,6 +242,7 @@ class ExtMcpServicer(pbg.ExtMcpServicer):
                 headers=headers,
                 upstream_transport=transport,
                 route_name=route,
+                exchange_id=exchange_id,
             )
         except Exception:  # pragma: no cover - defensive
             # S-M5: the exception detail (type names, paths, model errors)
@@ -190,6 +262,7 @@ class ExtMcpServicer(pbg.ExtMcpServicer):
         transport, route = _extract_metadata(request)
         if parse_error:
             return _build_response_result(Decision(deny=False), parse_error)
+        exchange_id = _extract_exchange_id(request, result)
 
         try:
             decision = await self._e.check_response(
@@ -198,6 +271,7 @@ class ExtMcpServicer(pbg.ExtMcpServicer):
                 result=result,
                 upstream_transport=transport,
                 route_name=route,
+                exchange_id=exchange_id,
             )
         except Exception:  # pragma: no cover - defensive
             logger.exception("CheckResponse engine error")
