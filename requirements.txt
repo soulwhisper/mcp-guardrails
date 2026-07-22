@@ -21,7 +21,7 @@ protobuf>=7.35
 # .onnx graph with onnxruntime directly and tokenise with transformers
 # (tokenizer-only). optimum is NOT used — it hard-requires torch (~750MB),
 # which would defeat the ONNX path's size advantage. Truly torch-free.
-transformers>=4.51.3,<5
+transformers>=5.14.1,<6
 onnxruntime>=1.20,<2
 
 # --- OpenAI client for AgentAlignment LLM (second-stage, opt-in) ---
