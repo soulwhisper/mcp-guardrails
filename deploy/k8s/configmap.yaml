@@ -192,7 +192,9 @@ data:
     #                                   (default: stdout; set to /dev/null to silence)
     #   AUDIT_CALLER_HEADERS         - comma-separated whitelist of request
     #                                   headers copied to the audit `caller`
-    #                                   field (default: x-forwarded-user,x-session-id)
+    #                                   field (default: x-forwarded-user only;
+    #                                   x-session-id is a quasi-credential and
+    #                                   must be opted in explicitly)
     #   GUARDRAIL_VERSION            - override for the audit `sidecar_version`
     #                                   field (default: package version)
     #
