@@ -365,6 +365,11 @@ deadline.
 | Observability  | `OTEL_SERVICE_NAME`              | `mcp-guardrails`                         | Service name reported on OTel spans/metrics.                                                                                                   |
 | Observability  | `AUDIT_LOG_PATH`                 | _(unset)_                                | Append-only JSONL audit log path. `-` or unset -> stdout. Always on; survives OTel outages.                                                    |
 | Observability  | `AUDIT_HMAC_KEY`                 | _(unset)_                                | When set, high-entropy match fingerprints in scanner reasons use keyed HMAC-SHA256 instead of plain SHA-256. Low-entropy patterns (email, credit card) always record length only (no digest) so the audit log cannot be used as an offline enumeration oracle. |
+| Observability  | `AUDIT_CALLER_HEADERS`           | `x-forwarded-user`                       | Comma-separated whitelist of request headers (case-insensitive, first match wins) copied into the audit line's `caller` field. Only whitelisted headers ever reach the audit log. ⚠️ Think twice before adding `x-session-id`: a session id is a quasi-credential — persisting it to the durable audit log enables session hijacking from log access and cross-system correlation. |
+| Observability  | `GUARDRAIL_VERSION`              | _(package version)_                      | Override for the `sidecar_version` field stamped on every audit line. Defaults to the package `__version__`.                                                                                |
+| Health         | `UNHEALTHY_SCANNER_ERROR_RATE`   | `0.5`                                    | Sliding-window scanner error/timeout rate above which gRPC health flips to `NOT_SERVING` (recovers automatically). Tracked under `failOpen` too.                                            |
+| Health         | `UNHEALTHY_SCANNER_WINDOW`       | `100`                                    | Number of recent scanner invocations kept in the health sliding window.                                                                                                                      |
+| Health         | `UNHEALTHY_SCANNER_MIN_SAMPLES`  | `20`                                     | Minimum windowed invocations before the error-rate verdict applies (avoids flapping on the first few calls).                                                                                |
 | Misc           | `GUARDRAIL_DRY_RUN`              | `false`                                  | Replace all real scanners with allow-stubs. Use to validate wiring without loading ML models.                                                  |
 | Misc           | `LOG_LEVEL`                      | `INFO`                                   | Python logging level (`DEBUG` / `INFO` / `WARNING` / `ERROR`).                                                                                 |
 
@@ -377,6 +382,58 @@ deadline.
 > new `outcome="mutated"` value for exchanges forwarded with a rewritten
 > payload. Dashboards or alerts that count "successful" decisions as
 > `outcome="allow"` should be widened to `outcome=~"allow|mutated"`.
+
+### Audit record (JSONL)
+
+One JSON line per decision, always on. Key fields: `ts` (epoch
+**seconds**, int) and `ts_ms` (epoch **milliseconds**, float), `phase`,
+`method`, `tool`, `outcome`, `reason`, `ref` / `exchange_id` (two
+independent correlation ids: `ref` is an engine-minted random uuid8 — the
+wire deny reason's `ref` greps to this line; `exchange_id` is the
+dataplane-supplied correlation id from `metadata_context` /
+`x-request-id`, so the request- and response-side lines of one exchange
+grep together. The attacker-controlled payload is never consulted for
+either id), `caller` (whitelisted
+header, see `AUDIT_CALLER_HEADERS`), `payload_sha256` (12-hex prefix of
+the scanned text), `rules_version`, `sidecar_version`, `duration_ms`,
+`truncated` / `scanned_bytes` / `total_bytes`, `route`, and the per-scanner
+breakdown. Rule-pack reloads emit `{"event": "rules_reload", "ok": …}`
+lines. Scanner reasons never embed raw matches or LLM output — matches use
+`match_len` / `match_sha256|match_hmac` fingerprints, and AgentAlignment
+verdicts record a length fingerprint only.
+
+### Metrics
+
+When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the following instruments are
+exported (15s interval):
+
+| Instrument | Type | Labels |
+|---|---|---|
+| `mcp.guardrails.decisions` | counter | `phase`, `outcome`, `method` |
+| `mcp.guardrails.decision_duration_ms` | histogram (ms) | `phase`, `outcome` |
+| `mcp.guardrails.scanner_results` | counter | `scanner`, `outcome` (incl. `error` / `timeout`) |
+| `mcp.guardrails.redactions` | counter | — |
+| `mcp.guardrails.invariant_hits` | counter | `rule` |
+| `mcp.guardrails.rules_reload` | counter | `result` (`success` / `error`) |
+
+**Label cardinality is deliberately low.** Labels are bounded enums only
+(phase/outcome/method, configured scanner names, rule-pack rule names,
+reload result). Per-exchange values — `ref` / `exchange_id`, tool names,
+callers, payload hashes — must NEVER be added as metric labels; they
+belong in the audit log only.
+
+**Alerting suggestions:**
+
+- `rate(mcp.guardrails.scanner_results{outcome=~"error|timeout"}[5m])` /
+  `rate(mcp.guardrails.scanner_results[5m])` > `UNHEALTHY_SCANNER_ERROR_RATE`
+  — scanner degradation (the gRPC health endpoint flips `NOT_SERVING` at
+  the same threshold; alert on both).
+- `increase(mcp.guardrails.rules_reload{result="error"}[15m])` > 0 — a
+  SIGHUP rule reload failed; the previous pack is still active.
+- `histogram_quantile(0.95, rate(mcp.guardrails.decision_duration_ms_bucket[5m]))`
+  — decision latency regression watch.
+- gRPC health `NOT_SERVING` after warmup — the Pod leaves Service
+  endpoints; investigate scanner errors or a stuck model load.
 
 ## Rule packs
 
