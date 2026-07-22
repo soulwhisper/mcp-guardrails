@@ -375,7 +375,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Docker build broke** with `httpx.UnsupportedProtocol: Request URL is
-  missing an 'http://' or 'https://' protocol`. The empty `HF_ENDPOINT`
+missing an 'http://' or 'https://' protocol`. The empty `HF_ENDPOINT`
   build-arg (the default when no mirror is configured) leaked into the build
   env as `HF_ENDPOINT=""`, which `huggingface_hub` picked up instead of its
   built-in default endpoint. The models stage now `unset`s `HF_ENDPOINT` when
@@ -487,7 +487,7 @@ ExtMcp gRPC contract as a fail-closed policy sidecar.
 
 - **ExtMcp gRPC servicer** (`guardrails/servicer.py`) implementing the
   agentgateway ExtMcp v1alpha1 contract: `CheckRequest(McpRequest) ->
-  McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
+McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
   Both return one of `allowed` (Pass), `mutated` (Mutated), or `error`
   (AuthorizationError) via a protobuf `oneof`. Malformed JSON-RPC payloads
   map to `INVALID_ARGUMENT`; policy denies map to `PERMISSION_DENIED`
