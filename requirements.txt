@@ -27,7 +27,7 @@ onnxruntime>=1.20,<2
 # --- OpenAI client for AgentAlignment LLM (second-stage, opt-in) ---
 # Only needed when ENABLE_AGENT_ALIGNMENT=1. The LLM client reads the API key
 # directly from LF_ALIGNMENT_API_KEY.
-openai>=1.76,<2
+openai>=2.46,<3
 
 # --- HuggingFace Hub (transitive via transformers, but listed for clarity) ---
 # Used by the Dockerfile models stage to snapshot_download the ONNX model.
