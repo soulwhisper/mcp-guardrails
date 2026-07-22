@@ -146,6 +146,7 @@ class GuardrailEngine:
                         model_id=config.lf_onnx_model,
                         file_name=config.lf_onnx_file,
                         block_threshold=config.lf_promptguard_block_threshold,
+                        review_threshold=config.pg_review_threshold,
                         local_dir=config.lf_onnx_local_dir,
                         revision=config.lf_onnx_revision,
                         max_windows=config.pg_max_windows,
@@ -534,9 +535,15 @@ class GuardrailEngine:
             # flagged chunk(s) are re-scanned, bounding the LLM-based alignment
             # cost to suspicious content only.
             if self._c.second_stage_scanners and flagged_chunks:
+                # Trajectory context for the second stage: the last few tool
+                # calls this route/session made, so AgentAlignment judges the
+                # flagged chunk against the agent's recent behaviour. The
+                # response proto carries no headers, so the key falls back to
+                # the route dimension when session-header templating is on.
+                ctx_second = _with_trace_summary(ctx, self._c.invariant, route_name, service_names)
                 for text in flagged_chunks:
                     second = await self._run_scanners(
-                        text, "assistant", self._c.second_stage_scanners
+                        text, "assistant", self._c.second_stage_scanners, context=ctx_second
                     )
                     results.extend(second)
                 attrs["second_stage"] = True
@@ -744,6 +751,31 @@ def _trace_key(
                 # cap already bounds cardinality).
                 return f"{base}|{name}={str(value)[:128]}"
     return base
+
+
+def _with_trace_summary(
+    ctx: McpCallContext,
+    invariant: InvariantEngine | None,
+    route_name: str,
+    service_names: Sequence[str],
+    *,
+    last_n: int = 5,
+) -> McpCallContext:
+    """Attach a recent-tool-call summary for second-stage scanners.
+
+    The summary is the names of the last ``last_n`` calls in this route's
+    Invariant trace (oldest first, comma-separated) — e.g.
+    ``"inbox_read, fs_read, email_send"``. No args/content are included:
+    the summary reaches an external LLM, so it stays metadata-only.
+    """
+    if invariant is None:
+        return ctx
+    key = route_name or (service_names[0] if service_names else "")
+    snapshot = invariant.snapshot(key=key)
+    if not snapshot:
+        return ctx
+    summary = ", ".join(entry.tool for entry in snapshot[-last_n:])
+    return replace(ctx, trace_summary=summary)
 
 
 def _tool_acl_match(tool: str, patterns: Sequence[str]) -> str | None:
