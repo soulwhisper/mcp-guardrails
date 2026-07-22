@@ -1,9 +1,10 @@
 """Invariant rule pack loader.
 
 Rules are plain Python modules exposing a module-level ``RULES`` list. This
-lets operators express arbitrary procedural matchers (not just the declarative
-``ToxicFlowRule`` / ``LoopRule`` shapes) while keeping the pack versionable in
-Git alongside the rest of the manifests.
+lets operators express arbitrary procedural matchers (not just the bundled
+``ToxicFlowRule`` / ``LoopRule`` / ``RateLimitRule`` / ``AggregateRule``
+shapes) while keeping the pack versionable in Git alongside the rest of the
+manifests.
 
 Loading is by import path or filesystem path:
 
