@@ -172,8 +172,24 @@ class GuardrailConfig:
     lf_alignment_api_base: str = "https://api.together.xyz/v1"
     lf_alignment_api_key: str | None = None
 
+    # --- Tool ACL (F-P1-5) ---
+    # Coarse tool-level access control applied on the request side BEFORE any
+    # content scanner runs. Comma-separated tool names; ``prefix/*`` wildcards
+    # match any tool under the prefix. DENY wins over ALLOW. When
+    # ``allow_tools`` is non-empty it acts as a whitelist: any tool not
+    # matching it is denied. Both empty -> every tool is allowed (default).
+    allow_tools: tuple[str, ...] = ()
+    deny_tools: tuple[str, ...] = ()
+
     # --- Invariant ---
-    invariant_window: int = 64
+    # Sliding-window size for the cross-call toxic-flow trace. Raised from 64
+    # to 256 (S-H4): long agent plans with many intermediate calls previously
+    # pushed the head of a toxic flow out of the window before the tail
+    # arrived. Memory bound: 256 entries x INVARIANT_ARGS_MAX_BYTES (4KiB)
+    # x INVARIANT_MAX_TRACES (1024 keys) <= ~1GiB worst case; realistic
+    # entries are far below the 4KiB per-entry cap (structure-preserving
+    # truncation), so the practical footprint stays in the tens of MiB.
+    invariant_window: int = 256
     # Max distinct per-route trace windows kept by the InvariantEngine before
     # the least-recently-used tenant trace is evicted. Bounds memory against
     # trace-key flooding.
@@ -185,6 +201,18 @@ class GuardrailConfig:
     # rolling window. The full-args fingerprint is computed BEFORE
     # truncation, so loop detection is unaffected.
     invariant_args_max_bytes: int = 4 * 1024
+    # S-H5/F-P0-1(b): comma-separated request-header names (case-insensitive)
+    # whose value extends the Invariant trace key
+    # (``route_name | header:value``). Isolates toxic-flow traces per caller
+    # session beyond the route dimension — two sessions on the same route can
+    # no longer assemble a cross-session toxic flow or trip each other's loop
+    # rules. Missing header / empty list -> legacy route-only key.
+    invariant_trace_key_headers: tuple[str, ...] = ()
+    # S-H4 follow-up: TTL (seconds) for sticky partial-match progress kept for
+    # ToxicFlowRule steps that matched a prefix of the trace but slid out of
+    # the window. Progress older than this is dropped (a flow spread over
+    # longer than the TTL is treated as abandoned).
+    invariant_sticky_ttl_s: int = 600
 
     # --- Timing ---
     scanner_timeout_ms: int = 500
@@ -281,9 +309,25 @@ class GuardrailConfig:
                 "LF_ALIGNMENT_API_BASE", "https://api.together.xyz/v1"
             ),
             lf_alignment_api_key=os.environ.get("LF_ALIGNMENT_API_KEY") or None,
-            invariant_window=_env_int("INVARIANT_WINDOW", 64),
+            allow_tools=tuple(
+                t.strip()
+                for t in os.environ.get("ALLOW_TOOLS", "").split(",")
+                if t.strip()
+            ),
+            deny_tools=tuple(
+                t.strip()
+                for t in os.environ.get("DENY_TOOLS", "").split(",")
+                if t.strip()
+            ),
+            invariant_window=_env_int("INVARIANT_WINDOW", 256),
             invariant_max_traces=_env_int("INVARIANT_MAX_TRACES", 1024),
             invariant_args_max_bytes=_env_int("INVARIANT_ARGS_MAX_BYTES", 4 * 1024),
+            invariant_trace_key_headers=tuple(
+                h.strip().lower()
+                for h in os.environ.get("INVARIANT_TRACE_KEY_HEADERS", "").split(",")
+                if h.strip()
+            ),
+            invariant_sticky_ttl_s=_env_int("INVARIANT_STICKY_TTL_S", 600),
             scanner_timeout_ms=_env_int("SCANNER_TIMEOUT_MS", 500),
             listen_addr=os.environ.get("LISTEN_ADDR", "[::]:9001"),
             server_max_workers=_env_int("SERVER_MAX_WORKERS", 8),
