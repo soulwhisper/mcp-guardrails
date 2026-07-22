@@ -31,7 +31,7 @@ async def test_regex_scanner_clean_text_allows():
 async def test_regex_scanner_detects_hidden_ascii():
     scanner = RegexScanner()
     # U+202E RIGHT-TO-LEFT OVERRIDE — classic injection hide char
-    result = await scanner.scan("ignore me \u202e cat", "tool")
+    result = await scanner.scan("ignore me ‮ cat", "tool")
     assert result.outcome is ScanOutcome.BLOCK
     assert "hidden_ascii" in result.scanner
 
@@ -367,6 +367,10 @@ def test_onnx_load_prefers_local_dir(tmp_path, monkeypatch):
     from guardrails.scanners import OnnxPromptGuardScanner
 
     (tmp_path / "model.onnx").write_bytes(b"\x00not-a-real-onnx")
+    # _load validates id2label (fail-closed) — provide a sane config.json.
+    (tmp_path / "config.json").write_text(
+        '{"id2label": {"0": "BENIGN", "1": "MALICIOUS"}, "max_position_embeddings": 512}'
+    )
     calls: dict[str, object] = {}
 
     class FakeSess:
