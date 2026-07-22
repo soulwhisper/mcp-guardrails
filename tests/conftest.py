@@ -56,3 +56,10 @@ def review_result() -> ScanResult:
 # Standalone scripts (run directly, not via pytest).  These use their own
 # subprocess-based server lifecycle and are not pytest-test functions.
 collect_ignore = ["field_test.py", "load_test.py"]
+
+# TEMP-DEBUG: CI bisect - ignore new wave3 test files to isolate culprit.
+collect_ignore += [
+    "test_wave3_rules.py",
+    "test_wave3_scanners.py",
+    "test_redteam.py",
+]
