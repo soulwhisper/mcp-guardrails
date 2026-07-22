@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from ..invariant import FlowStep, LoopRule, ToxicFlowRule
+from ..invariant import FlowStep, LoopRule, RateLimitRule, ToxicFlowRule
 
 # Matches any address that does NOT end with a small set of internal suffixes.
 # Used to flag "external" recipients in the inbox->email exfil pattern.
@@ -70,5 +70,17 @@ RULES = [
         name="denied-tool-retry-loop",
         threshold=3,
         description="Same tool+args call repeated 3+ times in the window (injection retry loop)",
+    ),
+    # Volumetric backstop: any single tool called >30 times within 60s in one
+    # trace key. Counting is per tool name (the wildcard does NOT pool all
+    # tools into one budget). Deliberately conservative so normal agent
+    # exploration stays well under the line — this catches enumeration /
+    # spray behaviour, not bursty-but-sane plans.
+    RateLimitRule(
+        name="per-tool-rate-limit",
+        tool="*",
+        window_s=60.0,
+        max_calls=30,
+        description="Same tool called >30 times within 60s (volumetric abuse)",
     ),
 ]
