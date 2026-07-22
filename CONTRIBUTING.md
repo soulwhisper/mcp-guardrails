@@ -32,7 +32,7 @@ git clone https://github.com/soulwhisper/mcp-guardrails.git
 cd mcp-guardrails
 make dev          # pip install -e ".[dev]" — pytest, ruff, grpcio-tools
 make proto        # regenerate stubs (no-op if proto/ext_mcp.proto is unchanged)
-make test         # 157 unit tests, ~1.5s
+make test         # 305+ unit tests, ~2s
 make lint         # ruff check
 ```
 
@@ -86,7 +86,7 @@ and `filterwarnings = ["error", ...]`. New warnings will fail the suite —
 fix the warning rather than suppressing it. The exception is grpc
 deprecation warnings, which are ignored.
 
-The 157 unit tests cover:
+The 305+ unit tests cover:
 
 - `tests/test_aggregator.py` — fail-closed table, HUMAN_REVIEW resolution,
   mutation passthrough.
@@ -109,6 +109,17 @@ The 157 unit tests cover:
   (pass / mutated / error oneof, INVALID on malformed JSON).
 - `tests/test_server_module.py` — import-time smoke for the `server`
   module (coverage + trivial import regressions).
+- `tests/test_wave3_rules.py` — Wave-3 rule layer: `RateLimitRule` /
+  `AggregateRule` sliding time-window semantics (per-tool counting, exact
+  window slide-out) and `FlowStep(negate=True)` void semantics incl.
+  sticky-progress interaction.
+- `tests/test_wave3_scanners.py` — PromptGuard grey-zone dual threshold
+  (`PG_REVIEW_THRESHOLD`), AgentAlignment pre-egress redaction + trace
+  summary, engine second-stage context wiring.
+- `tests/test_redteam.py` — red-team capability baseline: base64 injection,
+  zero-width/confusables, markdown-image exfil, `### SYSTEM` case variants,
+  head/mid/tail padding bypasses, window-flush sequences. Current gaps are
+  `xfail(strict=False)` with the residual documented.
 
 ## Adding a scanner
 
@@ -197,7 +208,7 @@ Rule packs are hot-reloadable at runtime via `SIGHUP` — see
 Before opening a PR:
 
 - [ ] `make lint` clean.
-- [ ] `make test` green (157+ tests).
+- [ ] `make test` green (305+ tests).
 - [ ] `python3 tests/e2e_smoke.py` green if you touched the servicer, engine,
       config, or server entrypoint.
 - [ ] `make proto` re-run and stubs committed if you touched
