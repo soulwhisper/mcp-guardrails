@@ -33,7 +33,7 @@ data:
   # FlowStep.args is a mapping of dotted-path -> value matcher
   #   (callable, compiled regex, or literal compared with ==).
   # ToxicFlowRule fires on an ordered *subsequence* match within the
-  # INVARIANT_WINDOW (default 64 calls). Steps need not be contiguous.
+  # INVARIANT_WINDOW (default 256 calls). Steps need not be contiguous.
   # LoopRule fires when the same (tool + args) fingerprint repeats
   # `threshold` times within the window.
   rules.policy: |
