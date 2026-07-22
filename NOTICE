@@ -1,8 +1,8 @@
 mcp-guardrails
-Copyright 2025 Soul Whisper
+Copyright 2025 Soulwhisper
 
 This product includes software developed at
-Soul Whisper (https://github.com/soulwhisper).
+Soulwhisper (https://github.com/soulwhisper).
 
 ---
 
@@ -18,5 +18,5 @@ use policy, attribution requirements, and any applicable usage
 thresholds.
 
 The model is a fine-tuned Prompt Guard classifier derived from Llama,
-converted to ONNX format by Gravitee.io. Neither Soul Whisper nor this
+converted to ONNX format by Gravitee.io. Neither Soulwhisper nor this
 project is affiliated with Meta Platforms, Inc. or Gravitee.io.
