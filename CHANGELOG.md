@@ -36,6 +36,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+* **audit:** stop trusting the JSON-RPC `id` inside the wire payload for
+  exchange correlation — `params`/`result` bodies are attacker-controlled,
+  so a forged `id` could pin one tenant's deny on another tenant's
+  exchange. The exchange_id now resolves only from agentgateway-injected
+  `metadata_context` keys (`exchange_id` / `request_id` / `x_request_id` /
+  `trace_id`), then the `x-request-id` header, then a uuid8 fallback; all
+  accepted candidates are stripped of CR/LF/control characters (audit-log
+  injection guard).
+* **audit:** restore PR-#65 ref semantics — the `ref` used in wire deny
+  reasons is always an engine-minted random uuid8 (unique, unguessable);
+  `exchange_id` remains a separate audit-only correlation field. Audit
+  decision lines carry both.
+* **audit:** `ts` is epoch seconds (int) again; millisecond precision is
+  available via the new `ts_ms` field (epoch ms, float). Same for the
+  `rules_reload` audit line. No upgrade note needed — `ts` semantics are
+  unchanged from pre-Wave-2 releases.
+* **config:** `AUDIT_CALLER_HEADERS` default drops `x-session-id` (a
+  quasi-credential that should not persist in the audit log); default is
+  now `x-forwarded-user` only.
+* **scanners:** AgentAlignment `llm_error` reasons record the exception
+  type name only — SDK exception text (which can embed request content or
+  endpoint details) no longer reaches the audit log.
 * **redaction:** offload the redaction regex sweep to a worker thread
   (`asyncio.to_thread`) and cap redactable payload size via the new
   `REDACTION_MAX_BYTES` env var (default 256KiB); over-cap payloads skip
