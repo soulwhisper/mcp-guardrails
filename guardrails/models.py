@@ -130,3 +130,8 @@ class McpCallContext:
     # ``GuardrailConfig.audit_caller_headers``). Request side only — the
     # CheckResponse proto carries no headers.
     caller: str = ""
+    # Trace summary for second-stage scanners (AgentAlignment): the engine
+    # fills this with the most recent tool-call names from the Invariant
+    # trace snapshot before invoking the second stage, so the LLM judge
+    # sees the agent's recent trajectory, not just the flagged chunk.
+    trace_summary: str = ""
