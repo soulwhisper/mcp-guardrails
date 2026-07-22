@@ -87,6 +87,10 @@ class Decision:
     # audit decision line AND reused by the servicer's generalised deny reason,
     # so a tenant-reported ``ref`` always greps to the full internal record.
     ref: str = ""
+    # Number of redaction substitutions applied to the forwarded payload
+    # (0 when redaction did not run or matched nothing). Surfaced by the
+    # servicer in the ``guardrail.redactions`` result metadata (F-P1-2).
+    redactions: int = 0
 
     @property
     def is_mutated(self) -> bool:

@@ -26,10 +26,11 @@ import uuid
 from collections.abc import Mapping
 from typing import Any
 
+from google.protobuf import struct_pb2
 from google.protobuf.json_format import MessageToDict
 
 from .engine import GuardrailEngine
-from .models import Decision
+from .models import Decision, ScanOutcome
 from .proto_bridge import pb, pbg
 
 logger = logging.getLogger("mcp.guardrails.servicer")
@@ -164,7 +165,105 @@ def _public_deny_reason(phase: str, internal_reason: str, ref: str = "") -> str:
     return f"denied by {phase} policy (ref {ref})"
 
 
-def _build_request_result(decision: Decision, parse_error: str):
+# F-P1-1: generalised scanner categories for the structured mcp_error body.
+# The blocking scanner's raw name (``regex:aws_access_key``,
+# ``invariant:<rule>``) leaks pattern/rule identity to the caller, so the
+# wire body only carries the CLASS of policy that fired plus a generic
+# remediation hint. Full detail stays in the audit log (grep via ``ref``).
+_DENY_CATEGORY: dict[str, tuple[str, str]] = {
+    "tool_acl": ("tool_policy", "call a tool permitted by policy"),
+    "invariant": ("tool_flow", "avoid the denied sequence of tool calls"),
+    "payload_size": ("payload_size", "reduce the payload size"),
+    "regex": (
+        "content_policy",
+        "remove credentials, PII or instruction markers from tool arguments",
+    ),
+    "onnx-promptguard": (
+        "prompt_injection",
+        "rephrase the request without embedded instructions",
+    ),
+}
+_DEFAULT_CATEGORY = ("policy", "adjust the payload and retry")
+
+
+def _deny_category(decision: Decision) -> tuple[str, str]:
+    """Map the first blocking scanner to a generalised (category, remedy)."""
+    for r in decision.scanners:
+        if r.outcome is ScanOutcome.BLOCK:
+            klass = r.scanner.split(":", 1)[0]
+            return _DENY_CATEGORY.get(klass, _DEFAULT_CATEGORY)
+    return _DEFAULT_CATEGORY
+
+
+def _mcp_error_body(decision: Decision, phase: str, reason: str) -> bytes:
+    """Build the structured JSON-RPC error body (F-P1-1).
+
+    agentgateway forwards ``AuthorizationError.mcp_error`` as the JSON-RPC
+    error returned to the MCP client. The body mirrors the generalised wire
+    ``reason`` in ``message`` and adds a generalised category + remediation
+    hint in ``data`` — never pattern names, rule internals or match detail.
+    """
+    category, remedy = _deny_category(decision)
+    ref = decision.ref or uuid.uuid4().hex[:8]
+    body = {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {
+            "code": -32001,
+            "message": reason,
+            "data": {
+                "ref": ref,
+                "phase": phase,
+                "category": category,
+                "remedy": remedy,
+            },
+        },
+    }
+    return json.dumps(body).encode("utf-8")
+
+
+def _result_metadata(decision: Decision, exchange_id: str) -> Any:
+    """Populate ``McpRequestResult.metadata`` (F-P1-2).
+
+    Emits the guardrail observability fields the dataplane can log/route on
+    without parsing the audit stream:
+
+    * ``guardrail.scan_score``  — highest scanner score seen this exchange;
+    * ``guardrail.rules_hit``   — invariant rule names that fired;
+    * ``guardrail.redactions``  — redaction substitution count;
+    * ``guardrail.exchange_id`` — the trusted correlation id;
+    * ``guardrail.outcome``     — allow | mutated | deny.
+
+    Response side: ``McpResponseResult`` carries no ``metadata`` field in the
+    proto (only ``McpRequestResult`` does), so this is request-side only.
+    ``header_mutation`` is deliberately NOT emitted: injecting a caller-visible
+    ``x-guardrail-ref`` header would let a tenant correlate their own denies
+    without audit access — which the wire ``ref`` already provides — and the
+    evaluation ranked it low priority; revisit if a dataplane use case lands.
+    """
+    scan_score = max((r.score for r in decision.scanners), default=0.0)
+    rules_hit = [
+        r.scanner.split(":", 1)[1]
+        for r in decision.scanners
+        if r.scanner.startswith("invariant:") and r.outcome is ScanOutcome.BLOCK
+    ]
+    outcome = "deny" if decision.deny else ("mutated" if decision.is_mutated else "allow")
+    struct = struct_pb2.Struct()
+    struct.update(
+        {
+            "guardrail.scan_score": scan_score,
+            "guardrail.rules_hit": rules_hit,
+            "guardrail.redactions": decision.redactions,
+            "guardrail.exchange_id": exchange_id or decision.ref,
+            "guardrail.outcome": outcome,
+        }
+    )
+    return struct
+
+
+def _build_request_result(
+    decision: Decision, parse_error: str, exchange_id: str = ""
+):
     if parse_error:
         return pb.McpRequestResult(
             error=pb.AuthorizationError(
@@ -172,18 +271,25 @@ def _build_request_result(decision: Decision, parse_error: str):
                 reason=parse_error,
             )
         )
+    metadata = _result_metadata(decision, exchange_id)
     if decision.deny:
+        reason = _public_deny_reason("content", decision.reason, decision.ref)
         return pb.McpRequestResult(
             error=pb.AuthorizationError(
                 code=pb.AuthorizationError.PERMISSION_DENIED,
-                reason=_public_deny_reason("content", decision.reason, decision.ref),
-            )
+                reason=reason,
+                mcp_error=_mcp_error_body(decision, "content", reason),
+            ),
+            metadata=metadata,
         )
     if decision.is_mutated:
         return pb.McpRequestResult(
-            mutated=json.dumps(decision.mutated).encode("utf-8")
+            mutated=json.dumps(decision.mutated).encode("utf-8"),
+            metadata=metadata,
         )
-    return _request_pass()
+    result = _request_pass()
+    result.metadata.CopyFrom(metadata)
+    return result
 
 
 def _build_response_result(decision: Decision, parse_error: str):
@@ -195,10 +301,15 @@ def _build_response_result(decision: Decision, parse_error: str):
             )
         )
     if decision.deny:
+        reason = _public_deny_reason("response", decision.reason, decision.ref)
+        # NOTE: McpResponseResult has no `metadata` field in the proto, so
+        # the F-P1-2 metadata emission is request-side only (see
+        # _result_metadata). The structured mcp_error body IS emitted here.
         return pb.McpResponseResult(
             error=pb.AuthorizationError(
                 code=pb.AuthorizationError.PERMISSION_DENIED,
-                reason=_public_deny_reason("response", decision.reason, decision.ref),
+                reason=reason,
+                mcp_error=_mcp_error_body(decision, "response", reason),
             )
         )
     if decision.is_mutated:
@@ -255,7 +366,7 @@ class ExtMcpServicer(pbg.ExtMcpServicer):
                     reason="engine_error",
                 )
             )
-        return _build_request_result(decision, "")
+        return _build_request_result(decision, "", exchange_id)
 
     async def CheckResponse(self, request, context):
         result, parse_error = _safe_json_loads(request.mcp_response)

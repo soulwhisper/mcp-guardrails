@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -154,16 +155,31 @@ class ToxicFlowRule:
         Implements ordered subsequence matching: greedily advance through the
         steps, consuming trace entries left-to-right.
         """
-        if not self.steps:
-            return None
-        step_idx = 0
+        hit, _progress = self.match_from(trace, 0)
+        return hit
+
+    def match_from(
+        self, trace: Sequence[TraceEntry], start_step: int = 0
+    ) -> tuple[str | None, int]:
+        """Match from ``start_step``, returning ``(hit, progress)``.
+
+        ``progress`` is the number of rule steps matched so far in ORDER —
+        ``start_step`` plus however many further steps this trace advanced.
+        A ``(None, p)`` result with ``p > start_step`` means a PREFIX of the
+        flow matched; the engine keeps that progress in its sticky map so a
+        flow whose early steps slide out of the rolling window is not lost
+        (S-H4). A full match returns ``(self.name, len(self.steps))``.
+        """
+        if not self.steps or start_step >= len(self.steps):
+            return None, start_step
+        step_idx = start_step
         for entry in trace:
             step = self.steps[step_idx]
             if step.matches(entry.tool, entry.args):
                 step_idx += 1
                 if step_idx == len(self.steps):
-                    return self.name
-        return None
+                    return self.name, step_idx
+        return None, step_idx
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"ToxicFlowRule(name={self.name!r}, steps={len(self.steps)})"
@@ -278,8 +294,11 @@ class InvariantEngine:
     """Cross-call toxic-flow matcher with a bounded sliding window.
 
     The window (``maxlen``) should be large enough to span a typical agent
-    tool-use chain (the design default of 64 covers most homelab flows) but
-    bounded to cap memory and rule-evaluation cost.
+    tool-use chain (the design default of 256 covers long multi-step plans;
+    memory bound: window x ``args_max_bytes`` x ``max_traces``) but bounded to
+    cap memory and rule-evaluation cost. Partial (prefix) ToxicFlowRule
+    matches are parked in a TTL-bounded *sticky* map so a flow whose early
+    steps slide out of the window still completes (S-H4).
 
     Traces are isolated per *trace key* (the engine passes the route name /
     first service name): one compromised or noisy tenant cannot poison the
@@ -293,15 +312,24 @@ class InvariantEngine:
     def __init__(
         self,
         rules: Iterable[ToxicFlowRule],
-        window: int = 64,
+        window: int = 256,
         max_traces: int = 1024,
         args_max_bytes: int = 4 * 1024,
+        sticky_ttl_s: float = 600.0,
     ):
         self._rules: list[ToxicFlowRule] = list(rules)
         self._traces: OrderedDict[str, deque[TraceEntry]] = OrderedDict()
         self._window = window
         self._max_traces = max(1, max_traces)
         self._args_max_bytes = args_max_bytes
+        self._sticky_ttl_s = max(0.0, sticky_ttl_s)
+        # S-H4 sticky partial-match progress: ``(trace_key, rule_name)`` ->
+        # ``(steps_matched, last_updated_epoch)``. When a ToxicFlowRule matches
+        # a PREFIX of its steps the progress is parked here (TTL-bounded) so
+        # the flow survives its early steps sliding out of the rolling window.
+        # Bounded LRU like ``_traces`` (same ``max_traces`` cap), so a
+        # key-flooding client cannot grow it without limit.
+        self._sticky: OrderedDict[tuple[str, str], tuple[int, float]] = OrderedDict()
 
     @property
     def rules(self) -> tuple[ToxicFlowRule, ...]:
@@ -339,11 +367,42 @@ class InvariantEngine:
         self._rules = list(rules)
 
     def reset(self, key: str | None = None) -> None:
-        """Clear one tenant's trace, or all traces when ``key`` is None."""
+        """Clear one tenant's trace (and sticky progress), or all when None."""
         if key is None:
             self._traces.clear()
+            self._sticky.clear()
         else:
             self._traces.pop(key, None)
+            for skey in [k for k in self._sticky if k[0] == key]:
+                self._sticky.pop(skey, None)
+
+    def _sticky_progress(self, key: str, rule_name: str, now: float) -> int:
+        """Return the fresh sticky step progress for ``(key, rule_name)``.
+
+        Entries older than ``sticky_ttl_s`` are dropped (a flow spread over
+        longer than the TTL is treated as abandoned).
+        """
+        skey = (key, rule_name)
+        entry = self._sticky.get(skey)
+        if entry is None:
+            return 0
+        progress, ts = entry
+        if now - ts > self._sticky_ttl_s:
+            self._sticky.pop(skey, None)
+            return 0
+        self._sticky.move_to_end(skey)
+        return progress
+
+    def _set_sticky(self, key: str, rule_name: str, progress: int, now: float) -> None:
+        """Park / refresh partial-match progress, bounded LRU."""
+        skey = (key, rule_name)
+        if progress <= 0:
+            self._sticky.pop(skey, None)
+            return
+        if skey not in self._sticky and len(self._sticky) >= self._max_traces:
+            self._sticky.popitem(last=False)
+        self._sticky[skey] = (progress, now)
+        self._sticky.move_to_end(skey)
 
     def record(
         self,
@@ -377,7 +436,24 @@ class InvariantEngine:
         """
         trace = self._traces.get(key)
         snapshot = list(trace) if trace is not None else []
+        now = time.monotonic()
         for rule in self._rules:
+            if isinstance(rule, ToxicFlowRule):
+                # Sticky prefix progress (S-H4): resume from parked progress
+                # so early flow steps that slid out of the window still count.
+                start = self._sticky_progress(key, rule.name, now)
+                hit, progress = rule.match_from(snapshot, start)
+                if hit is not None:
+                    self._sticky.pop((key, rule.name), None)
+                    return ScanResult.block(
+                        scanner=f"invariant:{hit}",
+                        reason=rule.description or hit,
+                    )
+                if progress > start:
+                    # Only new advancement refreshes the TTL — parked progress
+                    # that is not extended ages out per sticky_ttl_s.
+                    self._set_sticky(key, rule.name, progress, now)
+                continue
             hit = rule.match(snapshot)
             if hit is not None:
                 return ScanResult.block(

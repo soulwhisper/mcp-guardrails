@@ -19,9 +19,12 @@ import hashlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from .models import ScanOutcome, ScanResult
+
+if TYPE_CHECKING:
+    from .models import McpCallContext
 
 # ---------------------------------------------------------------------------
 # Scanner protocol
@@ -44,7 +47,7 @@ class Scanner(Protocol):
         content: str,
         role: str,
         *,
-        context: Mapping[str, Any] | None = None,
+        context: McpCallContext | None = None,
     ) -> ScanResult:  # pragma: no cover - protocol
         ...
 
@@ -289,7 +292,7 @@ class RegexScanner:
         content: str,
         role: str,
         *,
-        context: Mapping[str, Any] | None = None,
+        context: McpCallContext | None = None,
     ) -> ScanResult:
         for pat in self._patterns:
             hit = pat.evaluate(content)
@@ -375,7 +378,7 @@ class AgentAlignmentScanner:
         content: str,
         role: str,
         *,
-        context: Mapping[str, Any] | None = None,
+        context: McpCallContext | None = None,
     ) -> ScanResult:
         """Call the LLM to evaluate the content for compromise.
 
@@ -607,7 +610,7 @@ class OnnxPromptGuardScanner:
         content: str,
         role: str,
         *,
-        context: Mapping[str, Any] | None = None,
+        context: McpCallContext | None = None,
     ) -> ScanResult:
         # Load in a thread so we never block the event loop.
         if not self._loaded:
@@ -714,7 +717,7 @@ class StubScanner:
         content: str,
         role: str,
         *,
-        context: Mapping[str, Any] | None = None,
+        context: McpCallContext | None = None,
     ) -> ScanResult:
         if self.decider is None:
             return ScanResult.allow(self.name)
@@ -780,6 +783,45 @@ def scan_windows(text: str, max_bytes: int, tail_bytes: int) -> tuple[list[str],
     return chunks, True
 
 
+# F-P1-4/S-M2: decoded-bytes cap for a single resources/read ``blob`` item.
+# Base64 inflates ~4/3x, so the decoded cap bounds both the decode work and
+# the text handed to the scanners.
+_BLOB_DECODE_MAX_BYTES = 256 * 1024
+
+
+def _json_dump(value: Any) -> str:
+    """ensure_ascii=False dump so hidden unicode stays visible to scanners."""
+    import json as _json
+
+    return _json.dumps(value, default=str, sort_keys=True, ensure_ascii=False)
+
+
+def _decode_blob(blob: str) -> str:
+    """Base64-decode a resources/read ``blob`` to text (best-effort).
+
+    Decoded bytes are capped at ``_BLOB_DECODE_MAX_BYTES``. The cap bounds the
+    decode work itself, not just the slice afterwards: base64 encodes 3 bytes
+    per 4 chars (decoded size ~= len*3/4), so an over-long encoded blob is
+    truncated first (4-aligned, keeping the input valid base64) and only then
+    decoded. A blob that fails base64 decoding is kept as the original string
+    so any instruction text embedded in it still reaches the scanners.
+    """
+    import base64
+    import binascii
+
+    # 4 base64 chars encode 3 bytes; truncate the encoded input so decoding
+    # can never produce more than _BLOB_DECODE_MAX_BYTES bytes.
+    max_b64_len = (_BLOB_DECODE_MAX_BYTES // 3) * 4
+    if len(blob) > max_b64_len:
+        blob = blob[:max_b64_len]
+        blob = blob[: len(blob) - (len(blob) % 4)]
+    try:
+        raw = base64.b64decode(blob, validate=True)
+    except (binascii.Error, ValueError):
+        return blob
+    return raw[:_BLOB_DECODE_MAX_BYTES].decode("utf-8", errors="ignore")
+
+
 def extract_text(payload: Any) -> str:
     """Best-effort flattening of an MCP params/result object to a scan string.
 
@@ -804,8 +846,59 @@ def extract_text(payload: Any) -> str:
                         parts.append(t)
                     elif t is not None:
                         parts.append(str(t))
+                    else:
+                        # F-P1-4/S-M2: non-text content items (image, audio,
+                        # resource_link, ...) carry no ``text`` field; fall
+                        # back to the item's JSON dump so keys, annotations
+                        # and any embedded instruction strings stay visible
+                        # to the scanners.
+                        parts.append(_json_dump(item))
                 elif isinstance(item, str):
                     parts.append(item)
+            if parts:
+                return "\n".join(parts)
+        # resources/read result: contents[] (text or base64 blob)
+        contents = payload.get("contents")
+        if isinstance(contents, list):
+            parts = []
+            for item in contents:
+                if isinstance(item, Mapping):
+                    t = item.get("text")
+                    if isinstance(t, str):
+                        parts.append(t)
+                        continue
+                    blob = item.get("blob")
+                    if isinstance(blob, str):
+                        parts.append(_decode_blob(blob))
+                        continue
+                    parts.append(_json_dump(item))
+                elif isinstance(item, str):
+                    parts.append(item)
+            if parts:
+                return "\n".join(parts)
+        # prompts/get result: messages[] (each with a content payload)
+        messages = payload.get("messages")
+        if isinstance(messages, list):
+            parts = []
+            for msg in messages:
+                if not isinstance(msg, Mapping):
+                    if isinstance(msg, str):
+                        parts.append(msg)
+                    continue
+                mc = msg.get("content")
+                if isinstance(mc, str):
+                    parts.append(mc)
+                elif isinstance(mc, Mapping):
+                    t = mc.get("text")
+                    parts.append(t if isinstance(t, str) else _json_dump(mc))
+                elif isinstance(mc, list):
+                    for item in mc:
+                        if isinstance(item, Mapping):
+                            t = item.get("text")
+                            parts.append(t if isinstance(t, str) else _json_dump(item))
+                        elif isinstance(item, str):
+                            parts.append(item)
+            parts = [p for p in parts if p]
             if parts:
                 return "\n".join(parts)
         # tools/list result tools array -> scan descriptions for poisoning

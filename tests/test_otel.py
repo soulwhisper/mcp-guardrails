@@ -135,7 +135,7 @@ async def test_scanner_child_span_outcome_timeout():
     class SlowScanner:
         name = "slow"
 
-        async def scan(self, content: str, role: str):
+        async def scan(self, content: str, role: str, *, context=None):
             await asyncio.sleep(10)
             return ScanResult.allow("slow")
 
@@ -165,7 +165,7 @@ async def test_scanner_child_span_outcome_error():
     class BoomScanner:
         name = "boom"
 
-        async def scan(self, content: str, role: str):
+        async def scan(self, content: str, role: str, *, context=None):
             raise RuntimeError("kaboom")
 
     engine, lines = _capture_engine(request_scanners=[BoomScanner()])

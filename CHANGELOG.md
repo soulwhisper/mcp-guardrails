@@ -34,7 +34,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Features
+
+* **contract:** structured `mcp_error` JSON-RPC body on deny (F-P1-1) —
+  `AuthorizationError.mcp_error` now carries a JSON-RPC 2.0 error object
+  (`code: -32001`, the same generalised message/ref as the wire `reason`,
+  plus `data` with a generalised policy category and remediation hint).
+  Pattern names, rule internals and match detail stay audit-only.
+* **contract:** `McpRequestResult.metadata` emission (F-P1-2) —
+  `guardrail.scan_score` (max scanner score), `guardrail.rules_hit`
+  (invariant rules that fired), `guardrail.redactions` (substitution
+  count), `guardrail.exchange_id`, `guardrail.outcome`. Response side has
+  no `metadata` field in the proto (request-side only);
+  `header_mutation` remains unused (documented).
+* **scanners:** `extract_text` covers `resources/read` results
+  (`contents[]`, incl. base64 `blob` decode capped at 256KiB per blob,
+  undecodable blobs kept verbatim) and `prompts/get` results
+  (`messages[]`); non-text `content[]` items (image/audio/resource_link)
+  fall back to their JSON dump so keys/annotations stay visible (F-P1-4 /
+  S-M2).
+* **invariant:** tool-level ACL via `ALLOW_TOOLS` / `DENY_TOOLS`
+  (comma-separated, `prefix/*` wildcards, DENY wins; a non-empty ALLOW is
+  a whitelist). Checked before content scanners run; denies as
+  `tool_acl` (F-P1-5).
+* **invariant:** trace-key templating via `INVARIANT_TRACE_KEY_HEADERS`
+  (e.g. `x-session-id`) — toxic-flow traces isolate per session header
+  value, falling back to the route dimension when absent (S-H5 /
+  F-P0-1(b)). The `McpCallContext` is now threaded into every scanner's
+  `context` kwarg.
+
 ### Bug Fixes
+
+* **invariant:** default window 64 -> 256 (S-H4) and sticky partial-match
+  progress: ToxicFlowRule prefix matches are parked in a TTL-bounded
+  (`INVARIANT_STICKY_TTL_S`, default 600s), LRU-capped sticky map so a
+  flow whose early steps slide out of the window still completes.
+* **invariant:** only `tools/call` requests with a non-empty tool name
+  are recorded into the trace window (F-P1-6).
 
 * **audit:** stop trusting the JSON-RPC `id` inside the wire payload for
   exchange correlation — `params`/`result` bodies are attacker-controlled,
