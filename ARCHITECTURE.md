@@ -565,17 +565,25 @@ line per decision. Defaults to stdout when `AUDIT_LOG_PATH` is unset or
 
 Field notes (Wave-2 audit expansion):
 
-- `ts` is epoch **milliseconds** as a float (Wave 1 and earlier emitted
-  epoch seconds as an int — same field name, finer precision).
-- `ref` / `exchange_id` are the same correlation id: minted by the servicer
-  from the JSON-RPC `id` when present, else an agentgateway
-  `metadata_context` key (`exchange_id` / `request_id` / `x_request_id` /
-  `trace_id`) or the `x-request-id` header, else a uuid8. The wire deny
-  reason (`denied by content policy (ref …)`) greps to this line, and when
-  the dataplane supplies a stable id both the request- and response-side
-  lines of one MCP exchange grep together.
+- `ts` is epoch **seconds** as an int; millisecond precision is available
+  via the sibling `ts_ms` field (epoch milliseconds, float). Both are
+  sampled from the same `time.time()` call.
+- `ref` and `exchange_id` are two **distinct** ids. `ref` is always an
+  engine-minted random uuid8: the JSON-RPC payload `id` is
+  attacker-controlled and is never trusted, so the wire deny reason
+  (`denied by content policy (ref …)`) can never be pre-computed or
+  spoofed by a caller. `exchange_id` is the cross-line correlation id,
+  resolved by the servicer only from trusted, dataplane-injected channels:
+  an agentgateway `metadata_context` key (`exchange_id` / `request_id` /
+  `x_request_id` / `trace_id`), else the `x-request-id` header, else a
+  fresh uuid8 fallback. Every accepted candidate is sanitised before use
+  (whitespace stripped, CR/LF and all other C0/C1 control characters
+  removed to prevent audit-log line injection, length capped at 64
+  chars). When the dataplane supplies a stable id, the request- and
+  response-side lines of one MCP exchange grep together on `exchange_id`.
 - `caller` is copied only from the `AUDIT_CALLER_HEADERS` whitelist
-  (default `x-forwarded-user,x-session-id`); other headers never reach the
+  (default `x-forwarded-user` only — `x-session-id` is a quasi-credential
+  and must be opted in explicitly); other headers never reach the
   audit log. The response side has no headers on the wire, so `caller` is
   empty there — correlate via `exchange_id` instead.
 - `payload_sha256` is the 12-hex-char SHA-256 prefix of the scanned text
