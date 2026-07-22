@@ -77,8 +77,8 @@ exclude = ["tests*", "proto*"]
 minversion = "8.0"
 testpaths = ["tests"]
 asyncio_mode = "auto"
-# TEMP-DEBUG: CI bisect cycle 4 - deselect ts + rate_limit group of test_wave3_rules.py
-addopts = "-ra --strict-markers --strict-config --deselect tests/test_wave3_rules.py::test_record_stamps_monotonic_ts --deselect tests/test_wave3_rules.py::test_entry_ts_defaults_to_zero_for_backcompat --deselect tests/test_wave3_rules.py::test_rate_limit_fires_over_threshold_same_tool --deselect tests/test_wave3_rules.py::test_rate_limit_counts_per_tool_name_not_pooled --deselect tests/test_wave3_rules.py::test_rate_limit_matcher_scopes_counting --deselect tests/test_wave3_rules.py::test_rate_limit_old_entries_slide_out --deselect tests/test_wave3_rules.py::test_rate_limit_legacy_zero_ts_counts_as_now --deselect tests/test_wave3_rules.py::test_rate_limit_validation --deselect tests/test_wave3_rules.py::test_rate_limit_plugs_into_engine_via_record"
+# TEMP-DEBUG: CI bisect cycle 5 - deselect ts + first 3 rate_limit tests
+addopts = "-ra --strict-markers --strict-config --deselect tests/test_wave3_rules.py::test_record_stamps_monotonic_ts --deselect tests/test_wave3_rules.py::test_entry_ts_defaults_to_zero_for_backcompat --deselect tests/test_wave3_rules.py::test_rate_limit_fires_over_threshold_same_tool --deselect tests/test_wave3_rules.py::test_rate_limit_counts_per_tool_name_not_pooled --deselect tests/test_wave3_rules.py::test_rate_limit_matcher_scopes_counting"
 markers = [
     "integration: end-to-end tests requiring a live gRPC server",
 ]
