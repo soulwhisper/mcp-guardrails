@@ -351,8 +351,13 @@ def _entry_ts(entry: TraceEntry, now: float) -> float:
 
     Hand-constructed entries predate the ``ts`` field; treating them as
     current keeps old tests/packs meaningful under time-windowed rules.
+
+    Only the exact default ``0.0`` is special-cased: negative timestamps are
+    legitimate ``time.monotonic()`` values on low-uptime hosts (e.g. CI
+    runners where ``monotonic() - age_s`` can go below zero) and must
+    participate in window comparisons as-is, i.e. as "long ago".
     """
-    return entry.ts if entry.ts > 0.0 else now
+    return now if entry.ts == 0.0 else entry.ts
 
 
 @dataclass
