@@ -20,6 +20,10 @@ LlamaFirewall ships with, avoiding the 401 Unauthorized build failure.
                                (full-precision, ~350MB, accuracy 98.01%).
   LF_PROMPTGUARD_BLOCK_THRESHOLD  Block threshold (0.0-1.0). Score >= threshold
                                -> BLOCK. Default: 0.9.
+  PG_REVIEW_THRESHOLD          Review (grey-zone) threshold (0.0-1.0). Scores in
+                               [review, block) -> HUMAN_REVIEW (second-stage
+                               AgentAlignment gate, else HUMAN_REVIEW_MODE);
+                               below -> ALLOW. Default: 0.5; 0 disables.
   LF_ONNX_LOCAL_DIR            Local directory of a pre-baked model. When set
                                (the container pre-downloads to /models/hf/pg2),
                                the scanner loads the tokenizer + .onnx from
@@ -151,6 +155,12 @@ class GuardrailConfig:
     # skips the runtime download. None -> resolve via the HF hub cache.
     lf_onnx_local_dir: str | None = None
     lf_promptguard_block_threshold: float = 0.9
+    # Grey-zone review threshold (PG_REVIEW_THRESHOLD, default 0.5). Dual-
+    # threshold policy: score >= block -> BLOCK; review <= score < block ->
+    # HUMAN_REVIEW (routed to the second-stage AgentAlignment gate when
+    # enabled, else resolved per HUMAN_REVIEW_MODE); score < review -> ALLOW.
+    # Values above the block threshold are clamped down to it at load.
+    pg_review_threshold: float = 0.5
     # PromptGuard sliding-window cap (PG_MAX_WINDOWS). The window budget is
     # adaptive — it grows with the payload's token length
     # (clamp(ceil(tokens/step)+1, 4, pg_max_windows)) — and this value is the
@@ -295,6 +305,10 @@ class GuardrailConfig:
             lf_onnx_file=os.environ.get("LF_ONNX_FILE", "model.onnx"),
             lf_onnx_local_dir=os.environ.get("LF_ONNX_LOCAL_DIR") or None,
             lf_promptguard_block_threshold=_env_float("LF_PROMPTGUARD_BLOCK_THRESHOLD", 0.9),
+            pg_review_threshold=min(
+                _env_float("PG_REVIEW_THRESHOLD", 0.5),
+                _env_float("LF_PROMPTGUARD_BLOCK_THRESHOLD", 0.9),
+            ),
             pg_max_windows=_env_int("PG_MAX_WINDOWS", 16),
             # Default pin matches the Dockerfile PG2_REVISION build-arg.
             lf_onnx_revision=os.environ.get(
