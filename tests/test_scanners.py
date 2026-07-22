@@ -31,7 +31,7 @@ async def test_regex_scanner_clean_text_allows():
 async def test_regex_scanner_detects_hidden_ascii():
     scanner = RegexScanner()
     # U+202E RIGHT-TO-LEFT OVERRIDE — classic injection hide char
-    result = await scanner.scan("ignore me ‮ cat", "tool")
+    result = await scanner.scan("ignore me \u202e cat", "tool")
     assert result.outcome is ScanOutcome.BLOCK
     assert "hidden_ascii" in result.scanner
 
