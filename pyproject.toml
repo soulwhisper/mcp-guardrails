@@ -77,8 +77,7 @@ exclude = ["tests*", "proto*"]
 minversion = "8.0"
 testpaths = ["tests"]
 asyncio_mode = "auto"
-# TEMP-DEBUG: CI bisect cycle 7 - deselect only test_record_stamps_monotonic_ts
-addopts = "-ra --strict-markers --strict-config --deselect tests/test_wave3_rules.py::test_record_stamps_monotonic_ts"
+addopts = "-ra --strict-markers --strict-config"
 markers = [
     "integration: end-to-end tests requiring a live gRPC server",
 ]
@@ -126,6 +125,6 @@ omit = ["guardrails/proto_bridge.py", "proto/*"]
 exclude_lines = [
     "pragma: no cover",
     "raise NotImplementedError",
-    "if __name__ == .__main__.:",
+    "if __name__ == .__main__:",
     "if TYPE_CHECKING:",
 ]
