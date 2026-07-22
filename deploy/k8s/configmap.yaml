@@ -157,6 +157,8 @@ data:
     # Relevant env vars (set on the Deployment):
     #   ENABLE_REGEX_SCANNER   - toggle the regex-based secrets/PII/hidden-ascii scanner
     #   ENABLE_PROMPTGUARD   - toggle the PromptGuard-2 semantic scanner
+    #   PG_MAX_WINDOWS       - PromptGuard sliding-window cap per chunk (default 16);
+    #                          budget adapts to token length, this is the latency bound
     #   ENABLE_AGENT_ALIGNMENT - toggle the LLM-based AgentAlignment second stage
     #                            (only runs when PromptGuard returns HUMAN_REVIEW;
     #                            default off for homelab latency budget)
