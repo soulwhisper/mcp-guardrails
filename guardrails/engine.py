@@ -192,6 +192,7 @@ class GuardrailEngine:
             window=config.invariant_window,
             max_traces=config.invariant_max_traces,
             args_max_bytes=config.invariant_args_max_bytes,
+            sticky_ttl_s=config.invariant_sticky_ttl_s,
         )
 
         aggregator = DecisionAggregator(human_review_mode=config.human_review_mode)
@@ -394,21 +395,48 @@ class GuardrailEngine:
             results: list[ScanResult] = []
             results.extend(self._payload_size_results(total_bytes, scanned_bytes))
 
+            # F-P1-5: tool-level ACL, applied BEFORE any content scanner.
+            # DENY wins; a non-empty ALLOW list is a whitelist. The wire
+            # reason is generalised by the servicer; the tool name is already
+            # an audit field, so recording it here adds no new disclosure.
+            if method == "tools/call" and tool_name:
+                acl_hit = _tool_acl_violation(
+                    tool_name, self._cfg.allow_tools, self._cfg.deny_tools
+                )
+                if acl_hit is not None:
+                    results.append(acl_hit)
+
             # Content scanners on the params text (head/mid/tail windows when
             # over budget, so padding cannot hide an injection past the cut
-            # or between the head and tail windows).
-            for text in texts:
-                scan_results = await self._run_scanners(text, "tool", self._c.request_scanners)
-                results.extend(scan_results)
+            # or between the head and tail windows). The McpCallContext is
+            # threaded through so context-aware scanners can inspect method /
+            # headers / transport without re-parsing wire bytes.
+            if not any(r.outcome is ScanOutcome.BLOCK for r in results):
+                for text in texts:
+                    scan_results = await self._run_scanners(
+                        text, "tool", self._c.request_scanners, context=ctx
+                    )
+                    results.extend(scan_results)
 
             # Invariant: record + evaluate toxic flow against THIS route's
             # trace. Trace mutation must be serialised so concurrent requests
             # can't interleave half-calls.
             inv_result: ScanResult | None = None
             if self._c.invariant is not None:
-                trace_key = route_name or (service_names[0] if service_names else "")
+                trace_key = _trace_key(
+                    route_name,
+                    service_names,
+                    headers,
+                    self._cfg.invariant_trace_key_headers,
+                )
                 async with self._trace_lock:
-                    self._c.invariant.record(tool_name, params.get("arguments", {}), key=trace_key)
+                    # F-P1-6: only genuine tool calls enter the trace —
+                    # other methods (or a tools/call with an empty name)
+                    # would pollute the window with nameless entries.
+                    if method == "tools/call" and tool_name:
+                        self._c.invariant.record(
+                            tool_name, params.get("arguments", {}), key=trace_key
+                        )
                     inv_result = self._c.invariant.evaluate_or_allow(key=trace_key)
                 results.append(inv_result)
 
@@ -426,6 +454,7 @@ class GuardrailEngine:
                             decision,
                             mutated={**dict(params), "arguments": mutated_args},
                             reason=_redaction_reason(decision.reason, n),
+                            redactions=n,
                         )
 
             # Mint/attach the per-exchange correlation ref BEFORE the audit
@@ -493,7 +522,7 @@ class GuardrailEngine:
             flagged_chunks: list[str] = []
             for text in texts:
                 chunk_results = await self._run_scanners(
-                    text, "assistant", self._c.response_scanners
+                    text, "assistant", self._c.response_scanners, context=ctx
                 )
                 first_stage.extend(chunk_results)
                 if any(r.outcome is ScanOutcome.HUMAN_REVIEW for r in chunk_results):
@@ -527,6 +556,7 @@ class GuardrailEngine:
                     decision,
                     mutated=mutated_result,
                     reason=_redaction_reason(decision.reason, n),
+                    redactions=n,
                 )
 
             decision = replace(decision, ref=decision.ref or ref)
@@ -639,6 +669,8 @@ class GuardrailEngine:
         content: str,
         role: str,
         scanners: Sequence[Scanner],
+        *,
+        context: McpCallContext | None = None,
     ) -> list[ScanResult]:
         """Run all scanners concurrently, each with its own deadline.
 
@@ -655,7 +687,7 @@ class GuardrailEngine:
                 attrs["outcome"] = "unknown"
                 try:
                     result = await asyncio.wait_for(
-                        scanner.scan(content, role),
+                        scanner.scan(content, role, context=context),
                         timeout=timeout,
                     )
                     attrs["outcome"] = result.outcome.value
@@ -682,6 +714,71 @@ class GuardrailEngine:
         if self._cfg.failure_mode is FailureMode.FAIL_CLOSED:
             return ScanResult.block(scanner_name, reason, score=1.0)
         return ScanResult.review(scanner_name, f"failopen:{reason}")
+
+
+def _trace_key(
+    route_name: str,
+    service_names: Sequence[str],
+    headers: Mapping[str, str],
+    key_headers: Sequence[str],
+) -> str:
+    """Compute the Invariant trace key (S-H5 / F-P0-1(b)).
+
+    Default: ``route_name`` (falling back to the first service name) — the
+    legacy route dimension. When ``INVARIANT_TRACE_KEY_HEADERS`` is configured
+    and one of those headers (case-insensitive) is present, its value extends
+    the key (``route|header=value``), isolating toxic-flow traces per caller /
+    session: two sessions on the same route can no longer assemble a
+    cross-session toxic flow or trip each other's loop rules. A missing
+    header falls back to the route dimension, so deployments without a
+    session header keep the current behaviour.
+    """
+    base = route_name or (service_names[0] if service_names else "")
+    if key_headers:
+        lowered = {str(k).lower(): v for k, v in headers.items()}
+        for name in key_headers:
+            value = lowered.get(str(name).lower())
+            if value:
+                # Cap the header contribution: it is attacker-influenced and
+                # keys an LRU map, so length is bounded (the map's max_traces
+                # cap already bounds cardinality).
+                return f"{base}|{name}={str(value)[:128]}"
+    return base
+
+
+def _tool_acl_match(tool: str, patterns: Sequence[str]) -> str | None:
+    """Return the first ACL pattern matching ``tool``, else None.
+
+    Patterns are exact tool names or ``prefix/*`` wildcards (``fs/*`` matches
+    ``fs/read`` but not ``fsx/read``).
+    """
+    for pat in patterns:
+        if pat.endswith("/*"):
+            if tool.startswith(pat[:-1]):
+                return pat
+        elif tool == pat:
+            return pat
+    return None
+
+
+def _tool_acl_violation(
+    tool: str, allow: Sequence[str], deny: Sequence[str]
+) -> ScanResult | None:
+    """F-P1-5 tool-level ACL: DENY wins; a non-empty ALLOW is a whitelist.
+
+    The reason carries the tool name for the audit log (the tool name is
+    already a top-level audit field, so this discloses nothing new); the
+    servicer generalises the wire-visible deny reason as usual.
+    """
+    if _tool_acl_match(tool, deny) is not None:
+        return ScanResult.block(
+            "tool_acl", f"tool {tool!r} denied by tool ACL", score=1.0
+        )
+    if allow and _tool_acl_match(tool, allow) is None:
+        return ScanResult.block(
+            "tool_acl", f"tool {tool!r} not in tool allowlist", score=1.0
+        )
+    return None
 
 
 def _payload_bytes(value: Any) -> int:
