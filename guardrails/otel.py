@@ -220,13 +220,18 @@ class Observability:
         outcome = "deny" if decision.deny else ("mutated" if decision.is_mutated else "allow")
         if decision.human_review and not decision.deny:
             outcome = "human_review"
-        # A-P0-1: exchange_id == decision.ref — one greppable correlation id
-        # shared by the wire deny reason and both sides' audit lines.
+        # A-P0-1 / PR-#65: ref is always an engine-minted random uuid8;
+        # exchange_id comes from the trusted dataplane channels (see
+        # servicer._extract_exchange_id) and only falls back to ref when the
+        # caller supplied none (engine-direct callers).
         exchange_id = ctx.exchange_id or decision.ref
+        now = time.time()
         record = {
-            # A-P1-1 precision change: ``ts`` is now epoch MILLISECONDS as a
-            # float (was epoch seconds as an int). Field name unchanged.
-            "ts": round(time.time() * 1000.0, 3),
+            # A-P1-1 (revised): ``ts`` is epoch seconds as an int again;
+            # millisecond precision is available via ``ts_ms`` (epoch ms,
+            # float) — both sampled from the same time.time() call.
+            "ts": int(now),
+            "ts_ms": round(now * 1000.0, 3),
             "phase": phase,
             "method": method,
             "tool": tool_name,
