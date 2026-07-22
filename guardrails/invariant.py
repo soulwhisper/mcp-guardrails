@@ -169,12 +169,64 @@ class ToxicFlowRule:
         return f"ToxicFlowRule(name={self.name!r}, steps={len(self.steps)})"
 
 
+def _truncate_args(args: Mapping[str, Any], max_bytes: int) -> Mapping[str, Any]:
+    """Bound the stored copy of a call's arguments (S-M4).
+
+    The Invariant window keeps a copy of every call's args; an agent passing
+    a multi-MB argument would otherwise let a single call bloat the rolling
+    window. When the serialised args exceed ``max_bytes`` the STRUCTURE is
+    preserved and long string values are truncated (with an explicit marker)
+    so ``FlowStep`` arg matchers still resolve field paths and can match on
+    the retained prefix. ``max_bytes <= 0`` disables truncation.
+    """
+    if max_bytes <= 0:
+        return dict(args)
+    try:
+        if len(json.dumps(args, sort_keys=True, default=str)) <= max_bytes:
+            return dict(args)
+    except (TypeError, ValueError):
+        return dict(args)
+
+    strings = sum(1 for _ in _iter_strings(args))
+    per_string = max(64, max_bytes // max(1, strings))
+
+    def _shrink(value: Any) -> Any:
+        if isinstance(value, str):
+            if len(value) <= per_string:
+                return value
+            return value[:per_string] + "…[truncated]"
+        if isinstance(value, Mapping):
+            return {k: _shrink(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_shrink(v) for v in value]
+        return value
+
+    return _shrink(dict(args))
+
+
+def _iter_strings(value: Any) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for v in value.values():
+            yield from _iter_strings(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from _iter_strings(v)
+
+
 @dataclass
 class TraceEntry:
-    """One entry in the rolling tool-call trace."""
+    """One entry in the rolling tool-call trace.
+
+    ``args`` may be a size-bounded copy (see :func:`_truncate_args`); the
+    fingerprint is computed from the FULL original args at record time and
+    stored in ``fp`` so loop detection is unaffected by truncation.
+    """
 
     tool: str
     args: Mapping[str, Any] = field(default_factory=dict)
+    fp: str = ""
 
     def fingerprint(self) -> str:
         """Stable identity for loop detection — tool + sorted args JSON.
@@ -183,6 +235,8 @@ class TraceEntry:
         is what distinguishes a genuine retry loop from a parameterised search
         (where args differ each call).
         """
+        if self.fp:
+            return self.fp
         return f"{self.tool}:{json.dumps(self.args, sort_keys=True, default=str)}"
 
 
@@ -241,11 +295,13 @@ class InvariantEngine:
         rules: Iterable[ToxicFlowRule],
         window: int = 64,
         max_traces: int = 1024,
+        args_max_bytes: int = 4 * 1024,
     ):
         self._rules: list[ToxicFlowRule] = list(rules)
         self._traces: OrderedDict[str, deque[TraceEntry]] = OrderedDict()
         self._window = window
         self._max_traces = max(1, max_traces)
+        self._args_max_bytes = args_max_bytes
 
     @property
     def rules(self) -> tuple[ToxicFlowRule, ...]:
@@ -300,8 +356,17 @@ class InvariantEngine:
 
         Called by the engine on every ``tools/call`` request *before* rule
         evaluation, so the current call participates in matching.
+
+        The stored args copy is size-bounded (``args_max_bytes``, S-M4) so a
+        giant argument cannot bloat the rolling window; the loop fingerprint
+        is computed from the FULL args before truncation, so loop detection
+        is unaffected, and structure-preserving truncation keeps dotted-path
+        arg matchers working on the retained value prefixes.
         """
-        self._get_trace(key).append(TraceEntry(tool=tool, args=dict(args or {})))
+        full_args = dict(args or {})
+        fp = f"{tool}:{json.dumps(full_args, sort_keys=True, default=str)}"
+        stored = _truncate_args(full_args, self._args_max_bytes)
+        self._get_trace(key).append(TraceEntry(tool=tool, args=stored, fp=fp))
 
     def evaluate(self, *, key: str = "") -> ScanResult | None:
         """Run all rules against the current trace for ``key``.

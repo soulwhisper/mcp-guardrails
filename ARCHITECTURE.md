@@ -272,9 +272,14 @@ self._c.second_stage_scanners)` runs and the results are appended to the
    carries no tool identity to record.
 6. **Redaction (mutation stage)** — `GuardrailEngine._redact(...)` runs the
    `RedactionScanner` transformer ([`guardrails/redaction.py`](guardrails/redaction.py))
-   over the result **only when the aggregate decision is neither a deny nor
-   a human-review pass** (a `BLOCK` always wins; review payloads pass+warn
-   unmutated so review semantics stay intact). The transformer recursively
+   over the result **whenever the aggregate decision is not a deny** (a
+   `BLOCK` always wins). `HUMAN_REVIEW` payloads are redacted too when
+   `REDACT_ON_REVIEW=1` (default): the review verdict is preserved — the
+   aggregator's `human_review` flag and the audit outcome are untouched —
+   and the mutated payload rides alongside via the `mutated` oneof, so
+   review-grade PII is masked instead of passing through verbatim.
+   `REDACT_ON_REVIEW=0` restores the legacy behaviour (review payloads
+   pass+warn unmutated). The transformer recursively
    walks the result JSON and rewrites string values, replacing secret/PII
    matches (emails, credit cards, cloud/chat/LLM tokens, PEM private-key
    blocks) with `[REDACTED:<TYPE>]` placeholders. Because it walks the
@@ -449,12 +454,21 @@ engine.
 Tool output can be multi-MB; scanning it whole blows the inference latency
 budget and risks OOM. `scan_windows(text, MAX_CONTENT_BYTES, SCAN_TAIL_BYTES)`
 cuts a UTF-8-safe head window (default 32 KiB) and — for over-budget payloads —
-a second UTF-8-safe tail window (default 8 KiB). Both chunks are scanned; the
-`truncated` flag is folded into the audit record (`truncated: true` in the
-JSONL line) and the OTel span attribute. The tail window closes the
-**truncation bypass**: an attacker padding the payload so the injection lands
-beyond the 32 KiB head is caught by the tail scan. Set `SCAN_TAIL_BYTES=0` to
-revert to head-only scanning.
+a mid window (centred on the unscanned remainder) plus a tail window (default
+8 KiB each). All chunks are scanned; the `truncated` flag is folded into the
+audit record (`truncated: true` in the JSONL line) and the OTel span attribute,
+alongside `scanned_bytes` / `total_bytes` coverage counters. The tail window
+closes the **truncation bypass** (padding that pushes the injection beyond the
+32 KiB head) and the mid window closes the **mid-payload blind spot** (padding
+that pushes it past the head but short of the tail). Set `SCAN_TAIL_BYTES=0`
+to revert to head-only scanning.
+
+Payloads beyond the `SCAN_MAX_PAYLOAD_BYTES` hard cap (default 1 MiB) are
+still scanned via the three windows, but the engine additionally attaches a
+`payload_size` `HUMAN_REVIEW` result whose reason carries the scanned/total
+byte counts — `HUMAN_REVIEW_MODE` then resolves pass+warn vs deny, so under
+fail-closed review handling a giant, mostly-unscanned payload cannot pass
+silently.
 
 ## Hot-reload
 
@@ -672,7 +686,7 @@ flowchart TD
     end
 
     subgraph Engine
-        ENG --> EXT[extract_text + scan_windows (head+tail)]
+        ENG --> EXT[extract_text + scan_windows (head/mid/tail)]
         EXT --> RX[RegexScanner<br/>hidden-ascii / PII / secrets]
         EXT --> LF[OnnxPromptGuardScanner<br/>PromptGuard-2]
         EXT --> INV[InvariantEngine<br/>trace record + evaluate]

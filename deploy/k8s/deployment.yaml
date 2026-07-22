@@ -65,6 +65,18 @@ spec:
         - name: guardrail
           image: ghcr.io/soulwhisper/mcp-guardrails:0.3.5  # x-release-please-version
           imagePullPolicy: IfNotPresent
+          # Container-level hardening (S-M6): no privilege escalation, all
+          # Linux capabilities dropped, read-only root filesystem. The app
+          # only needs read access (/app code, /models weights, /etc/guardrails
+          # rules) — audit goes to stdout (/dev/stdout is a symlink into /proc
+          # and stays writable), HF runs offline against the pre-baked model.
+          # A writable /tmp emptyDir covers Python/grpc scratch files.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
           ports:
             - name: grpc-h2c
               containerPort: 9001
@@ -97,6 +109,22 @@ spec:
             #   value: "false"
             # - name: REDACTION_MAX_BYTES    # payload byte cap for redaction; over-cap -> skip + redaction_skipped=size (default 262144)
             #   value: "262144"
+            # - name: REDACT_ON_REVIEW       # redact HUMAN_REVIEW payloads too (default true; false restores legacy pass-unmutated)
+            #   value: "true"
+            # - name: SCAN_MAX_PAYLOAD_BYTES # hard payload cap; over-cap -> HUMAN_REVIEW "payload_size" on top of head/mid/tail scan (default 1048576)
+            #   value: "1048576"
+            # - name: INVARIANT_ARGS_MAX_BYTES # per-entry args cap in the Invariant trace window (default 4096)
+            #   value: "4096"
+            # - name: GRPC_MAX_RECV_BYTES    # gRPC max message size (default 8388608)
+            #   value: "8388608"
+            # - name: GRPC_MAX_CONCURRENT_RPCS # in-flight RPC bound (default 128)
+            #   value: "128"
+            # - name: AUDIT_HMAC_KEY         # key audit-log match digests with HMAC-SHA256 instead of plain SHA-256 (recommended)
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: guardrail-audit-hmac
+            #       key: AUDIT_HMAC_KEY
+            #       optional: true
             - name: INVARIANT_RULES_PATH
               value: "/etc/guardrails/rules.policy"
             - name: SCANNER_TIMEOUT_MS
@@ -128,6 +156,9 @@ spec:
               value: "model.onnx"
             - name: LF_PROMPTGUARD_BLOCK_THRESHOLD
               value: "0.9"
+            # - name: PG_MAX_WINDOWS         # PromptGuard sliding-window cap per chunk (default 16);
+            #                                # budget adapts to token length, this is the latency bound
+            #   value: "16"
             # --- AgentAlignment LLM (second-stage, opt-in) ---
             # Only needed when ENABLE_AGENT_ALIGNMENT=1. The LLM client reads
             # the API key directly from LF_ALIGNMENT_API_KEY.
@@ -186,7 +217,12 @@ spec:
             - name: rules
               mountPath: /etc/guardrails
               readOnly: true
+            # Writable scratch dir (root fs is read-only).
+            - name: tmp
+              mountPath: /tmp
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: rules
           configMap:
             name: guardrail-rules

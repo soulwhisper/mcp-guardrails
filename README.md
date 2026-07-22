@@ -23,6 +23,7 @@ cost-bounded AgentAlignment LLM as a second stage gated on first-stage
 - [Rule packs](#rule-packs)
 - [Deployment](#deployment)
 - [Testing](#testing)
+- [Project scope and trust assumptions](#project-scope-and-trust-assumptions)
 - [Security model and failure modes](#security-model-and-failure-modes)
 - [Project layout](#project-layout)
 - [Contributing](#contributing)
@@ -79,7 +80,7 @@ flowchart TD
     end
 
     subgraph Engine
-        ENG --> EXT["extract_text + scan_windows (head+tail)"]
+        ENG --> EXT["extract_text + scan_windows (head/mid/tail)"]
         EXT --> RX[RegexScanner<br/>hidden-ascii / PII / secrets]
         EXT --> PG[OnnxPromptGuardScanner<br/>PromptGuard-2]
         EXT --> INV[InvariantEngine<br/>trace record + evaluate]
@@ -163,11 +164,15 @@ When every content scanner ALLOWs a response, the redaction stage
 structurally rewrites secret/PII material in the result (e.g. emails,
 credit cards, API tokens that scanners deliberately do not hard-deny),
 replacing each match with a `[REDACTED:<TYPE>]` placeholder and returning
-the rewritten payload via the `mutated` oneof. A BLOCK always wins, and a
-`HUMAN_REVIEW` payload is passed+warned **without** mutation so review
-semantics stay intact — under `failOpen` that means a scanner exception
-(HUMAN_REVIEW) suppresses redaction and the payload is forwarded in
-cleartext (see
+the rewritten payload via the `mutated` oneof. A BLOCK always wins.
+`HUMAN_REVIEW` payloads are **also redacted by default**
+(`REDACT_ON_REVIEW=1`): the review verdict is preserved (pass+warn or deny
+per `HUMAN_REVIEW_MODE`, recorded in the audit log) and the mutated payload
+rides along via the `mutated` oneof, so review-grade PII/credentials are
+masked instead of passing through verbatim — under `failOpen` that means a
+scanner exception (HUMAN_REVIEW) no longer forwards secrets in cleartext.
+Set `REDACT_ON_REVIEW=0` to restore the legacy behaviour (review payloads
+pass unmutated; see
 [Security model and failure modes](#security-model-and-failure-modes)).
 Request-side redaction of `params.arguments` is opt-in
 (`REDACT_REQUEST_PARAMS`).
@@ -178,7 +183,7 @@ thread (`asyncio.to_thread`, no event-loop stall), and payloads larger than
 `REDACTION_MAX_BYTES` (default 256KiB) skip redaction entirely — they pass
 through unchanged with `redaction_skipped=size` in the audit span. This is
 a safe trade-off, not a blocking gap: over-cap payloads are still scanned
-by the RegexScanner head+tail `scan_windows`, so block-grade secrets
+by the RegexScanner head/mid/tail `scan_windows`, so block-grade secrets
 (private keys, tokens) are BLOCKed upstream; only best-effort masking of
 ALLOW-grade PII (emails, credit cards) is skipped.
 
@@ -327,16 +332,20 @@ deadline.
 | Policy         | `FAILURE_MODE`                   | `failClosed`                             | `failClosed` denies on scanner failure/timeout (recommended for write-capable agents). `failOpen` allows with a review flag.                   |
 | Policy         | `HUMAN_REVIEW_MODE`              | `pass`                                   | How `HUMAN_REVIEW` outcomes are resolved. `pass` forwards + emits an audit warning; `deny` escalates to a hard deny.                           |
 | Scanners       | `MAX_CONTENT_BYTES`              | `32768`                                  | Max bytes of the head window fed to any scanner. Beyond this the payload is truncated (UTF-8-safe) and the decision is flagged `truncated=true` in audit. |
-| Scanners       | `SCAN_TAIL_BYTES`                | `8192`                                   | Extra bytes scanned from the TAIL of an over-budget payload, closing the truncation bypass (padding cannot hide an injection past the scanned head). `0` disables. |
+| Scanners       | `SCAN_TAIL_BYTES`                | `8192`                                   | Extra bytes scanned from the MID and TAIL of an over-budget payload, closing the truncation bypass (padding cannot hide an injection past the scanned head, nor between the head and tail windows). `0` disables. |
+| Scanners       | `SCAN_MAX_PAYLOAD_BYTES`         | `1048576`                                | Hard payload cap (1MiB). Over-cap payloads are still scanned (head/mid/tail) AND flagged with a `payload_size` `HUMAN_REVIEW` (scanned/total bytes in the reason + audit `scanned_bytes`/`total_bytes` fields); `HUMAN_REVIEW_MODE` decides pass+warn vs deny. |
 | Scanners       | `ENABLE_REGEX_SCANNER`           | `true`                                   | Deterministic pattern scanner (hidden ASCII / PII / secrets). Zero ML deps.                                                                    |
 | Scanners       | `ENABLE_PROMPTGUARD`             | `true`                                   | ONNX PromptGuard semantic scanner. Falls back to regex-only if `onnxruntime`/`transformers` is absent.                                         |
 | Scanners       | `ENABLE_AGENT_ALIGNMENT`         | `false`                                  | LLM-based AgentAlignment. Off by default; only triggered as a second stage when PromptGuard flags `HUMAN_REVIEW` on a response.                |
-| Redaction      | `ENABLE_REDACTION`               | `true`                                   | Structural secret/PII redaction on allowed payloads (`[REDACTED:<TYPE>]` placeholders, forwarded via the `mutated` oneof). Runs only when no scanner BLOCKs and no `HUMAN_REVIEW` is pending. |
+| Redaction      | `ENABLE_REDACTION`               | `true`                                   | Structural secret/PII redaction on allowed payloads (`[REDACTED:<TYPE>]` placeholders, forwarded via the `mutated` oneof). Runs whenever no scanner BLOCKs (see `REDACT_ON_REVIEW` for the review path). |
+| Redaction      | `REDACT_ON_REVIEW`               | `true`                                   | Also redact `HUMAN_REVIEW` payloads: the review verdict is kept and the mutated payload rides along, so review-grade PII is masked instead of passing through verbatim. `false` restores the legacy pass-unmutated behaviour. |
 | Redaction      | `REDACT_REQUEST_PARAMS`          | `false`                                  | Also redact inside `params.arguments` on the request side. Off by default — secrets in requests should BLOCK (RegexScanner), not be rewritten. |
-| Redaction      | `REDACTION_MAX_BYTES`            | `262144`                                 | Payload byte cap for redaction (256KiB). Over-cap payloads skip redaction entirely and pass through unchanged with `redaction_skipped=size` in the audit span; they are still scanned by the head+tail `scan_windows`. |
+| Redaction      | `REDACTION_MAX_BYTES`            | `262144`                                 | Payload byte cap for redaction (256KiB). Over-cap payloads skip redaction entirely and pass through unchanged with `redaction_skipped=size` in the audit span; they are still scanned by the head/mid/tail `scan_windows`. |
 | PromptGuard    | `LF_ONNX_FILE`                   | `model.onnx`                             | Which `.onnx` file to load. Defaults to the full-precision `model.onnx`. |
 | PromptGuard    | `LF_ONNX_MODEL`                  | `gravitee-io/...-onnx`                   | ONNX model repo ID. Public, non-gated; model weights under Llama 4 Community License (see NOTICE).                                          |
 | PromptGuard    | `LF_PROMPTGUARD_BLOCK_THRESHOLD` | `0.9`                                    | Block threshold (0.0-1.0). PromptGuard score >= threshold -> BLOCK.                                                                            |
+| PromptGuard    | `PG_MAX_WINDOWS`                 | `16`                                     | Cap on PromptGuard sliding-window inference per chunk. The window budget adapts to the payload's token length (`clamp(ceil(tokens/step)+1, 4, PG_MAX_WINDOWS)`); each extra window is one more 512-token inference, so this is the per-chunk latency bound. Raise for better long-payload coverage, lower for tighter P95. |
+| PromptGuard    | `LF_ONNX_REVISION`               | `45a05fbd…`                              | Supply-chain pin: HF commit sha for runtime hub fetches (only used when `LF_ONNX_LOCAL_DIR` is unset). Matches the Dockerfile `PG2_REVISION` build-arg. Override together with `LF_ONNX_MODEL`. |
 | AgentAlignment | `LF_ALIGNMENT_MODEL`             | `meta-llama/...-FP8`                     | LLM model name for AgentAlignment (only when `ENABLE_AGENT_ALIGNMENT=true`). Default: Llama-4-Maverick via Together AI.                        |
 | AgentAlignment | `LF_ALIGNMENT_API_BASE`          | `https://api.together.xyz/v1`            | LLM API base URL (OpenAI-compatible). Override for OpenAI, Azure, vLLM, Ollama, etc.                                                           |
 | AgentAlignment | `LF_ALIGNMENT_API_KEY`           | _(unset)_                                | API key for the LLM provider. The scanner reads the key directly from this env var. Only needed when `ENABLE_AGENT_ALIGNMENT=true`.            |
@@ -344,14 +353,18 @@ deadline.
 | Tokenizers     | `TOKENIZERS_PARALLELISM`         | _(unset)_                                | Set to `true` for parallel tokenization (the sidecar is single-process async, so unset is fine).                                               |
 | Invariant      | `INVARIANT_WINDOW`               | `64`                                     | Sliding-window size for the cross-call toxic-flow trace. Covers a typical homelab agent tool-use chain; bump for long multi-step plans.        |
 | Invariant      | `INVARIANT_MAX_TRACES`           | `1024`                                   | Max distinct per-route trace windows (traces are isolated per route name / first service name). Oldest (LRU) tenant trace is evicted beyond this bound. |
+| Invariant      | `INVARIANT_ARGS_MAX_BYTES`       | `4096`                                   | Per-entry args cap in the trace window: oversized args keep their structure with long string values truncated (matchers keep working); the loop fingerprint is computed from the full args. |
 | Invariant      | `INVARIANT_RULES_PATH`           | _(unset)_                                | Filesystem path to a rule pack (`.py` / `.policy`). Hot-reloadable via `SIGHUP`. Takes precedence over `INVARIANT_RULES_MODULE`.               |
 | Invariant      | `INVARIANT_RULES_MODULE`         | `guardrails.rules.default`               | Dotted Python module path to a rule pack. Used when `INVARIANT_RULES_PATH` is unset.                                                           |
 | Timing         | `SCANNER_TIMEOUT_MS`             | `500`                                    | Per-scanner deadline in milliseconds. Exceeded -> treated per `FAILURE_MODE`. Keep sidecar < gateway so the sidecar decides first.             |
 | Networking     | `LISTEN_ADDR`                    | `[::]:9001`                              | gRPC bind address. `127.0.0.1:9001` for loopback-only (e.g. sidecar-on-localhost).                                                             |
 | Networking     | `SERVER_MAX_WORKERS`             | `8`                                      | `grpc.aio` ThreadPoolExecutor size. Each in-flight RPC occupies one worker; raise for high-concurrency deployments.                            |
+| Networking     | `GRPC_MAX_RECV_BYTES`            | `8388608`                                | gRPC max receive/send message size (8MiB). Bounds memory per call.                                                                             |
+| Networking     | `GRPC_MAX_CONCURRENT_RPCS`       | `128`                                    | Max in-flight RPCs (DoS bound); excess calls queue at the HTTP/2 layer.                                                                       |
 | Observability  | `OTEL_EXPORTER_OTLP_ENDPOINT`    | _(unset)_                                | OTLP/gRPC endpoint (e.g. `http://otel-collector.observability.svc:4317`). When unset or OTel SDK absent, the sidecar degrades to audit-only.   |
 | Observability  | `OTEL_SERVICE_NAME`              | `mcp-guardrails`                         | Service name reported on OTel spans/metrics.                                                                                                   |
 | Observability  | `AUDIT_LOG_PATH`                 | _(unset)_                                | Append-only JSONL audit log path. `-` or unset -> stdout. Always on; survives OTel outages.                                                    |
+| Observability  | `AUDIT_HMAC_KEY`                 | _(unset)_                                | When set, high-entropy match fingerprints in scanner reasons use keyed HMAC-SHA256 instead of plain SHA-256. Low-entropy patterns (email, credit card) always record length only (no digest) so the audit log cannot be used as an offline enumeration oracle. |
 | Misc           | `GUARDRAIL_DRY_RUN`              | `false`                                  | Replace all real scanners with allow-stubs. Use to validate wiring without loading ML models.                                                  |
 | Misc           | `LOG_LEVEL`                      | `INFO`                                   | Python logging level (`DEBUG` / `INFO` / `WARNING` / `ERROR`).                                                                                 |
 
@@ -553,6 +566,28 @@ CI runs the unit suite with coverage on every push/PR. The coverage
 percentage is published as a [job summary](https://github.com/soulwhisper/mcp-guardrails/actions/workflows/ci.yml)
 markdown table.
 
+## Project scope and trust assumptions
+
+This project is a **pure guardrail**: detection, blocking/mutation verdicts,
+and audit. Deliberately out of scope:
+
+* **Rewriting / normalisation policies** (canonicalisation, paraphrasing,
+  content transformation as a policy primitive) are the job of other
+  agentgateway modules. The one exception is the existing **redaction**
+  capability, which masks secrets/PII in otherwise-forwarded payloads.
+* **Network isolation is the deployer's responsibility.** The sidecar binds
+  plaintext h2c on `:9001` with no authentication of its own; protecting the
+  gateway↔sidecar path (Kubernetes `NetworkPolicy`, mTLS via a service mesh,
+  namespace segmentation) belongs to the platform, not this repo.
+
+Trust assumption that follows from the above: **without network isolation,
+any workload in the same cluster can talk to the sidecar directly** —
+bypassing the gateway, replaying or probing exchanges. In that posture the
+integrity of the Invariant trace windows and of individual scan verdicts
+must not be relied upon for cross-tenant guarantees; deploy a
+`NetworkPolicy` (or mesh mTLS) that restricts `:9001` to agentgateway before
+treating audit verdicts as authoritative.
+
 ## Security model and failure modes
 
 | Failure                                       | Behaviour                                                                                                                                                              |
@@ -561,14 +596,31 @@ markdown table.
 | Sidecar Pod unreachable                       | agentgateway's mcp-guardrails processor fails closed -> MCP exchange denied -> JSON-RPC `-32001` returned to the agent.                                                |
 | Model load failure (PromptGuard-2)            | Pod readiness probe stays `NOT_SERVING`; the Pod is removed from the Service endpoints. No traffic reaches a half-initialised sidecar.                                 |
 | Malformed JSON-RPC payload                    | Servicer returns `AuthorizationError{INVALID}` (fail-closed on parse failure).                                                                                |
-| Tool output > `MAX_CONTENT_BYTES`             | Head (32KiB) + tail (`SCAN_TAIL_BYTES`, 8KiB) windows are scanned; the decision is flagged `truncated=true` in the audit span. Padding at the head or tail cannot hide an injection; the region between the two windows remains unscanned (documented trade-off). |
+| Tool output > `MAX_CONTENT_BYTES`             | Head (32KiB) + mid + tail (`SCAN_TAIL_BYTES`, 8KiB each) windows are scanned; the decision is flagged `truncated=true` in the audit span. Padding cannot hide an injection at the head, tail, or the centre of the remainder; regions between the windows remain unscanned (bounded by `SCAN_MAX_PAYLOAD_BYTES`, below). |
+| PromptGuard token-window coverage             | Within each scanned chunk, PromptGuard scores 512-token sliding windows (stride 64). The window budget adapts to the chunk's token length — `clamp(ceil(tokens/step)+1, 4, PG_MAX_WINDOWS)` — keeping the first N-1 strided windows plus a tail-aligned window, and takes the MAX window score. **Latency trade-off:** each window is one extra inference; `PG_MAX_WINDOWS` (default 16) is the per-chunk latency bound. **Coverage ceiling:** chunks beyond ~`PG_MAX_WINDOWS*448 + 512` tokens (≈7.7K tokens at the default) still have unscanned middle regions — an injection padded past the scored windows can be missed. Defence-in-depth for such payloads is the byte-level head/mid/tail split plus the `payload_size` hard cap above. |
+| Payload > `SCAN_MAX_PAYLOAD_BYTES` (1MiB)     | Still scanned via the three windows, plus a `payload_size` `HUMAN_REVIEW` result carrying scanned/total bytes — `HUMAN_REVIEW_MODE=deny` turns it into a hard deny. The audit record carries `scanned_bytes` / `total_bytes` so under-scanned payloads are visible. |
 | stdio upstream                                | agentgateway forwards an empty header set for stdio upstreams. Do **not** rely on headers for authn/authz when `metadata_context.upstream_transport == "stdio"`.       |
 
 **failOpen × redaction.** Under `FAILURE_MODE=failOpen` a scanner exception
-becomes `HUMAN_REVIEW`, and review semantics suppress redaction — the
-payload is forwarded **in cleartext** (with the audit warning). Redaction
-never masks content that is pending review, so failOpen trades both the
-block *and* the masking layer away for availability.
+becomes `HUMAN_REVIEW`. With the default `REDACT_ON_REVIEW=1` the payload is
+still redacted before forwarding, so a degraded sidecar no longer leaks
+maskable secrets — failOpen trades away the block layer but keeps the
+masking layer. With `REDACT_ON_REVIEW=0` (legacy) review semantics suppress
+redaction and the payload is forwarded **in cleartext** (with the audit
+warning), trading both the block *and* the masking layer away for
+availability.
+
+**Deny-reason generalisation.** Wire-visible deny reasons are fixed generic
+strings (`denied by content policy` / `denied by response policy`, plus a
+short correlation ref; `engine_error` for internal failures) so a caller
+cannot iterate a payload against scanner/pattern feedback. The full internal
+reason — scanner, pattern, match fingerprint — is only in the audit log.
+The correlation ref is minted by the engine per exchange and recorded in the
+same audit decision line (`ref` field), so a tenant-reported ref always
+greps to the full internal record. Match fingerprints are tiered:
+low-entropy patterns (email, credit card, key=value credentials, connection
+strings) record length only, high-entropy patterns record a SHA-256 digest
+(or HMAC-SHA256 when `AUDIT_HMAC_KEY` is set).
 
 The fail-closed posture is deliberate: an agent that can call real tools
 (write files, send email, apply k8s manifests) is far more dangerous when a

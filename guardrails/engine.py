@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -125,6 +126,8 @@ class GuardrailEngine:
                         file_name=config.lf_onnx_file,
                         block_threshold=config.lf_promptguard_block_threshold,
                         local_dir=config.lf_onnx_local_dir,
+                        revision=config.lf_onnx_revision,
+                        max_windows=config.pg_max_windows,
                     )
                     request_scanners.append(onnx_scanner)
                     response_scanners.append(onnx_scanner)
@@ -167,6 +170,7 @@ class GuardrailEngine:
             rule_pack.rules,
             window=config.invariant_window,
             max_traces=config.invariant_max_traces,
+            args_max_bytes=config.invariant_args_max_bytes,
         )
 
         aggregator = DecisionAggregator(human_review_mode=config.human_review_mode)
@@ -199,11 +203,28 @@ class GuardrailEngine:
         With dry-run / regex-only configs this is a no-op.
         """
         # Touch each scanner once to force lazy init in a thread.
-        for scanner in self._c.request_scanners + self._c.response_scanners:
+        for scanner in list(self._c.request_scanners + self._c.response_scanners):
             try:
                 await asyncio.wait_for(
                     scanner.scan("", "tool"),
                     timeout=30.0,
+                )
+            except ImportError as exc:
+                # Optional dependency not installed (e.g. onnxruntime /
+                # transformers missing): the scanner can NEVER work in this
+                # process, so keeping it would make every scan raise and —
+                # under failClosed — deny all traffic. Drop it and continue
+                # with the remaining scanners (regex-only fallback), which is
+                # what from_config's ImportError guard always promised.
+                # Distinct from a model-load failure (deps present, weights
+                # broken), which stays fail-closed below.
+                self._drop_scanner(scanner)
+                logger.warning(
+                    "scanner %s unavailable (%s); removed from the scan chain — "
+                    "continuing with the remaining scanners. Install the missing "
+                    "dependency and restart to re-enable it.",
+                    getattr(scanner, "name", scanner),
+                    exc,
                 )
             except Exception as exc:  # pragma: no cover - warmup best-effort
                 logger.warning(
@@ -211,6 +232,19 @@ class GuardrailEngine:
                 )
         self._ready = True
         logger.info("guardrail engine warmed up (ready=%s)", self._ready)
+
+    def _drop_scanner(self, scanner: Scanner) -> None:
+        """Remove ``scanner`` from every phase list (identity match).
+
+        Shared instance objects may sit in both the request and response
+        lists, so filter by identity from all of them.
+        """
+        for lst in (
+            self._c.request_scanners,
+            self._c.response_scanners,
+            self._c.second_stage_scanners,
+        ):
+            lst[:] = [s for s in lst if s is not scanner]
 
     @property
     def ready(self) -> bool:
@@ -257,10 +291,9 @@ class GuardrailEngine:
             upstream_transport=upstream_transport,
             route_name=route_name,
         )
-        texts, truncated = scan_windows(
-            extract_text(params), self._cfg.max_content_bytes, self._cfg.scan_tail_bytes
-        )
-        ctx_with_trunc = _with_truncated(ctx, truncated)
+        ref = uuid.uuid4().hex[:8]
+        texts, truncated, scanned_bytes, total_bytes = self._scan_chunks(extract_text(params))
+        ctx_with_trunc = _with_scan_coverage(ctx, truncated, scanned_bytes, total_bytes)
 
         with self._obs.span(
             "guardrail.check_request",
@@ -269,9 +302,11 @@ class GuardrailEngine:
             transport=upstream_transport,
         ) as attrs:
             results: list[ScanResult] = []
+            results.extend(self._payload_size_results(total_bytes, scanned_bytes))
 
-            # Content scanners on the params text (head + tail windows when
-            # over budget, so padding cannot hide an injection past the cut).
+            # Content scanners on the params text (head/mid/tail windows when
+            # over budget, so padding cannot hide an injection past the cut
+            # or between the head and tail windows).
             for text in texts:
                 scan_results = await self._run_scanners(text, "tool", self._c.request_scanners)
                 results.extend(scan_results)
@@ -290,8 +325,8 @@ class GuardrailEngine:
             decision = self._c.aggregator.aggregate(results)
 
             # Mutation stage (opt-in on the request side): redact secrets/PII
-            # inside params.arguments. Only runs when nothing blocked and no
-            # review is pending.
+            # inside params.arguments. Runs when nothing blocked; review
+            # payloads are redacted too when REDACT_ON_REVIEW=1 (default).
             if self._cfg.redact_request_params:
                 args = params.get("arguments")
                 if args is not None:
@@ -303,10 +338,15 @@ class GuardrailEngine:
                             reason=_redaction_reason(decision.reason, n),
                         )
 
+            # Mint/attach the per-exchange correlation ref BEFORE the audit
+            # record is emitted, so the servicer's generalised deny reason and
+            # the audit line share the same ref (S-M5 follow-up).
+            decision = replace(decision, ref=decision.ref or ref)
             attrs["outcome"] = (
                 "deny" if decision.deny else ("mutated" if decision.is_mutated else "allow")
             )
             attrs["reason"] = decision.reason
+            attrs["ref"] = decision.ref
             self._obs.record_decision(
                 phase="request",
                 method=method,
@@ -332,10 +372,9 @@ class GuardrailEngine:
             upstream_transport=upstream_transport,
             route_name=route_name,
         )
-        texts, truncated = scan_windows(
-            extract_text(result), self._cfg.max_content_bytes, self._cfg.scan_tail_bytes
-        )
-        ctx_with_trunc = _with_truncated(ctx, truncated)
+        ref = uuid.uuid4().hex[:8]
+        texts, truncated, scanned_bytes, total_bytes = self._scan_chunks(extract_text(result))
+        ctx_with_trunc = _with_scan_coverage(ctx, truncated, scanned_bytes, total_bytes)
 
         with self._obs.span(
             "guardrail.check_response",
@@ -343,6 +382,7 @@ class GuardrailEngine:
             transport=upstream_transport,
         ) as attrs:
             results: list[ScanResult] = []
+            results.extend(self._payload_size_results(total_bytes, scanned_bytes))
             first_stage: list[ScanResult] = []
             flagged_chunks: list[str] = []
             for text in texts:
@@ -371,9 +411,10 @@ class GuardrailEngine:
             decision = self._c.aggregator.aggregate(results)
 
             # Mutation stage: structurally redact secrets/PII in the result.
-            # Runs only when every scanner ALLOWed — a BLOCK always wins and
-            # a HUMAN_REVIEW payload is passed+warned unmutated so the review
-            # semantics stay intact.
+            # A BLOCK always wins (no mutation). HUMAN_REVIEW payloads are
+            # redacted too when REDACT_ON_REVIEW=1 (default): the review
+            # verdict is preserved and the mutated payload rides alongside,
+            # so review-grade PII is masked on the wire.
             mutated_result, n = await self._redact(result, decision, attrs)
             if mutated_result is not None:
                 decision = replace(
@@ -382,10 +423,12 @@ class GuardrailEngine:
                     reason=_redaction_reason(decision.reason, n),
                 )
 
+            decision = replace(decision, ref=decision.ref or ref)
             attrs["outcome"] = (
                 "deny" if decision.deny else ("mutated" if decision.is_mutated else "allow")
             )
             attrs["reason"] = decision.reason
+            attrs["ref"] = decision.ref
             self._obs.record_decision(
                 phase="response",
                 method=method,
@@ -399,17 +442,56 @@ class GuardrailEngine:
     # Internals
     # ------------------------------------------------------------------
 
+    def _scan_chunks(self, text: str) -> tuple[list[str], bool, int, int]:
+        """Split extracted text into scan windows and measure coverage.
+
+        Returns ``(chunks, truncated, scanned_bytes, total_bytes)``.
+        ``scanned_bytes`` is the number of distinct payload bytes covered by
+        the returned windows (capped at ``total_bytes``).
+        """
+        texts, truncated = scan_windows(
+            text, self._cfg.max_content_bytes, self._cfg.scan_tail_bytes
+        )
+        total_bytes = len(text.encode("utf-8", errors="ignore"))
+        scanned = sum(len(t.encode("utf-8", errors="ignore")) for t in texts)
+        return texts, truncated, min(scanned, total_bytes), total_bytes
+
+    def _payload_size_results(self, total_bytes: int, scanned_bytes: int) -> list[ScanResult]:
+        """S-H2: flag payloads beyond the SCAN_MAX_PAYLOAD_BYTES hard cap.
+
+        The payload is still scanned (head/mid/tail windows) as usual; on top
+        of that we attach a HUMAN_REVIEW result from a synthetic
+        ``payload_size`` scanner so the aggregator escalates per
+        ``HUMAN_REVIEW_MODE`` (pass+warn or deny) — under fail-closed review
+        handling a giant, mostly-unscanned payload can never sail through
+        silently. The reason carries scanned/total bytes for the audit log.
+        """
+        if self._cfg.scan_max_payload_bytes <= 0 or total_bytes <= self._cfg.scan_max_payload_bytes:
+            return []
+        return [
+            ScanResult.review(
+                "payload_size",
+                f"payload exceeds scan hard limit: scanned {scanned_bytes} of "
+                f"{total_bytes} bytes (limit {self._cfg.scan_max_payload_bytes})",
+                score=1.0,
+            )
+        ]
+
     async def _redact(
         self, value: Any, decision: Decision, attrs: dict[str, Any]
     ) -> tuple[Any | None, int]:
         """Run the redaction transformer when policy permits mutation.
 
         Returns ``(redacted_value, substitutions)``; ``redacted_value`` is
-        ``None`` when redaction is disabled, the decision is a deny or a
-        human-review pass (mutation would conflict with review semantics),
-        the payload exceeds ``config.redaction_max_bytes``, or nothing
-        matched. On hits the span gets a ``redactions=N`` attribute; the
-        audit line picks it up via the span exit hook.
+        ``None`` when redaction is disabled, the decision is a deny, the
+        decision is a human-review pass and ``config.redact_on_review`` is
+        off (S-H3: with it on — the default — review payloads ARE redacted;
+        the review verdict is kept and the mutated payload rides along, so
+        review-grade PII/credentials are masked instead of passing through
+        verbatim), the payload exceeds ``config.redaction_max_bytes``, or
+        nothing matched. On hits the span gets a ``redactions=N`` attribute;
+        the audit line picks it up via the span exit hook, and the decision
+        audit record keeps the review outcome alongside.
 
         Two guards keep redaction off the request hot path:
 
@@ -425,7 +507,9 @@ class GuardrailEngine:
           :func:`asyncio.to_thread`, so a large (but under-cap) payload
           cannot stall the event loop and starve concurrent exchanges.
         """
-        if self._redactor is None or decision.deny or decision.human_review:
+        if self._redactor is None or decision.deny:
+            return None, 0
+        if decision.human_review and not self._cfg.redact_on_review:
             return None, 0
         if _payload_bytes(value) > self._cfg.redaction_max_bytes:
             attrs["redaction_skipped"] = "size"
@@ -506,7 +590,10 @@ def _redaction_reason(reason: str, n: int) -> str:
     return f"{reason};{tag}" if reason else tag
 
 
-def _with_truncated(ctx: McpCallContext, truncated: bool) -> McpCallContext:
-    if not truncated:
-        return ctx
-    return replace(ctx, truncated=True)
+def _with_scan_coverage(
+    ctx: McpCallContext, truncated: bool, scanned_bytes: int, total_bytes: int
+) -> McpCallContext:
+    """Attach scan-coverage metadata to the audit context."""
+    return replace(
+        ctx, truncated=truncated, scanned_bytes=scanned_bytes, total_bytes=total_bytes
+    )

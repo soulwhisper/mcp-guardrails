@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any
 
 from google.protobuf.json_format import MessageToDict
@@ -72,6 +73,27 @@ def _response_pass() -> Any:
     return result
 
 
+def _public_deny_reason(phase: str, internal_reason: str, ref: str = "") -> str:
+    """Generalise a deny reason for the wire (S-M5 / A-P1-4).
+
+    The engine's internal reason names the offending scanner and pattern and
+    may carry match fingerprints — exactly the feedback an attacker needs to
+    iterate a payload until it passes. The external (proto / MCP-visible)
+    reason is therefore a fixed generic string plus a short correlation id
+    that an operator can grep in the audit log, where the FULL internal
+    reason is still recorded (audit behaviour is unchanged).
+
+    The correlation id is minted by the engine per exchange and threaded here
+    via ``decision.ref``, so the exact ref a tenant reports greps to the audit
+    decision line (which carries the full internal reason). The uuid fallback
+    only fires for decisions built outside the engine (defensive).
+    """
+    if not ref:
+        ref = uuid.uuid4().hex[:8]
+    _ = internal_reason  # retained in the audit record, never on the wire
+    return f"denied by {phase} policy (ref {ref})"
+
+
 def _build_request_result(decision: Decision, parse_error: str):
     if parse_error:
         return pb.McpRequestResult(
@@ -84,7 +106,7 @@ def _build_request_result(decision: Decision, parse_error: str):
         return pb.McpRequestResult(
             error=pb.AuthorizationError(
                 code=pb.AuthorizationError.PERMISSION_DENIED,
-                reason=decision.reason or "denied",
+                reason=_public_deny_reason("content", decision.reason, decision.ref),
             )
         )
     if decision.is_mutated:
@@ -106,7 +128,7 @@ def _build_response_result(decision: Decision, parse_error: str):
         return pb.McpResponseResult(
             error=pb.AuthorizationError(
                 code=pb.AuthorizationError.PERMISSION_DENIED,
-                reason=decision.reason or "denied",
+                reason=_public_deny_reason("response", decision.reason, decision.ref),
             )
         )
     if decision.is_mutated:
@@ -150,9 +172,17 @@ class ExtMcpServicer(pbg.ExtMcpServicer):
                 upstream_transport=transport,
                 route_name=route,
             )
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive
+            # S-M5: the exception detail (type names, paths, model errors)
+            # goes to the log/audit only; the wire gets a fixed string so a
+            # caller cannot probe internal failure modes.
             logger.exception("CheckRequest engine error")
-            return _build_request_result(Decision(deny=True, reason=f"engine_error:{exc}"), "")
+            return pb.McpRequestResult(
+                error=pb.AuthorizationError(
+                    code=pb.AuthorizationError.PERMISSION_DENIED,
+                    reason="engine_error",
+                )
+            )
         return _build_request_result(decision, "")
 
     async def CheckResponse(self, request, context):
@@ -169,7 +199,12 @@ class ExtMcpServicer(pbg.ExtMcpServicer):
                 upstream_transport=transport,
                 route_name=route,
             )
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive
             logger.exception("CheckResponse engine error")
-            return _build_response_result(Decision(deny=True, reason=f"engine_error:{exc}"), "")
+            return pb.McpResponseResult(
+                error=pb.AuthorizationError(
+                    code=pb.AuthorizationError.PERMISSION_DENIED,
+                    reason="engine_error",
+                )
+            )
         return _build_response_result(decision, "")

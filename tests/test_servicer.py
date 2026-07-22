@@ -45,7 +45,11 @@ async def test_check_request_deny_maps_to_authorization_error(stub_engine):
     result = await servicer.CheckRequest(req, None)
     assert result.WhichOneof("result") == "error"
     assert result.error.code == pb.AuthorizationError.PERMISSION_DENIED
-    assert "LF:block:injection" in result.error.reason
+    # S-M5: the wire reason is generalised — no scanner/pattern names — with
+    # a short correlation ref for the audit log.
+    assert result.error.reason.startswith("denied by content policy (ref ")
+    assert "LF:block:injection" not in result.error.reason
+    assert "injection" not in result.error.reason
 
 
 @pytest.mark.asyncio
@@ -119,7 +123,9 @@ async def test_check_response_deny(stub_engine):
     )
     result = await servicer.CheckResponse(req, None)
     assert result.WhichOneof("result") == "error"
-    assert "indirect_injection" in result.error.reason
+    # S-M5: generalised wire reason, no internal detail leak.
+    assert result.error.reason.startswith("denied by response policy (ref ")
+    assert "indirect_injection" not in result.error.reason
 
 
 @pytest.mark.asyncio

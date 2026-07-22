@@ -89,7 +89,11 @@ _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{4
 _FORMAT_INJECTION = re.compile(
     r"\[SYSTEM\]|\[INST\]|\[/INST\]|\[ASSISTANT\]|"
     r"<\|?im_start\|?>|<\|?im_end\|?>|<\|?endoftext\|?>|"
-    r"###\s*(?:system|instruction|override|ignore)"
+    r"###\s*(?:system|instruction|override|ignore)",
+    # Case-insensitive: attackers trivially vary the casing of ChatML /
+    # instruction markers (### System, [system], <|IM_START|>) to slip past a
+    # case-sensitive backstop.
+    re.IGNORECASE,
 )
 # Connection strings with embedded credentials — common leak vector.
 _CONNECTION_STRING = re.compile(
@@ -111,28 +115,58 @@ _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
 _CREDIT_CARD = re.compile(r"\b(?:\d[ -]*?){13,16}\b")
 
 
-def _match_fingerprint(value: str) -> str:
+def _match_fingerprint(value: str, *, high_entropy: bool = True) -> str:
     """Return a non-reversible fingerprint for a regex match.
 
     Scanner reasons are copied into audit logs and OTel spans. Logging even
     the first 32 characters of a match can leak complete short secrets
     (for example AWS access key IDs) or enough token prefix to aid
-    credential stuffing. Keep only the length and a short SHA-256 digest
-    so operators can correlate repeats without storing the secret itself.
+    credential stuffing. Keep only the length and a short digest so operators
+    can correlate repeats without storing the secret itself.
+
+    Two tiers, because a plain SHA-256 of a *low-entropy* match is an offline
+    enumeration oracle (an attacker with the audit log can brute-force every
+    13-16 digit credit-card candidate or every plausible email address and
+    confirm hits against the digest):
+
+    * **Low-entropy patterns** (``high_entropy=False``: email, credit card)
+      record only ``match_len`` — no digest at all.
+    * **High-entropy patterns** (tokens, keys, private key material) keep a
+      12-hex-char digest. When the ``AUDIT_HMAC_KEY`` env var is set the
+      digest is HMAC-SHA256 keyed with it (recommended — it removes even the
+      theoretical dictionary-confirmation risk for lower-entropy secrets);
+      otherwise it falls back to plain SHA-256.
     """
-    digest = hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    if not high_entropy:
+        return f"match_len={len(value)}"
+    import hmac as _hmac
+    import os as _os
+
+    raw = value.encode("utf-8", errors="ignore")
+    key = _os.environ.get("AUDIT_HMAC_KEY")
+    if key:
+        digest = _hmac.new(key.encode("utf-8"), raw, hashlib.sha256).hexdigest()[:12]
+        return f"match_len={len(value)} match_hmac={digest}"
+    digest = hashlib.sha256(raw).hexdigest()[:12]
     return f"match_len={len(value)} match_sha256={digest}"
 
 
 @dataclass
 class Pattern:
-    """A named regex with a per-pattern outcome."""
+    """A named regex with a per-pattern outcome.
+
+    ``high_entropy=False`` marks patterns whose match space is small enough
+    to brute-force (email addresses, credit-card numbers); their audit
+    fingerprint omits the digest so the audit log cannot be used as an
+    offline enumeration oracle. See :func:`_match_fingerprint`.
+    """
 
     name: str
     regex: re.Pattern[str]
     outcome: ScanOutcome
     reason: str
     score: float = 0.0
+    high_entropy: bool = True
 
     def evaluate(self, content: str) -> ScanResult | None:
         m = self.regex.search(content)
@@ -141,7 +175,7 @@ class Pattern:
         return ScanResult(
             scanner=f"regex:{self.name}",
             outcome=self.outcome,
-            reason=f"{self.reason} ({_match_fingerprint(m.group(0))})",
+            reason=f"{self.reason} ({_match_fingerprint(m.group(0), high_entropy=self.high_entropy)})",
             score=self.score,
         )
 
@@ -188,6 +222,10 @@ def default_patterns() -> list[Pattern]:
             ScanOutcome.HUMAN_REVIEW,
             "connection string with potential credentials",
             0.75,
+            # The match embeds the password itself and is low-entropy (host /
+            # user / short password); a plain SHA-256 digest would be an
+            # offline dictionary oracle. Record match_len only.
+            high_entropy=False,
         ),
         Pattern(
             "key_value_credential",
@@ -195,6 +233,9 @@ def default_patterns() -> list[Pattern]:
             ScanOutcome.HUMAN_REVIEW,
             "key=value credential pair in payload",
             0.70,
+            # Same rationale as connection_string: the matched value IS the
+            # credential, often a weak/low-entropy password — no digest.
+            high_entropy=False,
         ),
         Pattern(
             "high_entropy_blob",
@@ -209,8 +250,18 @@ def default_patterns() -> list[Pattern]:
             ScanOutcome.HUMAN_REVIEW,
             "possible credit-card number",
             0.7,
+            # Low-entropy match space: record match_len only (no digest), so
+            # the audit log cannot be used as an offline enumeration oracle.
+            high_entropy=False,
         ),
-        Pattern("email", _EMAIL, ScanOutcome.ALLOW, "email address (PII, redact downstream)", 0.2),
+        Pattern(
+            "email",
+            _EMAIL,
+            ScanOutcome.ALLOW,
+            "email address (PII, redact downstream)",
+            0.2,
+            high_entropy=False,
+        ),
     ]
 
 
@@ -427,8 +478,27 @@ class OnnxPromptGuardScanner:
     # When set and present, the tokenizer + .onnx load from here — no HF hub
     # access at runtime (air-gappable). None -> resolve via the HF hub cache.
     local_dir: str | None = None
+    # Supply-chain pin (S-M6): HF revision (commit sha) used for hub fetches.
+    # The container bakes the model at build time pinned via the PG2_REVISION
+    # build-arg; runtime hub fetches honour LF_ONNX_REVISION. None -> latest.
+    revision: str | None = None
     block_threshold: float = 0.9
     name: str = "onnx-promptguard"
+    # Sliding-window inference (S-H1): the model's max_position_embeddings is
+    # 512, so a naive truncation=True/max_length=512 scores only the first
+    # ~512 tokens of a 32KiB head chunk — an injection past the cut is
+    # invisible. Instead we tokenise once, split the token ids into
+    # overlapping windows of ``window_tokens`` (stride ``window_stride``),
+    # score each window and take the MAX malicious-class probability. At most
+    # ``max_windows`` windows are scored per payload to bound latency.
+    # The window budget is ADAPTIVE: it grows with the token length of the
+    # payload (``clamp(ceil(tokens/step)+1, 4, max_windows)``), so long
+    # payloads get their middle scored too instead of only the first 3
+    # strided windows + tail. ``max_windows`` is the hard cap (default 16,
+    # env ``PG_MAX_WINDOWS``) — the latency bound.
+    window_tokens: int = 512
+    window_stride: int = 64
+    max_windows: int = 16
 
     def __post_init__(self) -> None:
         self._sess: Any = None
@@ -457,16 +527,62 @@ class OnnxPromptGuardScanner:
         if self.local_dir and os.path.isdir(self.local_dir):
             tok_src = self.local_dir
             model_path = os.path.join(self.local_dir, self.file_name)
+            config_path = os.path.join(self.local_dir, "config.json")
+            tokenizer_kwargs: dict[str, Any] = {}
         else:
             from huggingface_hub import hf_hub_download
 
             tok_src = self.model_id
-            model_path = hf_hub_download(repo_id=self.model_id, filename=self.file_name)
-        self._tokenizer = AutoTokenizer.from_pretrained(tok_src)
+            model_path = hf_hub_download(
+                repo_id=self.model_id, filename=self.file_name, revision=self.revision
+            )
+            config_path = hf_hub_download(
+                repo_id=self.model_id, filename="config.json", revision=self.revision
+            )
+            tokenizer_kwargs = {"revision": self.revision} if self.revision else {}
+        self._validate_model_config(config_path)
+        self._tokenizer = AutoTokenizer.from_pretrained(tok_src, **tokenizer_kwargs)
         # Model load is blocking. This is called from scan() via
         # asyncio.to_thread, so it's safe to do the load synchronously here.
         self._sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
         self._loaded = True
+
+    def _validate_model_config(self, config_path: str) -> None:
+        """Fail-closed check that the model's LAST class is the malicious one.
+
+        Scoring takes ``softmax(logits)[-1]`` as the block score — correct
+        only if the label order really ends with the malicious/injection
+        class. A model swap or export change that reorders ``id2label``
+        would silently invert the verdict, so we refuse to load (the engine
+        translates the exception into a BLOCK under failClosed) unless the
+        last label names a malicious/jailbreak/injection class. Also adopts
+        the model's ``max_position_embeddings`` as the window size.
+        """
+        import json
+
+        try:
+            with open(config_path, encoding="utf-8") as fh:
+                cfg = json.load(fh)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"promptguard config.json unreadable at {config_path}: {exc}"
+            ) from exc
+        id2label = cfg.get("id2label") or {}
+        try:
+            last_label = str(id2label[str(max(int(k) for k in id2label))]) if id2label else ""
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError(
+                f"promptguard config.json has non-integer id2label keys: {id2label!r}"
+            ) from exc
+        if not any(tok in last_label.upper() for tok in ("MALICIOUS", "INJECTION", "JAILBREAK")):
+            raise RuntimeError(
+                "promptguard id2label last class is "
+                f"{last_label!r} (expected a malicious/injection class); "
+                "refusing to score — check LF_ONNX_MODEL"
+            )
+        mpe = cfg.get("max_position_embeddings")
+        if isinstance(mpe, int) and mpe > 0:
+            self.window_tokens = mpe
 
     async def scan(
         self,
@@ -491,29 +607,72 @@ class OnnxPromptGuardScanner:
         return ScanResult.allow(self.name)
 
     def _score(self, text: str) -> float:
-        """Return the jailbreak probability (last-class softmax).
+        """Return the max jailbreak probability (last-class softmax) over windows.
 
         The ``gravitee-io`` ONNX export is a **2-class** model ``[benign, malicious]``;
         we softmax over the logits and take the malicious (last) class — the
         same computation LlamaFirewall's ``promptguard_utils`` performs. We use
         ``return_tensors="np"`` so no torch dependency is required.
+
+        Sliding window (S-H1): the model only sees ``window_tokens`` (512)
+        tokens at a time; a long payload is scored as overlapping windows
+        (stride ``window_stride``) and the MAX window score wins, so an
+        injection hidden past the first 512 tokens is still caught. The
+        window budget adapts to the token length
+        (``clamp(ceil(tokens/step)+1, 4, max_windows)``) — long payloads get
+        up to ``max_windows`` windows (default 16, ``PG_MAX_WINDOWS``), which
+        bounds latency. Payloads longer than
+        ``max_windows * step + window_tokens`` tokens still have unscanned
+        middle regions; defence-in-depth for those is the byte-level
+        head/mid/tail ``scan_windows`` split upstream.
         """
         import numpy as np
 
-        inputs = self._tokenizer(
-            text, return_tensors="np", padding=True, truncation=True, max_length=512
-        )
+        inputs = self._tokenizer(text, return_tensors="np")
+        ids = np.asarray(inputs["input_ids"], dtype=np.int64).reshape(-1)
+        n = ids.shape[0]
+        win = max(8, self.window_tokens)
+        if n <= win:
+            windows = [ids]
+        else:
+            step = max(1, win - max(0, self.window_stride))
+            starts = list(range(0, n - win + 1, step))
+            # Adaptive window budget (Wave-1 follow-up): scale the number of
+            # scored windows with the payload's token length so the middle of
+            # a long payload is not a blind spot. A fixed 4-window budget
+            # scored only the first 3 strided windows + tail (76% of an
+            # 8000-token payload unseen); the adaptive budget grows up to the
+            # ``max_windows`` cap (default 16, PG_MAX_WINDOWS) which remains
+            # the latency bound. Strategy unchanged: first budget-1 strided
+            # starts plus the final tail-aligned window.
+            needed = (n - win + step) // step + 1  # ceil(strided windows) + tail
+            budget = min(max(4, needed), max(1, self.max_windows))
+            tail_start = n - win
+            starts = starts[: max(0, budget - 1)]
+            if not starts or starts[-1] != tail_start:
+                starts.append(tail_start)
+            windows = [ids[s : s + win] for s in starts]
         # Feed only the inputs the ONNX graph declares — some exports omit
         # token_type_ids, and onnxruntime errors on unexpected feed keys.
         expected = {i.name for i in self._sess.get_inputs()}
-        feed = {k: v for k, v in inputs.items() if k in expected}
-        logits = np.asarray(self._sess.run(None, feed)[0], dtype=np.float64)
-        # softmax over the class dimension (numerically stable).
-        shifted = logits - logits.max(axis=-1, keepdims=True)
-        exp = np.exp(shifted)
-        probs = exp / exp.sum(axis=-1, keepdims=True)
-        # We always take the LAST class as the "block" score.
-        return float(probs[0, -1])
+        best = 0.0
+        for w in windows:
+            feed: dict[str, Any] = {}
+            if "input_ids" in expected:
+                feed["input_ids"] = w[np.newaxis, :]
+            if "attention_mask" in expected:
+                feed["attention_mask"] = np.ones((1, w.shape[0]), dtype=np.int64)
+            if "token_type_ids" in expected:
+                feed["token_type_ids"] = np.zeros((1, w.shape[0]), dtype=np.int64)
+            logits = np.asarray(self._sess.run(None, feed)[0], dtype=np.float64)
+            # softmax over the class dimension (numerically stable).
+            shifted = logits - logits.max(axis=-1, keepdims=True)
+            exp = np.exp(shifted)
+            probs = exp / exp.sum(axis=-1, keepdims=True)
+            # We always take the LAST class as the "block" score (validated
+            # against config.json id2label at load time).
+            best = max(best, float(probs[0, -1]))
+        return best
 
 
 # ---------------------------------------------------------------------------
@@ -565,21 +724,42 @@ def scan_windows(text: str, max_bytes: int, tail_bytes: int) -> tuple[list[str],
     """Split ``text`` into the chunks that content scanners must inspect.
 
     Returns ``(chunks, was_truncated)``. For in-budget payloads this is just
-    ``[text]``. For over-budget payloads the head (``max_bytes``) is always
-    scanned, plus a UTF-8-safe tail window of up to ``tail_bytes`` — an
-    injection hidden behind a padding prefix (the truncation bypass: attacker
-    pads the payload so the malicious instruction lands beyond the scanned
-    head) is caught by the tail chunk. ``tail_bytes <= 0`` disables the tail
-    window.
+    ``[text]``. For over-budget payloads three windows are scanned:
+
+    * **head** — the first ``max_bytes`` (the attacker-relevant prefix);
+    * **mid** — a ``tail_bytes``-sized window centred on the *unscanned
+      remainder* (the region between head and tail), closing the mid-payload
+      blind spot (S-H2) where an injection padded past the head but short of
+      the tail previously went unseen;
+    * **tail** — the last ``tail_bytes``, catching the classic
+      padding-prefix truncation bypass.
+
+    All windows are UTF-8-safe. ``tail_bytes <= 0`` disables the mid/tail
+    windows (legacy head-only behaviour). Windows that would fully overlap
+    the head are skipped, so short over-budget payloads may return fewer
+    than three chunks.
     """
     head, truncated = truncate(text, max_bytes)
     if not truncated or tail_bytes <= 0:
         return [head], truncated
     encoded = text.encode("utf-8", errors="ignore")
+    head_bytes = len(head.encode("utf-8", errors="ignore"))
+    chunks = [head]
+
+    # Mid window: centred on the unscanned region [head_bytes, len-tail).
+    region_start = head_bytes
+    region_end = max(region_start, len(encoded) - tail_bytes)
+    if region_end - region_start > 1:
+        mid_centre = (region_start + region_end) // 2
+        mid_start = max(region_start, mid_centre - tail_bytes // 2)
+        mid = encoded[mid_start : mid_start + tail_bytes].decode("utf-8", errors="ignore")
+        if mid and mid != head:
+            chunks.append(mid)
+
     tail = encoded[-tail_bytes:].decode("utf-8", errors="ignore")
-    if not tail or tail == head:
-        return [head], truncated
-    return [head, tail], True
+    if tail and tail != head and tail not in chunks:
+        chunks.append(tail)
+    return chunks, True
 
 
 def extract_text(payload: Any) -> str:
