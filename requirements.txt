@@ -31,7 +31,7 @@ openai>=1.76,<2
 
 # --- HuggingFace Hub (transitive via transformers, but listed for clarity) ---
 # Used by the Dockerfile models stage to snapshot_download the ONNX model.
-huggingface-hub>=0.30.2,<1
+huggingface-hub>=1.24,<2
 
 # --- hf-xet: Xet storage client for HF Hub downloads (auto-detected). ---
 hf-xet>=1.5
