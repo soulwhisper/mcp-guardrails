@@ -62,6 +62,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value, falling back to the route dimension when absent (S-H5 /
   F-P0-1(b)). The `McpCallContext` is now threaded into every scanner's
   `context` kwarg.
+* **scanners:** three-window `scan_windows` split (head / mid / tail)
+  for over-budget payloads — the mid window closes the blind spot where
+  an injection padded past the head but short of the tail went unseen
+  (S-H2); plus the `SCAN_MAX_PAYLOAD_BYTES` hard cap (default 1MiB):
+  over-cap payloads are still scanned via the windows AND flagged with a
+  `payload_size` `HUMAN_REVIEW` carrying scanned/total bytes.
+* **scanners:** adaptive PromptGuard sliding-window budget — the number
+  of scored 512-token windows grows with the payload's token length
+  (`clamp(ceil(tokens/step)+1, 4, PG_MAX_WINDOWS)`, cap default 16) so
+  long payloads get their middle scored instead of only the first strided
+  windows + tail. Fail-closed `id2label` validation at model load: the
+  scanner refuses to score (BLOCK under failClosed) unless the model's
+  last class names a malicious/injection/jailbreak label, and adopts
+  `max_position_embeddings` as the window size.
+* **audit:** `AUDIT_HMAC_KEY` env var — when set, high-entropy match
+  fingerprints in scanner reasons use keyed HMAC-SHA256 instead of plain
+  SHA-256. Low-entropy patterns (email, credit card, connection strings,
+  key=value credentials) now record `match_len` only (no digest), so the
+  audit log cannot be used as an offline enumeration oracle.
+* **redaction:** `REDACT_ON_REVIEW` (default true) — `HUMAN_REVIEW`
+  payloads also flow through the redaction transformer: the review
+  verdict is kept and the mutated payload rides along, so review-grade
+  PII/credentials are masked on the wire instead of passing through
+  verbatim. `false` restores the legacy pass-unmutated behaviour (S-H3).
+* **networking:** gRPC hardening knobs `GRPC_MAX_RECV_BYTES` (default
+  8MiB) and `GRPC_MAX_CONCURRENT_RPCS` (default 128) bound message size
+  and in-flight RPCs so a runaway caller cannot exhaust memory or starve
+  the event loop (S-M4).
+* **health:** runtime scanner-degradation verdict (A-P0-4) — a sliding
+  window of recent scan outcomes (`UNHEALTHY_SCANNER_ERROR_RATE` /
+  `UNHEALTHY_SCANNER_WINDOW` / `UNHEALTHY_SCANNER_MIN_SAMPLES`) flips the
+  gRPC health service to `NOT_SERVING` when the error/timeout rate
+  exceeds the threshold, recovering automatically. Tracked under
+  `failOpen` too.
+* **metrics:** new instruments — `mcp.guardrails.redactions` (redaction
+  substitutions), `mcp.guardrails.invariant_hits` (invariant rule hits),
+  `mcp.guardrails.rules_reload{result}` (rule-pack hot-reload outcomes).
+* **deploy:** container `securityContext` hardening in the K8s manifests
+  (non-root uid/gid 65532, `readOnlyRootFilesystem`, dropped
+  capabilities) alongside the pod-level `runAsNonRoot`.
+* **invariant:** `RateLimitRule` — sliding time-window call-rate limit
+  counted per tool name (`window_s` / `max_calls`); catches volumetric
+  abuse with varying args (enumeration / spray) that `LoopRule`'s
+  identical-fingerprint check cannot see. `TraceEntry` gains a
+  `time.monotonic()` `ts` field stamped by `record()` (defaults to `0.0`
+  for hand-built entries, treated as "now" by windowed rules).
+* **invariant:** `AggregateRule` — sliding time-window SUM of a numeric
+  argument field (dotted path + `cast`) over matching calls; fires when
+  the trailing-window total exceeds `max_total` (cumulative budgets:
+  bytes exfiltrated, recipients contacted). The window is recomputed from
+  entry timestamps per evaluation, so contributions slide out exactly —
+  no persistent accumulator.
+* **invariant:** `FlowStep(negate=True)` — negative guard steps for
+  `ToxicFlowRule`: an entry matching an armed guard (between the
+  surrounding positive steps) voids the in-progress match, including
+  parked sticky progress, and matching restarts from step 0. Enables
+  "A then C with no B between" patterns (e.g. inbox read -> external send
+  with no approval call).
+* **scanners:** PromptGuard grey-zone dual threshold via
+  `PG_REVIEW_THRESHOLD` (default 0.5): scores >=
+  `LF_PROMPTGUARD_BLOCK_THRESHOLD` BLOCK, scores in `[review, block)`
+  flag `HUMAN_REVIEW` (feeding the second-stage AgentAlignment gate),
+  lower scores ALLOW. `0` disables the grey zone; values above the block
+  threshold are clamped.
+* **scanners:** AgentAlignment egress safety + trajectory context — the
+  flagged chunk is pre-redacted with an extended `RedactionScanner`
+  pattern set (block-grade secrets/PII **plus** the review-grade
+  credential shapes — JWT, connection strings, key=value credentials —
+  whose HUMAN_REVIEW verdict feeds this second-stage gate) before leaving
+  for the external LLM (no cleartext credential egress), and the engine
+  folds the last 5 tool-call names from the route's Invariant trace
+  (metadata only) into the alignment prompt via
+  `McpCallContext.trace_summary`.
+* **tests:** `tests/test_redteam.py` red-team capability baseline —
+  base64-encoded injection, zero-width/confusables, markdown-image exfil,
+  `### SYSTEM` case variants, head/mid/tail padding bypasses, and
+  window-flush sequences. Current gaps (confusable markers, markdown
+  image exfil) are `xfail(strict=False)` with the residual documented.
 
 ### Bug Fixes
 
@@ -71,6 +149,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flow whose early steps slide out of the window still completes.
 * **invariant:** only `tools/call` requests with a non-empty tool name
   are recorded into the trace window (F-P1-6).
+* **invariant:** per-entry args cap `INVARIANT_ARGS_MAX_BYTES` (default
+  4KiB, S-M4): oversized args keep their structure with long string
+  values truncated (structure-preserving, so dotted-path arg matchers
+  keep working on the retained prefixes), while the loop fingerprint is
+  computed from the FULL args before truncation — a multi-MB argument can
+  no longer bloat the rolling window.
+* **deploy:** `deploy/k8s/deployment.yaml` no longer pins
+  `INVARIANT_WINDOW=64` (it silently overrode the raised 256 default,
+  re-opening the S-H4 window-eviction gap); the env var is removed so the
+  deployment inherits the code default.
+* **e2e:** `scripts/e2e_agentgateway.sh` assertions realigned with the
+  F-P1-1 generalised deny wire format — case c now asserts `-32001` +
+  category `content_policy` (the `private_key` pattern name no longer
+  reaches the wire) and case d asserts `-32001` + `tool_flow` instead of
+  the internal loop-rule name; both pattern/rule names are additionally
+  verified in the sidecar audit log, where they belong.
+* **docs:** test counts corrected (157 -> 305+), README config table
+  gains the missing `LF_ONNX_LOCAL_DIR` and `PG_REVIEW_THRESHOLD` rows,
+  and `examples/docker-run.env` references the current 0.3.5 image tag.
 
 * **audit:** stop trusting the JSON-RPC `id` inside the wire payload for
   exchange correlation — `params`/`result` bodies are attacker-controlled,
@@ -278,7 +375,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Docker build broke** with `httpx.UnsupportedProtocol: Request URL is
-missing an 'http://' or 'https://' protocol`. The empty `HF_ENDPOINT`
+  missing an 'http://' or 'https://' protocol`. The empty `HF_ENDPOINT`
   build-arg (the default when no mirror is configured) leaked into the build
   env as `HF_ENDPOINT=""`, which `huggingface_hub` picked up instead of its
   built-in default endpoint. The models stage now `unset`s `HF_ENDPOINT` when
@@ -390,7 +487,7 @@ ExtMcp gRPC contract as a fail-closed policy sidecar.
 
 - **ExtMcp gRPC servicer** (`guardrails/servicer.py`) implementing the
   agentgateway ExtMcp v1alpha1 contract: `CheckRequest(McpRequest) ->
-McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
+  McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
   Both return one of `allowed` (Pass), `mutated` (Mutated), or `error`
   (AuthorizationError) via a protobuf `oneof`. Malformed JSON-RPC payloads
   map to `INVALID_ARGUMENT`; policy denies map to `PERMISSION_DENIED`
