@@ -143,7 +143,7 @@ On `CheckRequest` for `tools/call`, the engine does two things in parallel:
    ASCII / PII / secrets, `OnnxPromptGuardScanner` for PromptGuard-2)
    against the text with role `TOOL`.
 2. **Invariant trace**: appends `(tool, args)` to a bounded sliding window
-   (`INVARIANT_WINDOW` calls, default 64) and evaluates every `ToxicFlowRule`
+   (`INVARIANT_WINDOW` calls, default 256) and evaluates every `ToxicFlowRule`
    and `LoopRule` against the resulting trace. First-match wins.
 
 A `BLOCK` from either path is fail-closed by the `DecisionAggregator`; the
@@ -351,9 +351,13 @@ deadline.
 | AgentAlignment | `LF_ALIGNMENT_API_KEY`           | _(unset)_                                | API key for the LLM provider. The scanner reads the key directly from this env var. Only needed when `ENABLE_AGENT_ALIGNMENT=true`.            |
 | HF cache       | `HF_HOME`                        | `/models/hf`                             | HuggingFace cache directory. Set in Dockerfile; the ONNX scanner loads the model from here.                                                    |
 | Tokenizers     | `TOKENIZERS_PARALLELISM`         | _(unset)_                                | Set to `true` for parallel tokenization (the sidecar is single-process async, so unset is fine).                                               |
-| Invariant      | `INVARIANT_WINDOW`               | `64`                                     | Sliding-window size for the cross-call toxic-flow trace. Covers a typical homelab agent tool-use chain; bump for long multi-step plans.        |
+| Invariant      | `INVARIANT_WINDOW`               | `256`                                    | Sliding-window size for the cross-call toxic-flow trace. Covers long multi-step plans. Memory bound: window x `INVARIANT_ARGS_MAX_BYTES` (4KiB) x `INVARIANT_MAX_TRACES` (1024) ≈ 1GiB theoretical worst case; realistic entries are far below the per-entry cap, so the practical footprint is tens of MiB. |
 | Invariant      | `INVARIANT_MAX_TRACES`           | `1024`                                   | Max distinct per-route trace windows (traces are isolated per route name / first service name). Oldest (LRU) tenant trace is evicted beyond this bound. |
 | Invariant      | `INVARIANT_ARGS_MAX_BYTES`       | `4096`                                   | Per-entry args cap in the trace window: oversized args keep their structure with long string values truncated (matchers keep working); the loop fingerprint is computed from the full args. |
+| Invariant      | `INVARIANT_TRACE_KEY_HEADERS`    | _(unset)_                                | Comma-separated request headers (case-insensitive, e.g. `x-session-id`) whose value extends the Invariant trace key (`route|header=value`) for per-session isolation. Missing header / unset -> legacy route-dimension key. See the multi-replica note below. |
+| Invariant      | `INVARIANT_STICKY_TTL_S`         | `600`                                    | TTL (seconds) for sticky partial-match progress: ToxicFlowRule prefix matches survive sliding out of the trace window for this long. The sticky map is LRU-bounded like the trace map (`INVARIANT_MAX_TRACES`). |
+| Policy         | `ALLOW_TOOLS`                    | _(unset)_                                | Comma-separated tool allowlist (`prefix/*` wildcards). Non-empty -> any tool not matching is denied before scanners run (audit `tool_acl`). |
+| Policy         | `DENY_TOOLS`                     | _(unset)_                                | Comma-separated tool denylist (`prefix/*` wildcards). DENY wins over `ALLOW_TOOLS`. |
 | Invariant      | `INVARIANT_RULES_PATH`           | _(unset)_                                | Filesystem path to a rule pack (`.py` / `.policy`). Hot-reloadable via `SIGHUP`. Takes precedence over `INVARIANT_RULES_MODULE`.               |
 | Invariant      | `INVARIANT_RULES_MODULE`         | `guardrails.rules.default`               | Dotted Python module path to a rule pack. Used when `INVARIANT_RULES_PATH` is unset.                                                           |
 | Timing         | `SCANNER_TIMEOUT_MS`             | `500`                                    | Per-scanner deadline in milliseconds. Exceeded -> treated per `FAILURE_MODE`. Keep sidecar < gateway so the sidecar decides first.             |
@@ -376,6 +380,16 @@ deadline.
 > The table above is the source of truth for runtime configuration and is
 > kept in sync with `guardrails/config.py`. (The two `INVARIANT_RULES_*`
 > vars are resolved by `guardrails/rules/__init__.py`.)
+
+> **Multi-replica note (Invariant traces).** Trace windows live in sidecar
+> memory, so a toxic flow whose calls land on DIFFERENT replicas cannot be
+> detected. For multi-replica deployments, have agentgateway inject a
+> session header (e.g. `x-session-id`) and route stickily on it — set
+> `INVARIANT_TRACE_KEY_HEADERS=x-session-id` so each session gets an
+> isolated trace, and configure sticky/session-affinity routing on the
+> agentgateway side (see the agentgateway docs:
+> <https://agentgateway.dev/docs/>). Sticky routing itself is the
+> deployer's responsibility; the sidecar only consumes the header.
 
 > **Observability note for upgrades.** With redaction enabled, the
 > `mcp.guardrails.decisions` counter (and the audit `outcome` field) gains a
@@ -682,6 +696,37 @@ strings) record length only, high-entropy patterns record a SHA-256 digest
 The fail-closed posture is deliberate: an agent that can call real tools
 (write files, send email, apply k8s manifests) is far more dangerous when a
 guardrail outage is silent than when it is loud. `-32001` is loud.
+
+### Structured deny contract
+
+On deny, `AuthorizationError.mcp_error` carries a JSON-RPC 2.0 error body
+(`code: -32001`) whose `message` is the same generalised string as the wire
+`reason` and whose `data` adds a generalised policy `category` (e.g.
+`content_policy`, `tool_policy`, `tool_flow`) and a generic `remedy` hint
+(e.g. "remove credentials, PII or instruction markers from tool arguments")
+— never pattern names, rule internals or match detail. The request side
+also populates `McpRequestResult.metadata` with `guardrail.scan_score`,
+`guardrail.rules_hit`, `guardrail.redactions`, `guardrail.exchange_id` and
+`guardrail.outcome` so the dataplane can log/route on guardrail verdicts
+without parsing the audit stream. (`McpResponseResult` has no `metadata`
+field in the proto — response-side metadata is not emitted;
+`header_mutation` is deliberately unused.)
+
+### Known limitations (method coverage)
+
+The sidecar only sees the MCP methods agentgateway forwards to it. The
+default agentgateway methods mapping covers `tools/call`, `tools/list`,
+`prompts/get` and `resources/read`. **Reverse-channel / other MCP methods
+— `sampling/createMessage`, `elicitation/create`, `completion/complete`,
+`roots/list`, notifications — are NOT covered** unless the deployment's
+methods mapping is extended to forward them (coverage depends on
+agentgateway's ExtMcp methods support; see the upstream docs:
+<https://agentgateway.dev/docs/>). If your threat model includes indirect
+injection via server-initiated sampling/elicitation, extend the methods
+mapping accordingly and treat this sidecar as one layer of a broader
+policy. The Invariant trace only records `tools/call` requests with a
+non-empty tool name; other methods are scanned for content but do not
+advance toxic-flow state.
 
 ## Project layout
 
