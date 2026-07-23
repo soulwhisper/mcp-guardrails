@@ -285,7 +285,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Chores
 
-* **ci:** optimize workflow triggers to reduce duplicate runs ([#34](https://github.com/soulwhisper/mcp-guardrails/issues/34)) ([207543c](https://github.com/soulwhisper/mcp-guardrails/issues/207543c673e69c8b4dbbae03df69df56a7560730))
+* **ci:** optimize workflow triggers to reduce duplicate runs ([#34](https://github.com/soulwhisper/mcp-guardrails/issues/34)) ([207543c](https://github.com/soulwhisper/mcp-guardrails/commit/207543c673e69c8b4dbbae03df69df56a7560730))
 * **ci:** update github actions ([#41](https://github.com/soulwhisper/mcp-guardrails/issues/41)) ([3fee6d0](https://github.com/soulwhisper/mcp-guardrails/commit/3fee6d0efae53d7fbad2a09882220ee148addb0c))
 
 ## [0.3.2](https://github.com/soulwhisper/mcp-guardrails/compare/0.3.1...v0.3.2) (2026-07-02)
