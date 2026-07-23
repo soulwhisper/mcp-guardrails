@@ -1,4 +1,2 @@
-M1: А -> should be escape-u-0410
-M2: Ώ -> escape-u-038f test
-M3: Ѕ -> escape-u-0405
-M4: plain text
+P1: А double-backslash-u0410
+P2: end
