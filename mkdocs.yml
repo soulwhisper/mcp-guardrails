@@ -1,0 +1,75 @@
+site_name: MCP Guardrails Docs
+site_url: https://soulwhisper.github.io/mcp-guardrails/
+site_description: >-
+  Documentation for mcp-guardrails — an agentgateway ExtMcp guardrail sidecar
+  with ONNX PromptGuard-2 scanning and an Invariant Guardrails rule engine.
+repo_url: https://github.com/soulwhisper/mcp-guardrails
+repo_name: soulwhisper/mcp-guardrails
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.tabs
+    - navigation.top
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Guardrails:
+      - guardrails/index.md
+      - Regex Scanner: guardrails/regex-scanner.md
+      - PromptGuard (Llama model filtering): guardrails/promptguard.md
+      - Agent Alignment: guardrails/agent-alignment.md
+      - Redaction: guardrails/redaction.md
+      - Invariant Rules: guardrails/invariant-rules.md
+      - Tool ACL: guardrails/tool-acl.md
+      - Scan Coverage: guardrails/scan-coverage.md
+  - Configuration: configuration.md
+  - Operations:
+      - Auditing: operations/auditing.md
+      - Metrics: operations/metrics.md
+      - Health & Shutdown: operations/health.md
+      - Review Webhook: operations/review-webhook.md
+  - Deployment:
+      - Kubernetes & agentgateway: deployment.md
+      - End-to-End Test: e2e.md
+  - Security & Compliance:
+      - Security Model: security-model.md
+      - Compliance: compliance.md
+  - Development: development.md
