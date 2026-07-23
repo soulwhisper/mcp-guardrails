@@ -170,6 +170,23 @@ def test_webhook_http_error_only_logs(caplog):
         collector.close()
 
 
+def test_post_json_http_error_returns_status_and_closes(recwarn):
+    # Regression: an HTTP error raises HTTPError (file-like, tempfile-backed);
+    # _post_json must close it or GC cleanup emits a ResourceWarning.
+    import gc
+
+    from guardrails.notify import _post_json
+
+    collector = _Collector(status=500)
+    try:
+        status = _post_json(collector.url, b"{}", 2.0)
+        assert status == 500
+        gc.collect()
+    finally:
+        collector.close()
+    assert not [w for w in recwarn.list if issubclass(w.category, ResourceWarning)]
+
+
 def test_no_webhook_configured_no_delivery():
     engine, _ = _review_engine("")
 
