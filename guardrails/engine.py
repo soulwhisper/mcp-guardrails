@@ -109,9 +109,7 @@ class GuardrailEngine:
         self._sidecar_version = config.sidecar_version or _package_version()
         # A-P0-4: sliding window of recent scan outcomes (True = ok,
         # False = error/timeout) feeding the runtime health verdict.
-        self._scan_health: deque[bool] = deque(
-            maxlen=max(1, config.unhealthy_scanner_window)
-        )
+        self._scan_health: deque[bool] = deque(maxlen=max(1, config.unhealthy_scanner_window))
 
     # ------------------------------------------------------------------
     # Factories
@@ -462,6 +460,7 @@ class GuardrailEngine:
             # record is emitted, so the servicer's generalised deny reason and
             # the audit line share the same ref (S-M5 follow-up).
             decision = replace(decision, ref=decision.ref or ref)
+            self._notify_review(decision, exchange_id or decision.ref)
             attrs["outcome"] = (
                 "deny" if decision.deny else ("mutated" if decision.is_mutated else "allow")
             )
@@ -567,6 +566,7 @@ class GuardrailEngine:
                 )
 
             decision = replace(decision, ref=decision.ref or ref)
+            self._notify_review(decision, exchange_id or decision.ref)
             attrs["outcome"] = (
                 "deny" if decision.deny else ("mutated" if decision.is_mutated else "allow")
             )
@@ -671,6 +671,26 @@ class GuardrailEngine:
         self._obs.record_redactions(n)  # A-P1-2: redactions_total counter
         return redacted, n
 
+    def _notify_review(self, decision: Decision, exchange_id: str) -> None:
+        """Fire-and-forget HUMAN_REVIEW webhook POST (REVIEW_WEBHOOK_URL).
+
+        Scheduled as a background task with a 2s timeout; delivery failures
+        are log-only and can never block or alter the decision path. The
+        body is metadata-only (outcome/reason/ref/exchange_id/ts) — the
+        same generalisation rules as the audit record.
+        """
+        if not decision.human_review or not self._cfg.review_webhook_url:
+            return
+        from .notify import schedule_review_notification
+
+        schedule_review_notification(
+            self._cfg.review_webhook_url,
+            outcome="deny" if decision.deny else "human_review",
+            reason=decision.reason,
+            ref=decision.ref,
+            exchange_id=exchange_id,
+        )
+
     async def _run_scanners(
         self,
         content: str,
@@ -683,8 +703,8 @@ class GuardrailEngine:
 
         Scanners are independent (same input, no shared mutable state), so
         :func:`asyncio.gather` runs them in parallel.  Each scanner gets its
-        own :func:`asyncio.wait_for` deadline and failure-mode handling, so a
-        slow or failing scanner never blocks the others.
+        own :func:`asyncio.wait_for` deadline and failure-mode handling, so
+        a slow or failing scanner never blocks the others.
         """
         timeout = self._cfg.scanner_timeout_ms / 1000.0
 
@@ -793,9 +813,7 @@ def _tool_acl_match(tool: str, patterns: Sequence[str]) -> str | None:
     return None
 
 
-def _tool_acl_violation(
-    tool: str, allow: Sequence[str], deny: Sequence[str]
-) -> ScanResult | None:
+def _tool_acl_violation(tool: str, allow: Sequence[str], deny: Sequence[str]) -> ScanResult | None:
     """F-P1-5 tool-level ACL: DENY wins; a non-empty ALLOW is a whitelist.
 
     The reason carries the tool name for the audit log (the tool name is
@@ -803,13 +821,9 @@ def _tool_acl_violation(
     servicer generalises the wire-visible deny reason as usual.
     """
     if _tool_acl_match(tool, deny) is not None:
-        return ScanResult.block(
-            "tool_acl", f"tool {tool!r} denied by tool ACL", score=1.0
-        )
+        return ScanResult.block("tool_acl", f"tool {tool!r} denied by tool ACL", score=1.0)
     if allow and _tool_acl_match(tool, allow) is None:
-        return ScanResult.block(
-            "tool_acl", f"tool {tool!r} not in tool allowlist", score=1.0
-        )
+        return ScanResult.block("tool_acl", f"tool {tool!r} not in tool allowlist", score=1.0)
     return None
 
 
@@ -840,9 +854,7 @@ def _with_scan_coverage(
     ctx: McpCallContext, truncated: bool, scanned_bytes: int, total_bytes: int
 ) -> McpCallContext:
     """Attach scan-coverage metadata to the audit context."""
-    return replace(
-        ctx, truncated=truncated, scanned_bytes=scanned_bytes, total_bytes=total_bytes
-    )
+    return replace(ctx, truncated=truncated, scanned_bytes=scanned_bytes, total_bytes=total_bytes)
 
 
 def _package_version() -> str:
@@ -855,9 +867,7 @@ def _package_version() -> str:
         return ""
 
 
-def _whitelisted_caller(
-    headers: Mapping[str, str], whitelist: Sequence[str]
-) -> str:
+def _whitelisted_caller(headers: Mapping[str, str], whitelist: Sequence[str]) -> str:
     """Return the first whitelisted caller header value (A-P1-1).
 
     Header lookup is case-insensitive (HTTP/2 lowercases, but tests and
