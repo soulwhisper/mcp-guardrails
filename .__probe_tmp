@@ -1,4 +1,8 @@
-L1: Au0041B-single-no-backslash
-L2: A\\u0041B-double
-L3: A\\\\u0041B-quad
-L4: Au200bB-plain-u
+L1: X\u200bY single-zwsp
+L2: X\\u200bY double-zwsp
+L3: XA single-A
+L4: X\\u0041Y double-A
+L5: X\ufeffY single-feff
+L6: X\\ufeffY double-feff
+L7: X\Y lone-bs-non-u
+L8: X\qY lone-bs-q
