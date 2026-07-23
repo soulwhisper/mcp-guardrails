@@ -61,3 +61,6 @@ pyvenv.cfg
 
 # SBOM artifacts (make sbom)
 sbom/
+
+# Docs build output (zensical build)
+site/
