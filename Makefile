@@ -13,7 +13,7 @@ help: ## Show available targets
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 proto: ## Regenerate Python gRPC stubs from proto/ext_mcp.proto
-	# NOTE: the committed stubs were generated with grpcio-tools 1.82.1
+	# NOTE: the committed stubs were generated with grpcio-tools 1.83.0
 	# (protobuf 7.35.x gencode). If you run `make proto` with a different
 	# grpcio-tools version, the output will differ cosmetically (version
 	# stamps, class style) but should remain semantically identical. Run
