@@ -128,14 +128,14 @@ spec:
             #       optional: true
             # - name: AUDIT_CALLER_HEADERS   # whitelist of request headers copied to the audit `caller` field
             #   value: "x-forwarded-user,x-session-id"
+            # - name: REVIEW_WEBHOOK_URL   # POST metadata-only JSON on human_review decisions (fire-and-forget, 2s timeout; unset disables)
+            # - name: SHUTDOWN_DRAIN_S     # wait after NOT_SERVING before draining, for readiness propagation (default 5.0; keep < preStop/terminationGracePeriod)
             # - name: UNHEALTHY_SCANNER_ERROR_RATE # scanner error/timeout rate flipping health to NOT_SERVING (default 0.5)
             #   value: "0.5"
             # - name: UNHEALTHY_SCANNER_WINDOW     # sliding window of recent scan invocations (default 100)
             #   value: "100"
             # - name: UNHEALTHY_SCANNER_MIN_SAMPLES # min samples before the health verdict applies (default 20)
             #   value: "20"
-            # - name: REVIEW_WEBHOOK_URL   # POST metadata-only JSON on human_review decisions (fire-and-forget, 2s timeout; unset disables)
-            # - name: SHUTDOWN_DRAIN_S     # wait after NOT_SERVING before draining, for readiness propagation (default 5.0; keep < preStop/terminationGracePeriod)
             - name: INVARIANT_RULES_PATH
               value: "/etc/guardrails/rules.policy"
             - name: SCANNER_TIMEOUT_MS
