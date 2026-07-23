@@ -200,6 +200,7 @@ class GuardrailEngine:
             service_name=config.otel_service_name,
             otel_endpoint=config.otel_endpoint,
             audit_path=config.audit_log_path,
+            audit_hash_chain=config.audit_hash_chain,
         )
 
         components = EngineComponents(
@@ -703,8 +704,8 @@ class GuardrailEngine:
 
         Scanners are independent (same input, no shared mutable state), so
         :func:`asyncio.gather` runs them in parallel.  Each scanner gets its
-        own :func:`asyncio.wait_for` deadline and failure-mode handling, so a
-        slow or failing scanner never blocks the others.
+        own :func:`asyncio.wait_for` deadline and failure-mode handling, so
+        a slow or failing scanner never blocks the others.
         """
         timeout = self._cfg.scanner_timeout_ms / 1000.0
 
