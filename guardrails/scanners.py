@@ -54,310 +54,381 @@ class Scanner(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Regex scanner (secrets / PII / hidden controls / markdown-image exfil)
+# Regex scanner — hidden ASCII, PII, secrets. No ML deps, fully unit-testable.
 # ---------------------------------------------------------------------------
 
-
-# Zero-width / format-control / tag chars frequently used to hide instructions.
+# Hidden ASCII: control chars (except tab/newline/CR) and Unicode control
+# pictures / RTL override / zero-width chars used to hide instructions.
 _HIDDEN_ASCII = re.compile(
-    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f"  # C0/C1 controls (excl. \t\n\r)
-    r"​-‏‪-‮⁠-⁯\ufeff"  # zero-width & bidi controls
-    r"]"
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f"
+    r"​-‏‪-‮⁠-⁯\ufeff]"
+)
+
+# Common secret shapes (conservative — false-positive-averse).
+_AWS_KEY = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
+# AWS temporary security credentials (STS / IAM role).
+_AWS_TEMP_KEY = re.compile(r"\bASIA[0-9A-Z]{16}\b")
+_GITHUB_PAT = re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")
+_GITLAB_PAT = re.compile(r"\bglpat-[A-Za-z0-9_-]{20}\b")
+_SLACK_TOKEN = re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")
+# OpenAI / Anthropic / common LLM API keys.  Covers:
+#   sk-<key>                    (OpenAI standard)
+#   sk-proj-<key>               (OpenAI project)
+#   sk-svcacct-<key>            (OpenAI service account)
+#   sk-ant-api03-<key>          (Anthropic)
+# Requires >=20 characters after "sk-" to avoid false positives.
+_LLM_API_KEY = re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")
+# Google API key — 39-char alphanumeric after "AIza".
+_GOOGLE_API_KEY = re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")
+# JWT — three base64url-encoded segments separated by dots. The header always
+# starts with "eyJ" ({" in base64url).  The payload is typically 20+ chars;
+# the signature varies widely (HMAC-SHA256 is 43 chars, but short test JWTs
+# can be under 10).  We require >=4 chars for the signature to avoid matching
+# degenerate "eyJ.x.y" patterns.
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{4,}\b")
+# Format-injection markers — ChatML / instruction-format tokens that an
+# attacker can inject to escape the current conversation role.  PromptGuard-2
+# (trained on Llama tokenizer) does not recognise ChatML tokens like
+# <|im_start|>, so these are a deterministic backstop.
+_FORMAT_INJECTION = re.compile(
+    r"\[SYSTEM\]|\[INST\]|\[/INST\]|\[ASSISTANT\]|"
+    r"<\|?im_start\|?>|<\|?im_end\|?>|<\|?endoftext\|?>|"
+    r"###\s*(?:system|instruction|override|ignore)",
+    # Case-insensitive: attackers trivially vary the casing of ChatML /
+    # instruction markers (### System, [system], <|IM_START|>) to slip past a
+    # case-sensitive backstop.
+    re.IGNORECASE,
+)
+# Connection strings with embedded credentials — common leak vector.
+_CONNECTION_STRING = re.compile(
+    r"(?i)\b(?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis|amqps?)://[^\s\"'<>]{10,}",
+)
+# Generic key=value credential pairs.  Catches inline secrets like
+#   PASSWORD=hunter2   token: sk-xxx   secret=abc123
+# Uses HUMAN_REVIEW rather than BLOCK because "password"/"secret" can appear
+# in benign documentation and code examples.
+_KEY_VALUE_CRED = re.compile(
+    r"(?i)\b(password|passwd|secret|token|api[_-]?key|access[_-]?key|"
+    r"private[_-]?key|bearer)\s*[=:]\s*[\"']?[^\s\"'<>]{8,}",
+)
+_PRIVATE_KEY = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")
+_GENERIC_HIGH_ENTROPY = re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b")
+# Markdown image exfiltration: `![alt](https://host/path?k=<long-value>)` is
+# a classic passive data-exfil channel — when the agent's output is rendered,
+# the image GET carries the query string to the attacker's host. We flag
+# images whose URL query carries a *suspiciously data-like* value:
+#
+#   * a single query VALUE of >=32 chars from a base64/url-ish alphabet
+#     (``[A-Za-z0-9+/=_%~-]``) — long opaque blobs, base64 fragments,
+#     percent-encoded data. 32 chars is the threshold: below it you mostly
+#     see benign tracking ids / short slugs; at/above it the value is long
+#     enough to smuggle a secret fragment (an AWS key id is 20, a JWT
+#     segment is typically 30+).
+#
+# False-positive trade-off (why HUMAN_REVIEW, not BLOCK): legitimate
+# rendered markdown commonly embeds signed CDN image URLs with long token
+# query params (``?sig=...``, ``?token=...``), which this pattern also
+# matches. Hard-blocking those breaks benign rendering, so the verdict is
+# review-grade: HUMAN_REVIEW_MODE / the AgentAlignment gate decides, and
+# the audit line records the fingerprint. Pure-exfil payloads usually ALSO
+# trip high_entropy_blob or a key pattern, which still BLOCKs.
+_MD_IMAGE_EXFIL = re.compile(
+    r"!\[[^\]\n]{0,200}\]\(\s*https?://[^\s)]+[?&][A-Za-z0-9_~-]*="
+    r"[A-Za-z0-9+/=_%~-]{32,}[^\s)]*\)",
+    re.IGNORECASE,
+)
+
+# PII (very conservative; tune per deployment).
+_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+_CREDIT_CARD = re.compile(r"\b(?:\d[ -]*?){13,16}\b")
+
+
+# ---------------------------------------------------------------------------
+# Detection-only normalized view (confusable / zero-width evasion defence)
+# ---------------------------------------------------------------------------
+
+# Common Cyrillic / Greek homoglyphs of ASCII letters. Attackers substitute
+# these into instruction markers (a "### SYSTEM" written with Cyrillic
+# Dze/Upsilon/Tau/Epsilon/Mu) to slip past ASCII regexes while the rendered
+# text still reads as the marker to a human or LLM. The map is deliberately
+# limited to unambiguous lookalikes — it is NOT a full Unicode confusables
+# table (keep the false-positive surface minimal). Code points are written
+# as escapes so the table is grep/lint-safe (RUF001).
+_HOMOGLYPH_MAP = str.maketrans(
+    {
+        "А": "A",  # CYRILLIC CAPITAL LETTER A
+        "В": "B",  # CYRILLIC CAPITAL LETTER VE
+        "С": "C",  # CYRILLIC CAPITAL LETTER ES
+        "Е": "E",  # CYRILLIC CAPITAL LETTER IE
+        "Н": "H",  # CYRILLIC CAPITAL LETTER EN
+        "І": "I",  # CYRILLIC CAPITAL LETTER BYELORUSSIAN-UKRAINIAN I
+        "Ј": "J",  # CYRILLIC CAPITAL LETTER JE
+        "К": "K",  # CYRILLIC CAPITAL LETTER KA
+        "М": "M",  # CYRILLIC CAPITAL LETTER EM
+        "О": "O",  # CYRILLIC CAPITAL LETTER O
+        "Р": "P",  # CYRILLIC CAPITAL LETTER ER
+        "Ѕ": "S",  # CYRILLIC CAPITAL LETTER DZE
+        "Т": "T",  # CYRILLIC CAPITAL LETTER TE
+        "Х": "X",  # CYRILLIC CAPITAL LETTER HA
+        "У": "Y",  # CYRILLIC CAPITAL LETTER U
+        "а": "a",  # CYRILLIC SMALL LETTER A
+        "с": "c",  # CYRILLIC SMALL LETTER ES
+        "е": "e",  # CYRILLIC SMALL LETTER IE
+        "і": "i",  # CYRILLIC SMALL LETTER BYELORUSSIAN-UKRAINIAN I
+        "ј": "j",  # CYRILLIC SMALL LETTER JE
+        "о": "o",  # CYRILLIC SMALL LETTER O
+        "р": "p",  # CYRILLIC SMALL LETTER ER
+        "ѕ": "s",  # CYRILLIC SMALL LETTER DZE
+        "х": "x",  # CYRILLIC SMALL LETTER HA
+        "у": "y",  # Greek upper (lookalikes only)
+        "Α": "A",  # GREEK CAPITAL LETTER ALPHA
+        "Β": "B",  # BETA
+        "Ε": "E",  # EPSILON
+        "Η": "H",  # ETA
+        "Ι": "I",  # IOTA
+        "Κ": "K",  # KAPPA
+        "Μ": "M",  # MU
+        "Ν": "N",  # NU
+        "Ο": "O",  # OMICRON
+        "Ρ": "P",  # RHO
+        "Τ": "T",  # TAU
+        "Υ": "Y",  # UPSILON
+        "Χ": "X",  # CHI
+        "Ζ": "Z",  # ZETA
+        "ο": "o",  # omicron
+        "ν": "v",  # nu
+    }
 )
 
 
-def _sha256_12(text: str) -> str:
-    """12-hex-char SHA-256 prefix — the default match fingerprint digest."""
-    return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
-
-
-def _hmac_sha256_12(text: str) -> str:
-    """Keyed digest (AUDIT_HMAC_KEY) for low-entropy matches (S-M3 follow-up).
-
-    A low-entropy match (email, card number) hashed with an unkeyed SHA-256
-    is brute-forceable offline — the audit line would be an enumeration
-    oracle. When the operator sets ``AUDIT_HMAC_KEY`` the low-entropy tier
-    switches to HMAC-SHA-256/12 keyed by it; without a key we fall back to
-    length-only recording, which leaks nothing beyond the match size.
-    """
-    import hmac
-    import os
-
-    key = os.environ.get("AUDIT_HMAC_KEY", "")
-    if not key:
-        return ""
-    return hmac.new(key.encode(), text.encode("utf-8", errors="ignore"), hashlib.sha256).hexdigest()[
-        :12
-    ]
-
-
-def _match_fingerprint(match_text: str, *, high_entropy: bool) -> str:
-    """Return the audit-safe fingerprint of a regex match (S-M3 follow-up).
-
-    Two tiers:
-
-    * ``high_entropy=True`` (secret keys, tokens, hashes — min match length
-      16): the match is unguessable, so an unkeyed
-      ``match_sha256=<12-hex>`` digest is recorded, letting operators
-      correlate repeats of the same secret across audit lines.
-    * ``high_entropy=False`` (email, credit card, hidden-ascii — short /
-      low-entropy): a plain digest would be an offline enumeration oracle.
-      Records ``match_hmac=<12-hex>`` when ``AUDIT_HMAC_KEY`` is set, else
-      just ``match_len=<n>`` (no reversible content at all).
-    """
-    if high_entropy:
-        return f"match_sha256={_sha256_12(match_text)}"
-    keyed = _hmac_sha256_12(match_text)
-    if keyed:
-        return f"match_hmac={keyed}"
-    return f"match_len={len(match_text)}"
-
-
-# ---------------------------------------------------------------------------
-# Detection-only normalized view (confusable / zero-width evasion coverage)
-# ---------------------------------------------------------------------------
-
-# Homoglyph fold: full-width Latin and common Cyrillic/Greek lookalikes ->
-# ASCII. The map deliberately covers only UNAMBIGUOUS visual lookalikes of
-# ASCII letters used in attack markers (prompt-injection tokens such as
-# "SYSTEM"/"INSTRUCTION", URL scheme characters). Ambiguous code points
-# whose primary use is legitimate text in another script are excluded so a
-# Russian/Greek document does not collapse into false English tokens.
-_HOMOGLYPH_MAP: dict[int, str] = {
-    ord(src): dst
-    for src, dst in {
-        # Full-width ASCII variants (NFKC also folds these, kept for clarity).
-        "Ａ": "A", "Ｂ": "B", "Ｃ": "C", "Ｄ": "D", "Ｅ": "E",
-        "Ｆ": "F", "Ｇ": "G", "Ｈ": "H", "Ｉ": "I", "Ｊ": "J",
-        "Ｋ": "K", "Ｌ": "L", "Ｍ": "M", "Ｎ": "N", "Ｏ": "O",
-        "Ｐ": "P", "Ｑ": "Q", "Ｒ": "R", "Ｓ": "S", "Ｔ": "T",
-        "Ｕ": "U", "Ｖ": "V", "Ｗ": "W", "Ｘ": "X", "Ｙ": "Y",
-        "Ｚ": "Z",
-        # Cyrillic/Greek lookalikes of ASCII letters (uppercase).
-        "А": "A", "В": "B", "Е": "E", "І": "I", "Κ": "K",
-        "М": "M", "Н": "H", "О": "O", "Р": "P", "Ѕ": "S",
-        "Τ": "T", "Υ": "Y", "Х": "X", "Ϲ": "C", "Ј": "J",
-        "Ζ": "Z", "Ε": "E", "Α": "A", "Β": "B", "Η": "H",
-        "Ι": "I", "Μ": "M", "Ν": "N", "Ο": "O", "Ρ": "P",
-        "Τ": "T", "Χ": "X", "ϴ": "O",
-        # Cyrillic/Greek lookalikes of ASCII letters (lowercase).
-        "а": "a", "е": "e", "і": "i", "о": "o", "р": "p",
-        "ѕ": "s", "х": "x", "с": "c", "ј": "j", "у": "y",
-        "ο": "o", "ν": "v",
-    }.items()
-}
-
-_Cf = "Cf"
-
-
 def normalized_view(text: str) -> str:
-    """Return the detection-only normalized view of ``text``.
+    """Return a **matching-only** normalized view of ``text``.
 
-    Three folds, all semantics-preserving for *matching* (never applied to
-    the payload itself):
+    Pipeline: NFKC fold (collapses full-width forms, compatibility
+    ligatures, circled/squared letters, …) -> strip Unicode format
+    characters (category Cf: zero-width spaces/joiners, bidi controls,
+    soft hyphens, word joiners, …) -> map common Cyrillic/Greek homoglyphs
+    to their ASCII lookalikes.
 
-    1. **NFKC** — collapses full-width/compatibility characters
-       (``ＳＹＳＴＥＭ`` -> ``SYSTEM``), ligatures, superscripts, etc.
-    2. **Cf strip** — removes zero-width and format-control characters
-       (ZWSP/ZWJ/ZWNJ, bidi overrides, word joiner, …) so an attacker
-       cannot split a marker with invisible padding (``SY\\u200bSTEM``).
-    3. **Homoglyph fold** — maps common Cyrillic/Greek/full-width visual
-       lookalikes onto their ASCII twins (``ЅΥЅΤΕΜ`` -> ``SYSTEM``) via
-       :data:`_HOMOGLYPH_MAP`.
-
-    The view is used ONLY as a second matching surface in
-    :class:`RegexScanner`; it is never forwarded, mutated or logged (hits
-    are fingerprinted against the ORIGINAL text — see
-    :meth:`Pattern.evaluate_normalized`).
+    Scope discipline (detection-only): the view is used EXCLUSIVELY as a
+    second matching surface for the RegexScanner. It never rewrites the
+    payload — the mutation/redaction path, the forwarded payload, and
+    ``payload_sha256`` all continue to operate on the original text. See
+    ``Pattern.evaluate_normalized`` for the reason/fingerprint semantics of
+    a normalized-view hit.
     """
     import unicodedata
 
     folded = unicodedata.normalize("NFKC", text)
-    stripped = "".join(c for c in folded if unicodedata.category(c) != _Cf)
+    stripped = "".join(ch for ch in folded if unicodedata.category(ch) != "Cf")
     return stripped.translate(_HOMOGLYPH_MAP)
 
 
-@dataclass(frozen=True)
-class Pattern:
-    """A named regex with its verdict.
+def _match_fingerprint(value: str, *, high_entropy: bool = True) -> str:
+    """Return a non-reversible fingerprint for a regex match.
 
-    ``high_entropy`` selects the audit-safe match-fingerprint tier (see
-    :func:`_match_fingerprint`): True for unguessable secrets (digest is
-    safe), False for short/low-entropy shapes (length-only unless the
-    operator sets ``AUDIT_HMAC_KEY``).
+    Scanner reasons are copied into audit logs and OTel spans. Logging even
+    the first 32 characters of a match can leak complete short secrets
+    (for example AWS access key IDs) or enough token prefix to aid
+    credential stuffing. Keep only the length and a short digest so operators
+    can correlate repeats without storing the secret itself.
+
+    Two tiers, because a plain SHA-256 of a *low-entropy* match is an offline
+    enumeration oracle (an attacker with the audit log can brute-force every
+    13-16 digit credit-card candidate or every plausible email address and
+    confirm hits against the digest):
+
+    * **Low-entropy patterns** (``high_entropy=False``: email, credit card)
+      record only ``match_len`` — no digest at all.
+    * **High-entropy patterns** (tokens, keys, private key material) keep a
+      12-hex-char digest. When the ``AUDIT_HMAC_KEY`` env var is set the
+      digest is HMAC-SHA256 keyed with it (recommended — it removes even the
+      theoretical dictionary-confirmation risk for lower-entropy secrets);
+      otherwise it falls back to plain SHA-256.
+    """
+    if not high_entropy:
+        return f"match_len={len(value)}"
+    import hmac as _hmac
+    import os as _os
+
+    raw = value.encode("utf-8", errors="ignore")
+    key = _os.environ.get("AUDIT_HMAC_KEY")
+    if key:
+        digest = _hmac.new(key.encode("utf-8"), raw, hashlib.sha256).hexdigest()[:12]
+        return f"match_len={len(value)} match_hmac={digest}"
+    digest = hashlib.sha256(raw).hexdigest()[:12]
+    return f"match_len={len(value)} match_sha256={digest}"
+
+
+@dataclass
+class Pattern:
+    """A named regex with a per-pattern outcome.
+
+    ``high_entropy=False`` marks patterns whose match space is small enough
+    to brute-force (email addresses, credit-card numbers); their audit
+    fingerprint omits the digest so the audit log cannot be used as an
+    offline enumeration oracle. See :func:`_match_fingerprint`.
     """
 
     name: str
     regex: re.Pattern[str]
     outcome: ScanOutcome
     reason: str
+    score: float = 0.0
     high_entropy: bool = True
 
     def evaluate(self, content: str) -> ScanResult | None:
         m = self.regex.search(content)
-        if not m:
+        if m is None:
             return None
-        fingerprint = _match_fingerprint(m.group(0), high_entropy=self.high_entropy)
-        reason = f"{self.reason} ({fingerprint})"
-        if self.outcome is ScanOutcome.BLOCK:
-            return ScanResult.block(f"regex:{self.name}", reason, score=1.0)
-        if self.outcome is ScanOutcome.HUMAN_REVIEW:
-            return ScanResult.review(f"regex:{self.name}", reason, score=0.5)
-        return ScanResult(f"regex:{self.name}", ScanOutcome.ALLOW, reason, 0.0)
+        return ScanResult(
+            scanner=f"regex:{self.name}",
+            outcome=self.outcome,
+            reason=f"{self.reason} ({_match_fingerprint(m.group(0), high_entropy=self.high_entropy)})",
+            score=self.score,
+        )
 
     def evaluate_normalized(self, original: str, view: str) -> ScanResult | None:
-        """Match against the detection-only normalized view.
+        """Match against the detection-only normalized view (see
+        :func:`normalized_view`).
 
-        Identical verdict semantics to :meth:`evaluate`, but the reason is
-        marked ``[normalized-view match]`` and the fingerprint digests the
-        ORIGINAL text (``orig_sha256=`` / ``orig_hmac=`` / ``orig_len=``
-        per the entropy tier), never the transformed view — so the audit
-        record cannot be used to replay the folded token, and an operator
-        can still correlate the hit with the real payload.
+        Reason/fingerprint semantics of a normalized-view hit differ from a
+        direct hit and are documented for audit consumers:
+
+        * the reason is suffixed ``[normalized-view match]`` so downstream
+          tooling can tell the payload itself did NOT literally contain the
+          pattern — only its NFKC/Cf-stripped/homoglyph-folded view did;
+        * the fingerprint is based on the ORIGINAL text
+          (``orig_sha256`` = 12-hex SHA-256 prefix of the original chunk,
+          honouring ``AUDIT_HMAC_KEY`` like :func:`_match_fingerprint`)
+          because the matched span lives in the transformed view and cannot
+          be mapped back to original offsets cheaply. ``match_len`` is the
+          match length in the VIEW, which can differ from the original.
         """
         m = self.regex.search(view)
-        if not m:
+        if m is None:
             return None
-        fingerprint = _match_fingerprint(original, high_entropy=self.high_entropy).replace(
-            "match_", "orig_", 1
+        import hmac as _hmac
+        import os as _os
+
+        raw = original.encode("utf-8", errors="ignore")
+        key = _os.environ.get("AUDIT_HMAC_KEY")
+        if key:
+            digest = _hmac.new(key.encode("utf-8"), raw, hashlib.sha256).hexdigest()[:12]
+            tag = f"orig_hmac={digest}"
+        else:
+            digest = hashlib.sha256(raw).hexdigest()[:12]
+            tag = f"orig_sha256={digest}"
+        return ScanResult(
+            scanner=f"regex:{self.name}",
+            outcome=self.outcome,
+            reason=(f"{self.reason} [normalized-view match] (match_len={len(m.group(0))} {tag})"),
+            score=self.score,
         )
-        reason = f"{self.reason} [normalized-view match] ({fingerprint})"
-        if self.outcome is ScanOutcome.BLOCK:
-            return ScanResult.block(f"regex:{self.name}", reason, score=1.0)
-        if self.outcome is ScanOutcome.HUMAN_REVIEW:
-            return ScanResult.review(f"regex:{self.name}", reason, score=0.5)
-        return ScanResult(f"regex:{self.name}", ScanOutcome.ALLOW, reason, 0.0)
 
 
 def default_patterns() -> list[Pattern]:
-    """Built-in regex pattern set (secrets, PII, hidden controls, exfil).
-
-    Ordering is the matching priority chain — the scanner returns the FIRST
-    hit, so BLOCK-grade patterns come first, then review-grade, then the
-    low-grade PII patterns. Keep this order when adding patterns.
-    """
-
-    def rx(p: str, flags: int = 0) -> re.Pattern[str]:
-        return re.compile(p, flags)
-
+    """Built-in pattern set, ordered so BLOCK-worthy hits win on first-match."""
     return [
-        # --- BLOCK: hidden format-control characters (zero-width / bidi) ---
         Pattern(
-            name="hidden_ascii",
-            regex=_HIDDEN_ASCII,
-            outcome=ScanOutcome.BLOCK,
-            reason="hidden/zero-width control characters in payload",
-            high_entropy=False,
-        ),
-        # --- BLOCK: instruction/format markers (prompt-injection scaffolding) ---
-        Pattern(
-            name="format_injection",
-            regex=rx(
-                r"(?:^|\n)\s*#{1,6}\s*(?:system|instruction)\b"
-                r"|<\|im_start\|>"
-                r"|\[INST\]"
-                r"|<<SYS>>",
-                re.IGNORECASE,
-            ),
-            outcome=ScanOutcome.BLOCK,
-            reason="instruction/format marker (### system, <|im_start|>, [INST], <<SYS>>)",
-            high_entropy=False,
-        ),
-        # --- BLOCK: high-entropy secrets ---
-        Pattern(
-            name="aws_access_key",
-            regex=rx(r"(?:AKIA|ASIA)[0-9A-Z]{16}"),
-            outcome=ScanOutcome.BLOCK,
-            reason="AWS access key id",
+            "hidden_ascii", _HIDDEN_ASCII, ScanOutcome.BLOCK, "hidden/control unicode detected", 0.9
         ),
         Pattern(
-            name="aws_secret_key",
-            regex=rx(r"(?i)aws.{0,20}secret.{0,10}[=:]\s*[0-9a-zA-Z/+]{40}"),
-            outcome=ScanOutcome.BLOCK,
-            reason="AWS secret access key",
+            "format_injection",
+            _FORMAT_INJECTION,
+            ScanOutcome.BLOCK,
+            "format-injection marker (ChatML / instruction tag)",
+            0.98,
         ),
         Pattern(
-            name="openai_api_key",
-            regex=rx(r"sk-[A-Za-z0-9_-]{20,}"),
-            outcome=ScanOutcome.BLOCK,
-            reason="OpenAI-style API key (sk-...)",
+            "private_key", _PRIVATE_KEY, ScanOutcome.BLOCK, "private key material in payload", 0.99
+        ),
+        Pattern("aws_access_key", _AWS_KEY, ScanOutcome.BLOCK, "AWS access key id", 0.95),
+        Pattern(
+            "aws_temp_key",
+            _AWS_TEMP_KEY,
+            ScanOutcome.BLOCK,
+            "AWS temporary security credential",
+            0.95,
+        ),
+        Pattern("google_api_key", _GOOGLE_API_KEY, ScanOutcome.BLOCK, "Google API key", 0.95),
+        Pattern("github_pat", _GITHUB_PAT, ScanOutcome.BLOCK, "GitHub personal access token", 0.95),
+        Pattern("gitlab_pat", _GITLAB_PAT, ScanOutcome.BLOCK, "GitLab personal access token", 0.95),
+        Pattern("slack_token", _SLACK_TOKEN, ScanOutcome.BLOCK, "Slack token", 0.95),
+        Pattern("llm_api_key", _LLM_API_KEY, ScanOutcome.BLOCK, "LLM API key in payload", 0.95),
+        Pattern(
+            "jwt",
+            _JWT,
+            ScanOutcome.HUMAN_REVIEW,
+            "JWT token (may contain credentials)",
+            0.80,
         ),
         Pattern(
-            name="github_pat",
-            regex=rx(r"(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{22,}"),
-            outcome=ScanOutcome.BLOCK,
-            reason="GitHub personal access token",
-        ),
-        Pattern(
-            name="private_key_block",
-            regex=rx(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----"),
-            outcome=ScanOutcome.BLOCK,
-            reason="PEM private key block",
-            high_entropy=False,
-        ),
-        # --- HUMAN_REVIEW: grey-zone credential shapes ---
-        Pattern(
-            name="md_image_exfil",
-            regex=rx(
-                r"!\[[^\]]*\]\(\s*https?://[^\s)]*\?[^\s)]*[?&]"
-                r"[A-Za-z_][A-Za-z0-9_-]{0,31}="
-                r"[A-Za-z0-9%+/=_-]{32,}"
-            ),
-            outcome=ScanOutcome.HUMAN_REVIEW,
-            reason="markdown image URL with a long data-like query value "
-            "(possible passive exfil channel)",
+            "connection_string",
+            _CONNECTION_STRING,
+            ScanOutcome.HUMAN_REVIEW,
+            "connection string with potential credentials",
+            0.75,
+            # The match embeds the password itself and is low-entropy (host /
+            # user / short password); a plain SHA-256 digest would be an
+            # offline dictionary oracle. Record match_len only.
             high_entropy=False,
         ),
         Pattern(
-            name="jwt",
-            regex=rx(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}"),
-            outcome=ScanOutcome.HUMAN_REVIEW,
-            reason="JSON Web Token",
-        ),
-        Pattern(
-            name="connection_string",
-            regex=rx(
-                r"(?:mongodb|postgres(?:ql)?|mysql|redis|amqp)://[^\s'\"]{8,}",
-                re.IGNORECASE,
-            ),
-            outcome=ScanOutcome.HUMAN_REVIEW,
-            reason="database connection string",
-        ),
-        Pattern(
-            name="key_value_credential",
-            regex=rx(
-                r"(?i)(?:password|passwd|pwd|api[_-]?key|secret|token)"
-                r"[\s]*[=:][\s]*['\"]?[^\s'\"]{8,}"
-            ),
-            outcome=ScanOutcome.HUMAN_REVIEW,
-            reason="key=value credential",
-        ),
-        Pattern(
-            name="high_entropy_blob",
-            regex=rx(r"[A-Za-z0-9+/]{64,}={0,2}"),
-            outcome=ScanOutcome.HUMAN_REVIEW,
-            reason="high-entropy blob (possible base64-encoded payload)",
-        ),
-        # --- ALLOW-grade PII (recorded, redacted by the mutation stage) ---
-        Pattern(
-            name="credit_card",
-            regex=rx(r"\b(?:\d[ -]*?){13,16}\b"),
-            outcome=ScanOutcome.ALLOW,
-            reason="possible credit card number",
+            "key_value_credential",
+            _KEY_VALUE_CRED,
+            ScanOutcome.HUMAN_REVIEW,
+            "key=value credential pair in payload",
+            0.70,
+            # Same rationale as connection_string: the matched value IS the
+            # credential, often a weak/low-entropy password — no digest.
             high_entropy=False,
         ),
         Pattern(
-            name="email",
-            regex=rx(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
-            outcome=ScanOutcome.ALLOW,
-            reason="email address",
+            "md_image_exfil",
+            _MD_IMAGE_EXFIL,
+            # Review-grade, not BLOCK: signed CDN image URLs with long token
+            # query params are a legitimate false-positive source (see the
+            # pattern comment). The audit fingerprint digests the URL+query
+            # match, not the exfiltrated data itself.
+            ScanOutcome.HUMAN_REVIEW,
+            "markdown image URL with data-carrying query (possible exfil channel)",
+            0.65,
+        ),
+        Pattern(
+            "high_entropy_blob",
+            _GENERIC_HIGH_ENTROPY,
+            ScanOutcome.HUMAN_REVIEW,
+            "high-entropy blob (possible secret)",
+            0.6,
+        ),
+        Pattern(
+            "credit_card",
+            _CREDIT_CARD,
+            ScanOutcome.HUMAN_REVIEW,
+            "possible credit-card number",
+            0.7,
+            # Low-entropy match space: record match_len only (no digest), so
+            # the audit log cannot be used as an offline enumeration oracle.
+            high_entropy=False,
+        ),
+        Pattern(
+            "email",
+            _EMAIL,
+            ScanOutcome.ALLOW,
+            "email address (PII, redact downstream)",
+            0.2,
             high_entropy=False,
         ),
     ]
 
 
 class RegexScanner:
-    """Secret/PII/hidden-control scanner over the flattened payload text.
+    """Deterministic pattern scanner.
+
+    First-match wins (patterns are evaluated in list order). This makes the
+    pattern list a priority chain: put BLOCK patterns before HUMAN_REVIEW
+    patterns before ALLOW/redact patterns.
 
     Two-pass matching: pass 1 evaluates every pattern against the ORIGINAL
     text (legacy priority order, unchanged). Pass 2 re-evaluates all patterns
