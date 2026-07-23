@@ -5,6 +5,37 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Features
+
+* **scanners:** detection-only normalized view in `RegexScanner` — pass 1
+  evaluates the raw text; unless pass 1 already BLOCKs, every pattern is
+  re-evaluated against an NFKC-folded, Cf-stripped, homoglyph-mapped
+  (Cyrillic/Greek → ASCII lookalikes) view (skipped for pure-ASCII text),
+  and the more severe verdict wins — so a benign pass-1 hit (e.g. an email)
+  cannot short-circuit the view and downgrade an obfuscated BLOCK marker.
+  Catches confusable / full-width / zero-width-split evasions of
+  instruction markers. The view never mutates payloads; view hits are
+  marked `[normalized-view match]` and fingerprint the original chunk
+  (`orig_sha256` / `orig_hmac`). Closes the confusable-marker red-team
+  residual (xfail promoted to regression test).
+* **scanners:** `md_image_exfil` pattern (HUMAN_REVIEW grade) — markdown
+  image URLs (`![](https://…)`) whose query carries a ≥32-char data-like
+  value (base64/percent-encoded exfil channel when agent output is
+  rendered). Review rather than BLOCK because signed CDN image URLs with
+  long token params are a legitimate false-positive source. Closes the
+  markdown-image-exfil red-team residual.
+* **audit:** tamper-evident hash chain (A-P0-3) — `AuditSink` now appends
+  `prev_hash` / `line_hash` (16-hex SHA-256 prefixes) to every audit line;
+  `guardrail_ctl audit verify <file>` re-walks the chain and reports the
+  first broken line number. Config `AUDIT_HASH_CHAIN` (default `1`).
+  Single-writer assumption documented (one replica / per-replica files /
+  stdout shipping). `docs/compliance.md` §5 updated accordingly.
+* **red-team:** new regression samples — full-width and mixed
+  confusable/case marker variants, markdown-exfil positives, and a
+  short-query benign-image false-positive control.
+
 ## [0.4.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.5...v0.4.0) (2026-07-23)
 
 
@@ -443,7 +474,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Docker build broke** with `httpx.UnsupportedProtocol: Request URL is
-missing an 'http://' or 'https://' protocol`. The empty `HF_ENDPOINT`
+  missing an 'http://' or 'https://' protocol`. The empty `HF_ENDPOINT`
   build-arg (the default when no mirror is configured) leaked into the build
   env as `HF_ENDPOINT=""`, which `huggingface_hub` picked up instead of its
   built-in default endpoint. The models stage now `unset`s `HF_ENDPOINT` when
@@ -555,7 +586,7 @@ ExtMcp gRPC contract as a fail-closed policy sidecar.
 
 - **ExtMcp gRPC servicer** (`guardrails/servicer.py`) implementing the
   agentgateway ExtMcp v1alpha1 contract: `CheckRequest(McpRequest) ->
-McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
+  McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
   Both return one of `allowed` (Pass), `mutated` (Mutated), or `error`
   (AuthorizationError) via a protobuf `oneof`. Malformed JSON-RPC payloads
   map to `INVALID_ARGUMENT`; policy denies map to `PERMISSION_DENIED`
