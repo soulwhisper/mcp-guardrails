@@ -6,7 +6,7 @@ PORT ?= 9001
 IMAGE ?= ghcr.io/soulwhisper/mcp-guardrails
 TAG ?= 0.3.5  # x-release-please-version
 
-.PHONY: help proto proto-check version-check install dev test test-cov lint format clean docker docker-run run ci
+.PHONY: help proto proto-check version-check install dev test test-cov lint format clean docker docker-run run ci audit sbom
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -64,3 +64,16 @@ clean: ## Remove build/test artifacts
 
 ci: lint test proto-check version-check ## What CI runs on every PR
 	@echo "CI checks passed"
+
+# pip-audit runs against requirements.txt (the locked runtime surface).
+# Accepted-risk CVEs are whitelisted one-per-line in
+# scripts/pip-audit-ignore.txt (comments with '#' allowed); each entry is
+# passed as --ignore-vuln. pip-audit itself is a dev-extra dependency
+# (`pip install -e ".[dev]"`), never a runtime one.
+PIP_AUDIT_IGNORE := $(shell grep -v '^\s*\#\|^\s*$$' scripts/pip-audit-ignore.txt 2>/dev/null | sed 's/^/--ignore-vuln /')
+
+audit: ## Vulnerability audit of runtime deps (pip-audit, requirements mode)
+	$(PY) -m pip_audit -r requirements.txt $(PIP_AUDIT_IGNORE)
+
+sbom: ## Generate SPDX + CycloneDX SBOMs into sbom/ (requires syft)
+	IMAGE=$(IMAGE):$(TAG) bash scripts/gen_sbom.sh
