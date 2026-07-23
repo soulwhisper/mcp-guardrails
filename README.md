@@ -142,9 +142,10 @@ On `CheckRequest` for `tools/call`, the engine does two things in parallel:
    then runs the configured content scanners (`RegexScanner` for hidden
    ASCII / PII / secrets, `OnnxPromptGuardScanner` for PromptGuard-2)
    against the text with role `TOOL`.
-2. **Invariant trace**: appends `(tool, args)` to a bounded sliding window
-   (`INVARIANT_WINDOW` calls, default 256) and evaluates every `ToxicFlowRule`
-   and `LoopRule` against the resulting trace. First-match wins.
+2. **Invariant trace**: appends `(tool, args, ts)` to a bounded sliding
+   window (`INVARIANT_WINDOW` calls, default 256) and evaluates every rule
+   (`ToxicFlowRule`, `LoopRule`, `RateLimitRule`, `AggregateRule`) against
+   the resulting trace. First-match wins.
 
 A `BLOCK` from either path is fail-closed by the `DecisionAggregator`; the
 decision maps to the `error` oneof on the wire.
@@ -195,6 +196,20 @@ response would dominate sidecar latency and homelab cost, so it is **opt-in**
 second-stage alignment check when a first-stage scanner (PromptGuard) flags
 the response as `HUMAN_REVIEW`. This bounds the alignment cost to suspicious
 responses only — the cost-control knob from the original design.
+
+Two egress-safety / quality measures apply to the second-stage call:
+
+- **Pre-egress redaction** — the flagged chunk is masked with the standard
+  `RedactionScanner` patterns (`[REDACTED:<TYPE>]` placeholders) BEFORE it
+  leaves for the external LLM, so review-grade secrets/PII never reach the
+  LLM provider in cleartext.
+- **Trajectory context** — the engine folds the last 5 tool-call names from
+  the Invariant trace (metadata only, no args) into the prompt, so the LLM
+  judges the flagged chunk against the agent's recent behaviour.
+
+The grey zone that feeds this gate is tunable: PromptGuard scores in
+`[PG_REVIEW_THRESHOLD, LF_PROMPTGUARD_BLOCK_THRESHOLD)` (default `[0.5, 0.9)`)
+flag `HUMAN_REVIEW` instead of ALLOW.
 
 ## Quick start
 
@@ -345,7 +360,9 @@ deadline.
 | PromptGuard    | `LF_ONNX_MODEL`                  | `gravitee-io/...-onnx`                   | ONNX model repo ID. Public, non-gated; model weights under Llama 4 Community License (see NOTICE).                                          |
 | PromptGuard    | `LF_PROMPTGUARD_BLOCK_THRESHOLD` | `0.9`                                    | Block threshold (0.0-1.0). PromptGuard score >= threshold -> BLOCK.                                                                            |
 | PromptGuard    | `PG_MAX_WINDOWS`                 | `16`                                     | Cap on PromptGuard sliding-window inference per chunk. The window budget adapts to the payload's token length (`clamp(ceil(tokens/step)+1, 4, PG_MAX_WINDOWS)`); each extra window is one more 512-token inference, so this is the per-chunk latency bound. Raise for better long-payload coverage, lower for tighter P95. |
+| PromptGuard    | `LF_ONNX_LOCAL_DIR`              | _(unset)_                                | Local directory of a pre-baked model (the container pre-downloads to `/models/hf/pg2`). When set and present, the tokenizer + `.onnx` load from disk — no HF hub access at runtime (air-gappable). Unset -> resolve via the HF hub cache (honouring `LF_ONNX_REVISION`). |
 | PromptGuard    | `LF_ONNX_REVISION`               | `45a05fbd…`                              | Supply-chain pin: HF commit sha for runtime hub fetches (only used when `LF_ONNX_LOCAL_DIR` is unset). Matches the Dockerfile `PG2_REVISION` build-arg. Override together with `LF_ONNX_MODEL`. |
+| PromptGuard    | `PG_REVIEW_THRESHOLD`            | `0.5`                                    | Review (grey-zone) threshold (0.0-1.0). Score >= `LF_PROMPTGUARD_BLOCK_THRESHOLD` -> BLOCK; score in `[PG_REVIEW_THRESHOLD, block)` -> `HUMAN_REVIEW` (routed to the second-stage AgentAlignment gate when enabled, else resolved per `HUMAN_REVIEW_MODE`); below -> ALLOW. Must be <= the block threshold. |
 | AgentAlignment | `LF_ALIGNMENT_MODEL`             | `meta-llama/...-FP8`                     | LLM model name for AgentAlignment (only when `ENABLE_AGENT_ALIGNMENT=true`). Default: Llama-4-Maverick via Together AI.                        |
 | AgentAlignment | `LF_ALIGNMENT_API_BASE`          | `https://api.together.xyz/v1`            | LLM API base URL (OpenAI-compatible). Override for OpenAI, Azure, vLLM, Ollama, etc.                                                           |
 | AgentAlignment | `LF_ALIGNMENT_API_KEY`           | _(unset)_                                | API key for the LLM provider. The scanner reads the key directly from this env var. Only needed when `ENABLE_AGENT_ALIGNMENT=true`.            |
@@ -452,20 +469,42 @@ belong in the audit log only.
 ## Rule packs
 
 The Invariant rule layer is a plain Python module exposing a module-level
-`RULES = [...]` list. Each entry is either a `ToxicFlowRule` (an ordered
-subsequence of tool calls within the trace window) or a `LoopRule` (fires
-when the same `(tool, args)` fingerprint repeats `threshold` times).
+`RULES = [...]` list. Each entry is a `ToxicFlowRule` (an ordered
+subsequence of tool calls within the trace window), a `LoopRule` (fires
+when the same `(tool, args)` fingerprint repeats `threshold` times), a
+`RateLimitRule` (per-tool sliding time-window call-rate limit), or an
+`AggregateRule` (sliding time-window SUM of a numeric argument field).
 
-### ToxicFlowRule vs LoopRule
+### ToxicFlowRule vs LoopRule vs RateLimitRule vs AggregateRule
 
 - **`ToxicFlowRule`** — _ordered subsequence_ matcher. Steps need not be
   contiguous in the trace; intervening calls are allowed. Use for
   "X then Y" exfiltration / escalation patterns
   (e.g. `inbox_read` -> `email_send` to an external recipient).
+  A step with `negate=True` is a _negative guard_: it never advances the
+  sequence, but any entry matching it while armed (between the surrounding
+  positive steps) **voids** the in-progress match — including parked
+  sticky progress — and matching restarts from step 0. Use for
+  "A then C with no B between" (e.g. inbox read -> external send with no
+  approval call in between).
 - **`LoopRule`** — _fingerprint repetition_ matcher. The fingerprint is
   `tool + sorted_args_json`, so a parameterised search (args differ each
   call) does **not** fire — only an identical retry loop does. Use for
   prompt-injection retry storms hammering a denied tool.
+- **`RateLimitRule`** — _sliding time-window rate limit_, counted **per
+  tool name**: fires when one tool is called more than `max_calls` times
+  within the trailing `window_s` seconds (uses the `ts` the engine stamps
+  on every recorded call). Catches volumetric abuse with *varying* args
+  (enumeration / spray) that LoopRule's identical-fingerprint check
+  cannot see. The `"*"` matcher covers every tool without pooling them
+  into one shared budget.
+- **`AggregateRule`** — _sliding time-window budget_: sums
+  `cast(args[field])` (dotted path) over matching calls within the
+  trailing `window_s` and fires when the total exceeds `max_total`. Use
+  for cumulative budgets — bytes exfiltrated, recipients contacted — where
+  every single call stays under the per-call limits. The window is
+  recomputed from entry timestamps on every evaluation, so contributions
+  slide out exactly (no persistent accumulator to drift).
 
 ### Arg matchers and dotted paths
 
@@ -503,9 +542,11 @@ Resolution order (first non-empty wins):
 3. `guardrails.rules.default` — the bundled homelab starter pack.
 
 See [`examples/rules.policy`](examples/rules.policy) for a richer, well-commented
-pack covering six patterns (inbox -> external email, secret-read -> HTTP
+pack covering nine patterns (inbox -> external email, secret-read -> HTTP
 exfil, shell -> privileged k8s apply, db-dump -> external upload, file-read
--> webhook exfil, and a `LoopRule` retry storm).
+-> webhook exfil, an unapproved-send flow using a `negate` guard step, a
+`RateLimitRule` per-tool rate limit, an `AggregateRule` hourly read-volume
+budget, and a `LoopRule` retry storm).
 
 ## Deployment
 
@@ -569,16 +610,20 @@ python3 tests/load_test.py
 ```
 
 The unit suite covers the aggregator (fail-closed table), invariant engine
-(ordered subsequence matching, LoopRule fingerprinting, dotted-path
-resolution), scanners (regex patterns, truncation, `extract_text` hidden
-Unicode preservation), the engine (timeout / exception handling, second-stage
-gating), the gRPC servicer (in-process round-trip + wire mapping), and the
-rule loader. The e2e smoke boots a live server, exercises health +
+(ordered subsequence matching, negate guards, LoopRule fingerprinting,
+RateLimitRule / AggregateRule time windows, dotted-path resolution),
+scanners (regex patterns, PromptGuard grey-zone thresholds, AgentAlignment
+pre-egress redaction, truncation, `extract_text` hidden Unicode
+preservation), the engine (timeout / exception handling, second-stage
+gating), the gRPC servicer (in-process round-trip + wire mapping), the rule
+loader, and a red-team capability baseline (`tests/test_redteam.py`, with
+xfail-marked residual gaps). The e2e smoke boots a live server, exercises health +
 `CheckRequest` (allow + deny on hidden Unicode) + `CheckResponse` (deny on
 private key) + malformed `INVALID`, and exits non-zero on any
 mismatch.
 
-All 157 unit tests and the e2e smoke are green on a fresh clone.
+All 305+ unit tests (including the red-team capability baseline, with 2
+xfail-marked residual gaps) and the e2e smoke are green on a fresh clone.
 
 ### Real agentgateway interoperability e2e
 
@@ -740,7 +785,7 @@ mcp-guardrails/
 │   ├── __init__.py               # public re-exports + __version__
 │   ├── models.py                 # Decision, ScanResult, ScanOutcome, FailureMode, ...
 │   ├── aggregator.py             # fail-closed DecisionAggregator
-│   ├── invariant.py              # FlowStep, ToxicFlowRule, LoopRule, InvariantEngine
+│   ├── invariant.py              # FlowStep, ToxicFlowRule, LoopRule, RateLimitRule, AggregateRule, InvariantEngine
 │   ├── scanners.py               # Scanner protocol, RegexScanner, OnnxPromptGuardScanner, Stub
 │   ├── engine.py                 # GuardrailEngine orchestrator (request + response paths)
 │   ├── servicer.py               # ExtMcpServicer (gRPC wire mapping)
@@ -751,7 +796,7 @@ mcp-guardrails/
 │   └── rules/
 │       ├── __init__.py           # RulePack loader (path / module / env, SIGHUP reload)
 │       └── default.py            # bundled homelab starter rule pack
-├── tests/                        # 157 unit tests + e2e_smoke.py
+├── tests/                        # 305+ unit tests + e2e_smoke.py
 ├── scripts/                      # proto_check.py, version_check.py, e2e_agentgateway.sh (real agentgateway e2e)
 ├── deploy/k8s/                   # K8s manifests (Deployment, Service, ConfigMap, CRD)
 ├── examples/                     # rule pack, env file, standalone agentgateway config, PII demo upstream

@@ -281,11 +281,21 @@ self._c.response_scanners)`:
    - At least one first-stage scanner returned `ScanOutcome.HUMAN_REVIEW`.
      When the gate fires, `_run_scanners(text, role="assistant",
 self._c.second_stage_scanners)` runs and the results are appended to the
-     aggregator input. The span gets `second_stage=True`.
+     aggregator input. The span gets `second_stage=True`. Before the LLM
+     call, the engine attaches a **trace summary** to the scanner context
+     (the last 5 tool-call names from the route's Invariant trace —
+     metadata only, never args) and the `AgentAlignmentScanner`
+     **pre-redacts** the flagged chunk with the standard
+     `RedactionScanner` patterns, so review-grade secrets/PII never leave
+     for the external LLM in cleartext.
      This is the cost-control knob from the original design: AgentAlignment
      is LLM-based (~300-800ms per call). Running it on every response would
      dominate sidecar latency and homelab cost; gating it on first-stage
      suspicion bounds the alignment cost to suspicious responses only.
+     The first-stage grey zone that feeds the gate is tunable via
+     `PG_REVIEW_THRESHOLD` (default 0.5): PromptGuard scores in
+     `[PG_REVIEW_THRESHOLD, LF_PROMPTGUARD_BLOCK_THRESHOLD)` flag
+     `HUMAN_REVIEW` instead of ALLOW.
 5. **No Invariant on the response side** — toxic-flow is a request-time
    property. The trace records `(tool, args)` on the request; the response
    carries no tool identity to record.
@@ -369,12 +379,14 @@ from different agents can neither assemble a cross-tenant toxic flow nor trip
 a loop rule against each other's history, and a key-flooding client cannot
 grow memory without bound.
 
-`record(tool, args, key=...)` appends a `TraceEntry(tool, args)` to the key's
-deque. When the deque is full, the oldest entry is evicted automatically —
-this caps memory and rule-evaluation cost (bound: window x
-`INVARIANT_ARGS_MAX_BYTES` x `INVARIANT_MAX_TRACES`). The window should be
-large enough to span a typical agent tool-use chain; the default of 256
-covers long multi-step plans.
+`record(tool, args, key=...)` appends a `TraceEntry(tool, args, ts)` to the
+key's deque (`ts` is a `time.monotonic()` stamp consumed by the
+time-windowed rules; hand-constructed entries default to `0.0`, which
+windowed rules treat as "now"). When the deque is full, the oldest entry is
+evicted automatically — this caps memory and rule-evaluation cost (bound:
+window x `INVARIANT_ARGS_MAX_BYTES` x `INVARIANT_MAX_TRACES`). The window
+should be large enough to span a typical agent tool-use chain; the default
+of 256 covers long multi-step plans.
 
 **Sticky partial-match progress (S-H4).** When a `ToxicFlowRule` matches a
 PREFIX of its steps (e.g. step 0 of 2), the progress is parked in a sticky
@@ -401,6 +413,44 @@ rule:     [inbox_read, email_send(to=external)]
 The matcher is greedy left-to-right: for each trace entry, if it matches
 the current step, advance the step index. The rule fires when the step
 index reaches `len(steps)`. First-match wins across rules in priority order.
+
+**Negate guards.** A `FlowStep(negate=True)` is a negative guard, not a
+positive step: it never advances the sequence, but while it is *armed* —
+between the previously matched positive step and the next positive step —
+any trace entry matching it **voids** the progress made so far. Matching
+then restarts from step 0 with the remaining trace (a later clean sequence
+in the same window can still fire), and any parked sticky progress for the
+rule is dropped by the engine (a voided flow cannot resume from the negated
+prefix). Guards can carry arg matchers, so "void only if the approval names
+the same thread" is expressible. Canonical use: `inbox_read ->
+email_approve(negate) -> email_send(external)` — read-then-send fires,
+read-then-approve-then-send does not.
+
+### RateLimitRule sliding time-window rate limit
+
+A `RateLimitRule(tool, window_s, max_calls)` fires when any single tool
+whose name matches `tool` is called more than `max_calls` times within the
+trailing `window_s` seconds of the trace (by `TraceEntry.ts`). Counting is
+grouped per concrete tool name, so the `"*"` wildcard gives every tool its
+own budget rather than pooling all calls into one. Where `LoopRule` catches
+identical-args retry loops, `RateLimitRule` catches volumetric abuse with
+*varying* args (enumeration, spray). The window is recomputed from entry
+timestamps on every evaluation — entries that age out stop counting
+immediately, and legacy entries with `ts == 0.0` count as "now".
+
+### AggregateRule sliding time-window budget
+
+An `AggregateRule(field, max_total, tool, window_s, cast)` fires when the
+sum of `cast(args[field])` (dotted path; `cast` defaults to `float`) over
+matching calls within the trailing `window_s` exceeds `max_total` —
+cumulative budgets a per-call rule cannot express (total bytes read,
+recipients contacted). Entries with a missing/uncastable field contribute
+0. Like `RateLimitRule`, the window is **recomputed from entry timestamps
+on every evaluation** rather than kept in a persistent accumulator: this
+was chosen over a TTL-reset ledger because the semantics ("sum over the
+last N seconds") are trivially explainable, decrementing as entries slide
+out is exact, and there is no accumulator state to drift, reset, or lose
+across a hot rule reload.
 
 ### LoopRule fingerprint repetition
 

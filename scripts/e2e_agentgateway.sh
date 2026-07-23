@@ -129,17 +129,32 @@ echo "$BODY" | grep -q '\[REDACTED:EMAIL\]' && ! echo "$BODY" | grep -q 'jdoe@ex
 echo "== c) private key in request args (deny) =="
 BODY=$(mcp_call '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"echo","arguments":{"text":"-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA7\n-----END RSA PRIVATE KEY-----"}}}')
 echo "$BODY"
-echo "$BODY" | grep -q '"code": *-32001' && echo "$BODY" | grep -q 'private_key' \
-    && ok "private-key request denied (-32001)" || bad "private-key deny"
+# The wire body is generalised (F-P1-1): pattern names (e.g. private_key)
+# never reach the client — only the -32001 code plus a generalised
+# category. Regex-scanner denies map to category "content_policy".
+echo "$BODY" | grep -q '"code": *-32001' && echo "$BODY" | grep -q 'content_policy' \
+    && ok "private-key request denied (-32001/content_policy)" || bad "private-key deny"
+# The internal pattern name stays audit-only: the sidecar log records the
+# full regex:private_key reason for the same exchange.
+grep -q 'regex:private_key' "$WORKDIR/sidecar.log" \
+    && ok "audit log records regex:private_key reason" || bad "audit log missing regex:private_key"
 
 echo "== d) loop rule (same tool+args x4 -> 3rd+ denied) =="
 LOOP_DENY=0
 for i in 1 2 3 4; do
     BODY=$(mcp_call "{\"jsonrpc\":\"2.0\",\"id\":3$i,\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{\"text\":\"loop-probe\"}}}")
     echo "$BODY"
-    echo "$BODY" | grep -q 'denied-tool-retry-loop' && LOOP_DENY=$((LOOP_DENY+1))
+    # Invariant denies are generalised on the wire (F-P1-1): the rule name
+    # (denied-tool-retry-loop) stays audit-only; the client sees -32001 with
+    # the invariant category "tool_flow".
+    echo "$BODY" | grep -q '"code": *-32001' && echo "$BODY" | grep -q 'tool_flow' \
+        && LOOP_DENY=$((LOOP_DENY+1))
 done
-[ "$LOOP_DENY" -ge 1 ] && ok "loop rule fired ($LOOP_DENY denies)" || bad "loop rule did not fire"
+[ "$LOOP_DENY" -ge 1 ] && ok "loop rule fired ($LOOP_DENY wire denies, -32001/tool_flow)" || bad "loop rule did not fire"
+# Supplementary check: the internal rule name is recorded in the sidecar's
+# audit log (grep the audit reason, not the wire body).
+grep -q 'invariant:denied-tool-retry-loop' "$WORKDIR/sidecar.log" \
+    && ok "audit log records invariant:denied-tool-retry-loop" || bad "audit log missing loop rule name"
 
 echo "== f) sidecar audit log (mutated / deny outcomes) =="
 grep -q '"outcome": "mutated"' "$WORKDIR/sidecar.log" && ok 'audit outcome="mutated" present' || bad 'no mutated audit line'

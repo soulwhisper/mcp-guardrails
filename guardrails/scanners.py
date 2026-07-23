@@ -25,6 +25,7 @@ from .models import ScanOutcome, ScanResult
 
 if TYPE_CHECKING:
     from .models import McpCallContext
+    from .redaction import RedactionScanner
 
 # ---------------------------------------------------------------------------
 # Scanner protocol
@@ -341,6 +342,19 @@ class AgentAlignmentScanner:
         The scanner reads the key directly from this field (passed in by the
         engine from the LF_ALIGNMENT_API_KEY env var).
 
+    Before anything leaves the process, the flagged content is pre-redacted
+    with an **extended** :class:`~guardrails.redaction.RedactionScanner`
+    pattern set (``[REDACTED:<TYPE>]`` placeholders) covering the
+    block-grade secrets/PII **plus** the review-grade credential shapes
+    (JWT, connection strings, key=value credentials) — precisely the shapes
+    whose HUMAN_REVIEW verdict feeds this second-stage gate, so they must
+    not reach the external LLM in cleartext. This is masking, not a
+    verdict — the alignment decision itself is unaffected. When the engine
+    supplies a
+    ``McpCallContext.trace_summary`` (recent tool-call names from the
+    Invariant trace), it is folded into the prompt so the LLM judges the
+    flagged chunk against the agent's recent trajectory, not in isolation.
+
     The ``openai`` package is imported lazily so the scanner is importable
     without it installed (it's only needed when ENABLE_AGENT_ALIGNMENT=1).
     """
@@ -349,9 +363,18 @@ class AgentAlignmentScanner:
     api_base: str = "https://api.together.xyz/v1"
     api_key: str | None = None
     name: str = "agent-alignment"
+    # Pre-egress redactor; None -> a RedactionScanner with the extended
+    # egress pattern set (block-grade + review-grade credential shapes).
+    redactor: RedactionScanner | None = None
 
     def __post_init__(self) -> None:
         self._client: Any = None
+        if self.redactor is None:
+            # Local import: redaction.py imports the regex constants from
+            # this module, so a top-level import would be circular.
+            from .redaction import RedactionScanner, egress_redaction_patterns
+
+            self.redactor = RedactionScanner(patterns=egress_redaction_patterns())
 
     def _get_client(self) -> Any:
         """Lazily build the OpenAI client (only when first scan runs)."""
@@ -385,8 +408,9 @@ class AgentAlignmentScanner:
         The LLM call is blocking (network I/O); bridge to a thread so the
         asyncio event loop is never blocked.
         """
+        trace_summary = context.trace_summary if context is not None else ""
         try:
-            result = await asyncio.to_thread(self._evaluate, content)
+            result = await asyncio.to_thread(self._evaluate, content, trace_summary)
         except RuntimeError as exc:
             # Missing API key — return HUMAN_REVIEW so the aggregator can decide
             return ScanResult.review(self.name, f"config_error:{exc}")
@@ -399,21 +423,40 @@ class AgentAlignmentScanner:
             return ScanResult.review(self.name, f"llm_error:{type(exc).__name__}")
         return result
 
-    def _evaluate(self, content: str) -> ScanResult:
+    def _evaluate(self, content: str, trace_summary: str = "") -> ScanResult:
         """Synchronous LLM evaluation (called via asyncio.to_thread)."""
         import json
 
         client = self._get_client()
 
+        # Pre-egress redaction: mask secrets/PII BEFORE the content leaves
+        # the process for the external LLM (the scanned payload is
+        # attacker-influenced and may carry review-grade credentials).
+        if self.redactor is not None:
+            content, _n = self.redactor.redact_text(content)
+
         # Truncate content to avoid token blowout — the LLM only needs the
         # head of the content to assess compromise.
         text = content[:4000] if len(content) > 4000 else content
+
+        # Trajectory context: the engine's Invariant trace summary (recent
+        # tool-call names) lets the LLM judge the flagged chunk against what
+        # the agent has been doing, which is where cross-call injections
+        # become visible.
+        prompt_parts: list[str] = []
+        if trace_summary:
+            prompt_parts.append(
+                "The agent's most recent tool calls (oldest first):\n"
+                f"{trace_summary}\n"
+            )
+        prompt_parts.append(f"Evaluate this agent action:\n\n{text}")
+        user_prompt = "\n".join(prompt_parts)
 
         response = client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": _ALIGNMENT_SYSTEM_PROMPT},
-                {"role": "user", "content": f"Evaluate this agent action:\n\n{text}"},
+                {"role": "user", "content": user_prompt},
             ],
             temperature=0.0,
             max_tokens=512,
@@ -504,6 +547,12 @@ class OnnxPromptGuardScanner:
     # build-arg; runtime hub fetches honour LF_ONNX_REVISION. None -> latest.
     revision: str | None = None
     block_threshold: float = 0.9
+    # Grey-zone review threshold (PG_REVIEW_THRESHOLD, default 0.5):
+    # score >= block_threshold -> BLOCK; review_threshold <= score <
+    # block_threshold -> HUMAN_REVIEW (the engine's second-stage
+    # AgentAlignment gate picks these up when enabled); below -> ALLOW.
+    # Effectively clamped to the block threshold in __post_init__.
+    review_threshold: float = 0.5
     name: str = "onnx-promptguard"
     # Sliding-window inference (S-H1): the model's max_position_embeddings is
     # 512, so a naive truncation=True/max_length=512 scores only the first
@@ -525,6 +574,10 @@ class OnnxPromptGuardScanner:
         self._sess: Any = None
         self._tokenizer: Any = None
         self._loaded = False
+        # A review threshold above the block threshold would make the grey
+        # zone unreachable; clamp (and allow disabling the grey zone
+        # entirely with review_threshold <= 0).
+        self.review_threshold = min(max(0.0, self.review_threshold), self.block_threshold)
 
     def _load(self) -> None:
         """Lazy-load the ONNX session + tokenizer (called on first scan)."""
@@ -623,6 +676,17 @@ class OnnxPromptGuardScanner:
             return ScanResult.block(
                 f"{self.name}",
                 f"prompt injection score {score:.3f} >= {self.block_threshold}",
+                score,
+            )
+        if score >= self.review_threshold > 0.0:
+            # Grey zone: not confident enough to hard-block, too suspicious
+            # to wave through. HUMAN_REVIEW routes to the second-stage
+            # AgentAlignment gate (when enabled) or the aggregator's
+            # HUMAN_REVIEW_MODE.
+            return ScanResult.review(
+                f"{self.name}",
+                f"prompt injection score {score:.3f} in grey zone "
+                f"[{self.review_threshold}, {self.block_threshold})",
                 score,
             )
         return ScanResult.allow(self.name)

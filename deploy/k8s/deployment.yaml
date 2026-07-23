@@ -97,8 +97,9 @@ spec:
               value: "true"
             - name: ENABLE_AGENT_ALIGNMENT
               value: "false"
-            - name: INVARIANT_WINDOW
-              value: "64"
+            # INVARIANT_WINDOW intentionally NOT set: inherits the default 256
+            # (raised from 64 in S-H4 so long agent plans don't push the head
+            # of a toxic flow out of the window before the tail arrives).
             # - name: INVARIANT_MAX_TRACES   # max per-route trace windows (default 1024)
             #   value: "1024"
             # - name: SCAN_TAIL_BYTES        # tail window scanned on over-budget payloads (default 8192)
@@ -164,6 +165,9 @@ spec:
               value: "model.onnx"
             - name: LF_PROMPTGUARD_BLOCK_THRESHOLD
               value: "0.9"
+            # - name: PG_REVIEW_THRESHOLD    # grey-zone review threshold (default 0.5): scores in
+            #                                # [review, block) flag HUMAN_REVIEW -> AgentAlignment gate
+            #   value: "0.5"
             # - name: PG_MAX_WINDOWS         # PromptGuard sliding-window cap per chunk (default 16);
             #                                # budget adapts to token length, this is the latency bound
             #   value: "16"

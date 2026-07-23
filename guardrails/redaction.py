@@ -58,11 +58,14 @@ from typing import Any
 from .scanners import (
     _AWS_KEY,
     _AWS_TEMP_KEY,
+    _CONNECTION_STRING,
     _CREDIT_CARD,
     _EMAIL,
     _GITHUB_PAT,
     _GITLAB_PAT,
     _GOOGLE_API_KEY,
+    _JWT,
+    _KEY_VALUE_CRED,
     _LLM_API_KEY,
     _SLACK_TOKEN,
 )
@@ -117,6 +120,28 @@ def default_redaction_patterns() -> list[RedactionPattern]:
         RedactionPattern("llm_api_key", _LLM_API_KEY),
         RedactionPattern("email", _EMAIL),
         RedactionPattern("credit_card", _CREDIT_CARD),
+    ]
+
+
+def egress_redaction_patterns() -> list[RedactionPattern]:
+    """Extended set for pre-egress masking (AgentAlignment external LLM call).
+
+    The full :func:`default_redaction_patterns` block-grade set **plus** the
+    HUMAN_REVIEW-grade credential shapes (JWT, connection string,
+    key=value credential) — exactly the shapes whose review verdict feeds
+    the second-stage AgentAlignment gate, so they must never leave the
+    process in cleartext. These are excluded from the wire-path default set
+    because rewriting them blindly there is too false-positive-prone; on
+    the egress path a false positive merely degrades one alignment prompt,
+    which is far cheaper than leaking a credential to a third-party LLM.
+    The generic high-entropy shape stays excluded even here (highest FP
+    rate against natural text).
+    """
+    return [
+        *default_redaction_patterns(),
+        RedactionPattern("jwt", _JWT),
+        RedactionPattern("connection_string", _CONNECTION_STRING),
+        RedactionPattern("key_value_credential", _KEY_VALUE_CRED),
     ]
 
 
