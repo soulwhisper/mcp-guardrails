@@ -5,6 +5,38 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.5...v0.4.0) (2026-07-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **github-action:** Update actions/setup-python action ( v6.3.0 → v7.0.0 ) ([#70](https://github.com/soulwhisper/mcp-guardrails/issues/70))
+* **deps:** Update huggingface-hub ( 0.36.2 → 1.24.0 ) ([#71](https://github.com/soulwhisper/mcp-guardrails/issues/71))
+* **deps:** Update openai ( 1.109.1 → 2.46.0 ) ([#72](https://github.com/soulwhisper/mcp-guardrails/issues/72))
+* **deps:** Update transformers ( 4.57.6 → 5.14.1 ) ([#73](https://github.com/soulwhisper/mcp-guardrails/issues/73))
+
+### Features
+
+* audit & observability hardening — exchange correlation, redacted LLM audit, runtime health ([#67](https://github.com/soulwhisper/mcp-guardrails/issues/67)) ([4728ac3](https://github.com/soulwhisper/mcp-guardrails/commit/4728ac360ab22904d5ce5237376fa215751f4416))
+* contract fulfilment + rule-layer hardening — mcp_error, gateway metadata, sticky flows, tool ACL ([#68](https://github.com/soulwhisper/mcp-guardrails/issues/68)) ([772bd13](https://github.com/soulwhisper/mcp-guardrails/commit/772bd13a40afe66cb4184c4b0d7257998a81f5a5))
+* **deps:** Update huggingface-hub ( 0.36.2 → 1.24.0 ) ([#71](https://github.com/soulwhisper/mcp-guardrails/issues/71)) ([248b845](https://github.com/soulwhisper/mcp-guardrails/commit/248b845685c84c0286bd689d2e2116e3a97a121c))
+* **deps:** Update openai ( 1.109.1 → 2.46.0 ) ([#72](https://github.com/soulwhisper/mcp-guardrails/issues/72)) ([1213204](https://github.com/soulwhisper/mcp-guardrails/commit/1213204230fb361bd532398e0a4b45d89654988d))
+* **deps:** Update transformers ( 4.57.6 → 5.14.1 ) ([#73](https://github.com/soulwhisper/mcp-guardrails/issues/73)) ([568b16b](https://github.com/soulwhisper/mcp-guardrails/commit/568b16b20a537b880ea0e0c67a7d6e2ed14397e6))
+* wave-1 security hardening — scanner coverage, leak containment, DoS bounds ([#65](https://github.com/soulwhisper/mcp-guardrails/issues/65)) ([90b85a4](https://github.com/soulwhisper/mcp-guardrails/commit/90b85a471293bbebbd4a6aea28eadd30bed7271f))
+* wave-3 rule & scanner depth — rate/aggregate rules, negation, PG grey-zone, red-team baseline ([#74](https://github.com/soulwhisper/mcp-guardrails/issues/74)) ([a1c4e98](https://github.com/soulwhisper/mcp-guardrails/commit/a1c4e98b867156efb2be7b5e82f124f3a102138b))
+* wave-3 tooling & compliance — guardrail_ctl, review webhook, property tests, graceful drain ([#75](https://github.com/soulwhisper/mcp-guardrails/issues/75)) ([4c9aca9](https://github.com/soulwhisper/mcp-guardrails/commit/4c9aca9aae9bff033a67db9697436b18e72479f6))
+
+
+### Continuous Integration
+
+* **github-action:** Update actions/setup-python action ( v6.3.0 → v7.0.0 ) ([#70](https://github.com/soulwhisper/mcp-guardrails/issues/70)) ([3554981](https://github.com/soulwhisper/mcp-guardrails/commit/35549816b11c23d3b39a2e4f2eeae23c575a93bc))
+* **github-action:** update github/codeql-action digest ( e064762 → e4fba86 ) ([#69](https://github.com/soulwhisper/mcp-guardrails/issues/69)) ([e51cb5b](https://github.com/soulwhisper/mcp-guardrails/commit/e51cb5bd2f70789371fef67253fdd2e65a5eed65))
+
+
+### Chores
+
+* **release-please:** allow minor bump for feat commits (cut 0.4.0) ([#76](https://github.com/soulwhisper/mcp-guardrails/issues/76)) ([55e697f](https://github.com/soulwhisper/mcp-guardrails/commit/55e697f5e022783e00ca3bb6fc325068bae1921c))
+
 ## [0.3.5](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.4...v0.3.5) (2026-07-21)
 
 
