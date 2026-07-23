@@ -56,6 +56,11 @@ dev = [
     "pytest-cov>=5",
     "ruff>=0.6",
     "grpcio-tools>=1.82.1,<1.83",
+    # Property-based tests (tests/test_property.py). Lower-bound only, same
+    # style as the other dev pins; the module importorskips when absent.
+    "hypothesis>=6.100",
+    # Supply-chain audit: `make audit` runs pip-audit against requirements.
+    "pip-audit>=2.7",
 ]
 
 [project.urls]
