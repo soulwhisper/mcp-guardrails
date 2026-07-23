@@ -11,6 +11,10 @@
 grpcio>=1.82.1,<1.83
 grpcio-health-checking>=1.82.1,<1.83
 # grpcio-tools is a BUILD-TIME / DEV dependency only — NOT listed here.
+# Dev-only tooling (tests/test_property.py, `make audit`) also lives in the
+# pyproject [project.optional-dependencies].dev extra, NOT here:
+#   hypothesis>=6.100   (property-based tests; importorskips when absent)
+#   pip-audit>=2.7      (requirements vulnerability audit)
 
 # protobuf runtime must be at least as new as the gencode embedded in
 # proto/ext_mcp_pb2.py (grpcio-tools 1.82.1 -> protobuf 7.35.x gencode).
