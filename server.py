@@ -105,11 +105,52 @@ async def serve() -> None:
     logger.info("ExtMcp guardrail listening on %s (h2c)", config.listen_addr)
 
     await stop_event.wait()
-    logger.info("draining connections (grace=%ss)", _GRACE_SECS)
+    await graceful_shutdown(
+        server,
+        health_servicer,
+        health_task,
+        drain_s=config.shutdown_drain_s,
+        grace_s=_GRACE_SECS,
+    )
+
+
+async def graceful_shutdown(
+    server,
+    health_servicer,
+    health_task: asyncio.Task[None],
+    *,
+    drain_s: float,
+    grace_s: float,
+) -> None:
+    """A-P2-4 ordered shutdown: NOT_SERVING -> propagation wait -> drain.
+
+    1. Flip the gRPC health service to NOT_SERVING immediately, so the very
+       next readiness probe takes the Pod out of Service endpoints and the
+       dataplane stops routing NEW exchanges to this replica.
+    2. Wait ``drain_s`` seconds for that transition to propagate (kubelet
+       probe interval + endpoint controller + dataplane convergence).
+       In-flight exchanges keep running during the wait.
+    3. Cancel the health watchdog and drain with ``server.stop(grace_s)``.
+    """
+    logger.info(
+        "shutdown: health -> NOT_SERVING, waiting %ss for readiness propagation "
+        "before draining (grace=%ss)",
+        drain_s,
+        grace_s,
+    )
+    with contextlib.suppress(Exception):
+        await health_servicer.set("", health_pb2.HealthCheckResponse.NOT_SERVING)
+        await health_servicer.set("ExtMcp", health_pb2.HealthCheckResponse.NOT_SERVING)
+    # Stop the watchdog first so it cannot flip health back to SERVING
+    # mid-drain (it only writes on transitions, but an unlucky scanner
+    # error-rate recovery during the wait would do exactly that).
     health_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await health_task
-    await server.stop(grace=_GRACE_SECS)
+    if drain_s > 0:
+        await asyncio.sleep(drain_s)
+    logger.info("draining connections (grace=%ss)", grace_s)
+    await server.stop(grace=grace_s)
     await health_servicer.enter_graceful_shutdown()
     await server.wait_for_termination()
 
