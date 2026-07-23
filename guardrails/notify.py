@@ -61,8 +61,16 @@ def _post_json(url: str, body: bytes, timeout_s: float) -> int:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-        return resp.status
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        # HTTPError is file-like (its body may be backed by a tempfile);
+        # close it explicitly or the GC cleanup emits a ResourceWarning.
+        try:
+            return e.status
+        finally:
+            e.close()
 
 
 async def notify_human_review(
