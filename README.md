@@ -820,8 +820,8 @@ mcp-guardrails/
 │   ├── servicer.py               # ExtMcpServicer (gRPC wire mapping)
 │   ├── config.py                 # GuardrailConfig.from_env()
 │   ├── otel.py                   # OTel spans/metrics + always-on JSONL audit
-│   ├── redaction.py              # RedactionScanner (secret/PII masking, [REDACTED:<TYPE>] mutation)
 │   ├── notify.py                 # HUMAN_REVIEW webhook notifier (fire-and-forget, urllib)
+│   ├── redaction.py              # RedactionScanner (secret/PII masking, [REDACTED:<TYPE>] mutation)
 │   ├── proto_bridge.py           # sys.path bridge for the generated stubs
 │   └── rules/
 │       ├── __init__.py           # RulePack loader (path / module / env, SIGHUP reload)
@@ -831,8 +831,8 @@ mcp-guardrails/
 │                               #   decision replay), gen_sbom.sh, pip-audit-ignore.txt, e2e_agentgateway.sh
 ├── deploy/k8s/                   # K8s manifests (Deployment, Service, ConfigMap, CRD)
 ├── examples/                     # rule pack, env file, standalone agentgateway config, PII demo upstream
-├── .github/workflows/            # CI + release workflows
 ├── docs/compliance.md            # data classification, audit retention, access control, egress statement
+├── .github/workflows/            # CI + release workflows
 ├── server.py                     # grpc.aio entrypoint (SIGHUP reload, SIGTERM drain)
 ├── Dockerfile                    # multi-stage (base/builder/models/runtime), nonroot 65532
 ├── Makefile                      # proto / dev / test / lint / docker / run / ci
