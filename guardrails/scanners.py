@@ -152,51 +152,52 @@ _CREDIT_CARD = re.compile(r"\b(?:\d[ -]*?){13,16}\b")
 # Dze/Upsilon/Tau/Epsilon/Mu) to slip past ASCII regexes while the rendered
 # text still reads as the marker to a human or LLM. The map is deliberately
 # limited to unambiguous lookalikes — it is NOT a full Unicode confusables
-# table (keep the false-positive surface minimal). Code points are written
-# as escapes so the table is grep/lint-safe (RUF001).
+# table (keep the false-positive surface minimal). Keys are written as
+# chr(0xXXXX) code points so the table stays ASCII — grep/lint-safe (RUF001)
+# and free of invisible/ambiguous literals.
 _HOMOGLYPH_MAP = str.maketrans(
     {
-        "А": "A",  # CYRILLIC CAPITAL LETTER A
-        "В": "B",  # CYRILLIC CAPITAL LETTER VE
-        "С": "C",  # CYRILLIC CAPITAL LETTER ES
-        "Е": "E",  # CYRILLIC CAPITAL LETTER IE
-        "Н": "H",  # CYRILLIC CAPITAL LETTER EN
-        "І": "I",  # CYRILLIC CAPITAL LETTER BYELORUSSIAN-UKRAINIAN I
-        "Ј": "J",  # CYRILLIC CAPITAL LETTER JE
-        "К": "K",  # CYRILLIC CAPITAL LETTER KA
-        "М": "M",  # CYRILLIC CAPITAL LETTER EM
-        "О": "O",  # CYRILLIC CAPITAL LETTER O
-        "Р": "P",  # CYRILLIC CAPITAL LETTER ER
-        "Ѕ": "S",  # CYRILLIC CAPITAL LETTER DZE
-        "Т": "T",  # CYRILLIC CAPITAL LETTER TE
-        "Х": "X",  # CYRILLIC CAPITAL LETTER HA
-        "У": "Y",  # CYRILLIC CAPITAL LETTER U
-        "а": "a",  # CYRILLIC SMALL LETTER A
-        "с": "c",  # CYRILLIC SMALL LETTER ES
-        "е": "e",  # CYRILLIC SMALL LETTER IE
-        "і": "i",  # CYRILLIC SMALL LETTER BYELORUSSIAN-UKRAINIAN I
-        "ј": "j",  # CYRILLIC SMALL LETTER JE
-        "о": "o",  # CYRILLIC SMALL LETTER O
-        "р": "p",  # CYRILLIC SMALL LETTER ER
-        "ѕ": "s",  # CYRILLIC SMALL LETTER DZE
-        "х": "x",  # CYRILLIC SMALL LETTER HA
-        "у": "y",  # Greek upper (lookalikes only)
-        "Α": "A",  # GREEK CAPITAL LETTER ALPHA
-        "Β": "B",  # BETA
-        "Ε": "E",  # EPSILON
-        "Η": "H",  # ETA
-        "Ι": "I",  # IOTA
-        "Κ": "K",  # KAPPA
-        "Μ": "M",  # MU
-        "Ν": "N",  # NU
-        "Ο": "O",  # OMICRON
-        "Ρ": "P",  # RHO
-        "Τ": "T",  # TAU
-        "Υ": "Y",  # UPSILON
-        "Χ": "X",  # CHI
-        "Ζ": "Z",  # ZETA
-        "ο": "o",  # omicron
-        "ν": "v",  # nu
+        chr(0x0410): "A",  # CYRILLIC CAPITAL LETTER A
+        chr(0x0412): "B",  # CYRILLIC CAPITAL LETTER VE
+        chr(0x0421): "C",  # CYRILLIC CAPITAL LETTER ES
+        chr(0x0415): "E",  # CYRILLIC CAPITAL LETTER IE
+        chr(0x041d): "H",  # CYRILLIC CAPITAL LETTER EN
+        chr(0x0406): "I",  # CYRILLIC CAPITAL LETTER BYELORUSSIAN-UKRAINIAN I
+        chr(0x0408): "J",  # CYRILLIC CAPITAL LETTER JE
+        chr(0x041a): "K",  # CYRILLIC CAPITAL LETTER KA
+        chr(0x041c): "M",  # CYRILLIC CAPITAL LETTER EM
+        chr(0x041e): "O",  # CYRILLIC CAPITAL LETTER O
+        chr(0x0420): "P",  # CYRILLIC CAPITAL LETTER ER
+        chr(0x0405): "S",  # CYRILLIC CAPITAL LETTER DZE
+        chr(0x0422): "T",  # CYRILLIC CAPITAL LETTER TE
+        chr(0x0425): "X",  # CYRILLIC CAPITAL LETTER HA
+        chr(0x0423): "Y",  # CYRILLIC CAPITAL LETTER U
+        chr(0x0430): "a",  # CYRILLIC SMALL LETTER A
+        chr(0x0441): "c",  # CYRILLIC SMALL LETTER ES
+        chr(0x0435): "e",  # CYRILLIC SMALL LETTER IE
+        chr(0x0456): "i",  # CYRILLIC SMALL LETTER BYELORUSSIAN-UKRAINIAN I
+        chr(0x0458): "j",  # CYRILLIC SMALL LETTER JE
+        chr(0x043e): "o",  # CYRILLIC SMALL LETTER O
+        chr(0x0440): "p",  # CYRILLIC SMALL LETTER ER
+        chr(0x0455): "s",  # CYRILLIC SMALL LETTER DZE
+        chr(0x0445): "x",  # CYRILLIC SMALL LETTER HA
+        chr(0x0443): "y",  # Greek upper (lookalikes only)
+        chr(0x0391): "A",  # GREEK CAPITAL LETTER ALPHA
+        chr(0x0392): "B",  # BETA
+        chr(0x0395): "E",  # EPSILON
+        chr(0x0397): "H",  # ETA
+        chr(0x0399): "I",  # IOTA
+        chr(0x039a): "K",  # KAPPA
+        chr(0x039c): "M",  # MU
+        chr(0x039d): "N",  # NU
+        chr(0x039f): "O",  # OMICRON
+        chr(0x03a1): "P",  # RHO
+        chr(0x03a4): "T",  # TAU
+        chr(0x03a5): "Y",  # UPSILON
+        chr(0x03a7): "X",  # CHI
+        chr(0x0396): "Z",  # ZETA
+        chr(0x03bf): "o",  # omicron
+        chr(0x03bd): "v",  # nu
     }
 )
 
@@ -442,7 +443,7 @@ class RegexScanner:
       the homoglyph map only touch non-ASCII code points), or
     * the computed view equals the original text.
 
-    Otherwise the more severe of the pass-1/pass-2 hits wins. The severity
+    Otherwise the more severe of the pass-1 / pass-2 hits wins. The severity
     comparison closes a downgrade evasion: an attacker cannot neutralise an
     obfuscated BLOCK marker by adding a benign string that trips a low-grade
     pass-1 pattern (e.g. an email -> ALLOW) and thereby short-circuits
