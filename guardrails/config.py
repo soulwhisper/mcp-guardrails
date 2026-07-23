@@ -253,6 +253,22 @@ class GuardrailConfig:
     # (e.g. an internal fork tag).
     sidecar_version: str = ""
 
+    # --- HUMAN_REVIEW webhook notification ---
+    # Optional HTTP(S) endpoint POSTed a small JSON body
+    # (outcome/reason/ref/exchange_id/ts) whenever a decision carries the
+    # human_review flag. Empty (default) disables the notifier. Delivery is
+    # fire-and-forget: a background asyncio task with a 2s timeout; a failed
+    # or slow endpoint only logs a warning and NEVER blocks or alters the
+    # decision path. The body is metadata-only (no payload content).
+    review_webhook_url: str = ""
+
+    # --- Graceful shutdown (A-P2-4) ---
+    # Seconds to wait after flipping the gRPC health service to NOT_SERVING
+    # before draining connections, giving the readiness probe / dataplane
+    # time to observe the transition and stop routing new exchanges to this
+    # replica. 0 disables the propagation wait (immediate drain).
+    shutdown_drain_s: float = 5.0
+
     # --- Runtime health degradation (A-P0-4) ---
     # Sliding-window scanner error/timeout rate: when the rate over the last
     # ``unhealthy_scanner_window`` scan invocations exceeds
@@ -324,14 +340,10 @@ class GuardrailConfig:
             ),
             lf_alignment_api_key=os.environ.get("LF_ALIGNMENT_API_KEY") or None,
             allow_tools=tuple(
-                t.strip()
-                for t in os.environ.get("ALLOW_TOOLS", "").split(",")
-                if t.strip()
+                t.strip() for t in os.environ.get("ALLOW_TOOLS", "").split(",") if t.strip()
             ),
             deny_tools=tuple(
-                t.strip()
-                for t in os.environ.get("DENY_TOOLS", "").split(",")
-                if t.strip()
+                t.strip() for t in os.environ.get("DENY_TOOLS", "").split(",") if t.strip()
             ),
             invariant_window=_env_int("INVARIANT_WINDOW", 256),
             invariant_max_traces=_env_int("INVARIANT_MAX_TRACES", 1024),
@@ -355,6 +367,8 @@ class GuardrailConfig:
                 for h in os.environ.get("AUDIT_CALLER_HEADERS", "x-forwarded-user").split(",")
                 if h.strip()
             ),
+            review_webhook_url=os.environ.get("REVIEW_WEBHOOK_URL", "").strip(),
+            shutdown_drain_s=_env_float("SHUTDOWN_DRAIN_S", 5.0),
             sidecar_version=os.environ.get("GUARDRAIL_VERSION", ""),
             unhealthy_scanner_error_rate=_env_float("UNHEALTHY_SCANNER_ERROR_RATE", 0.5),
             unhealthy_scanner_window=_env_int("UNHEALTHY_SCANNER_WINDOW", 100),

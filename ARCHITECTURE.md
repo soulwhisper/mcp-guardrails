@@ -681,7 +681,32 @@ Field notes (Wave-2 audit expansion):
 The audit log is the durable, GitOps-friendly record that survives even
 when OTel collection is down. In K8s, point `AUDIT_LOG_PATH` at a mounted
 volume (or leave it on stdout and let your container log collector pick it
-up).
+up). Retention, access-control and integrity guidance lives in
+[`docs/compliance.md`](docs/compliance.md) (WORM / object-lock reference
+architecture, known limitations such as the missing hash-chain).
+
+### HUMAN_REVIEW webhook (optional, fire-and-forget)
+
+When `REVIEW_WEBHOOK_URL` is set, any decision carrying the
+`human_review` flag additionally POSTs a metadata-only JSON body
+(`outcome` / `reason` / `ref` / `exchange_id` / `ts`) to that URL
+([`guardrails/notify.py`](guardrails/notify.py)). Delivery is a background
+`asyncio` task with a 2s timeout over zero-dependency `urllib` — a slow or
+failing endpoint only logs a warning and can never block or alter the
+decision path, and there are no retries (the audit log stays the
+authoritative record; the webhook is a notification convenience, not a
+control).
+
+### Graceful shutdown ordering (A-P2-4)
+
+On SIGTERM/SIGINT the entrypoint runs an ordered drain
+(`server.graceful_shutdown`): first the gRPC health service flips to
+`NOT_SERVING` (both the overall and the `ExtMcp` service entries) and the
+health watchdog is cancelled so it cannot flip back mid-drain; then the
+sidecar waits `SHUTDOWN_DRAIN_S` seconds (default 5.0) for the readiness
+transition to propagate through kubelet → endpoints → dataplane; only then
+`server.stop(grace)` drains in-flight RPCs. New exchanges stop arriving
+early in the window while in-flight ones complete inside the gRPC grace.
 
 ### OTel spans and metrics (optional)
 

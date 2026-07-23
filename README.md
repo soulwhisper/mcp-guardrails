@@ -382,12 +382,14 @@ deadline.
 | Networking     | `SERVER_MAX_WORKERS`             | `8`                                      | `grpc.aio` ThreadPoolExecutor size. Each in-flight RPC occupies one worker; raise for high-concurrency deployments.                            |
 | Networking     | `GRPC_MAX_RECV_BYTES`            | `8388608`                                | gRPC max receive/send message size (8MiB). Bounds memory per call.                                                                             |
 | Networking     | `GRPC_MAX_CONCURRENT_RPCS`       | `128`                                    | Max in-flight RPCs (DoS bound); excess calls queue at the HTTP/2 layer.                                                                       |
+| Networking     | `SHUTDOWN_DRAIN_S`               | `5.0`                                    | Graceful shutdown (A-P2-4): on SIGTERM/SIGINT the health service flips to `NOT_SERVING` first, then the sidecar waits this many seconds for readiness propagation before draining with `server.stop(grace)`. `0` skips the wait. |
 | Observability  | `OTEL_EXPORTER_OTLP_ENDPOINT`    | _(unset)_                                | OTLP/gRPC endpoint (e.g. `http://otel-collector.observability.svc:4317`). When unset or OTel SDK absent, the sidecar degrades to audit-only.   |
 | Observability  | `OTEL_SERVICE_NAME`              | `mcp-guardrails`                         | Service name reported on OTel spans/metrics.                                                                                                   |
 | Observability  | `AUDIT_LOG_PATH`                 | _(unset)_                                | Append-only JSONL audit log path. `-` or unset -> stdout. Always on; survives OTel outages.                                                    |
 | Observability  | `AUDIT_HMAC_KEY`                 | _(unset)_                                | When set, high-entropy match fingerprints in scanner reasons use keyed HMAC-SHA256 instead of plain SHA-256. Low-entropy patterns (email, credit card) always record length only (no digest) so the audit log cannot be used as an offline enumeration oracle. |
 | Observability  | `AUDIT_CALLER_HEADERS`           | `x-forwarded-user`                       | Comma-separated whitelist of request headers (case-insensitive, first match wins) copied into the audit line's `caller` field. Only whitelisted headers ever reach the audit log. ⚠️ Think twice before adding `x-session-id`: a session id is a quasi-credential — persisting it to the durable audit log enables session hijacking from log access and cross-system correlation. |
 | Observability  | `GUARDRAIL_VERSION`              | _(package version)_                      | Override for the `sidecar_version` field stamped on every audit line. Defaults to the package `__version__`.                                                                                |
+| Observability  | `REVIEW_WEBHOOK_URL`             | _(unset)_                                | When set, every `human_review` decision POSTs a metadata-only JSON body (`outcome`/`reason`/`ref`/`exchange_id`/`ts`) to this URL. Fire-and-forget (background task, 2s timeout); failures only log and never block the decision path. |
 | Health         | `UNHEALTHY_SCANNER_ERROR_RATE`   | `0.5`                                    | Sliding-window scanner error/timeout rate above which gRPC health flips to `NOT_SERVING` (recovers automatically). Tracked under `failOpen` too.                                            |
 | Health         | `UNHEALTHY_SCANNER_WINDOW`       | `100`                                    | Number of recent scanner invocations kept in the health sliding window.                                                                                                                      |
 | Health         | `UNHEALTHY_SCANNER_MIN_SAMPLES`  | `20`                                     | Minimum windowed invocations before the error-rate verdict applies (avoids flapping on the first few calls).                                                                                |
@@ -615,14 +617,19 @@ RateLimitRule / AggregateRule time windows, dotted-path resolution),
 scanners (regex patterns, PromptGuard grey-zone thresholds, AgentAlignment
 pre-egress redaction, truncation, `extract_text` hidden Unicode
 preservation), the engine (timeout / exception handling, second-stage
-gating), the gRPC servicer (in-process round-trip + wire mapping), the rule
-loader, and a red-team capability baseline (`tests/test_redteam.py`, with
+gating, HUMAN_REVIEW webhook notification), the gRPC servicer (in-process
+round-trip + wire mapping), the rule loader, the graceful-shutdown drain
+ordering, the `guardrail_ctl` operator CLI, hypothesis property tests over
+`scan_windows` / `extract_text` / `_safe_json_loads` / `redact_value`
+(`tests/test_property.py`, skips gracefully when hypothesis is absent), and
+a red-team capability baseline (`tests/test_redteam.py`, with
 xfail-marked residual gaps). The e2e smoke boots a live server, exercises health +
 `CheckRequest` (allow + deny on hidden Unicode) + `CheckResponse` (deny on
 private key) + malformed `INVALID`, and exits non-zero on any
 mismatch.
 
-All 305+ unit tests (including the red-team capability baseline, with 2
+All 320+ unit tests (including the hypothesis property tests and the
+red-team capability baseline, with 2
 xfail-marked residual gaps) and the e2e smoke are green on a fresh clone.
 
 ### Real agentgateway interoperability e2e
@@ -742,6 +749,28 @@ The fail-closed posture is deliberate: an agent that can call real tools
 (write files, send email, apply k8s manifests) is far more dangerous when a
 guardrail outage is silent than when it is loud. `-32001` is loud.
 
+### Supply chain & operator tooling
+
+- **Dependency audit:** `make audit` runs [pip-audit](https://pypi.org/project/pip-audit/)
+  against `requirements.txt` (the locked runtime surface). Accepted-risk
+  CVEs are whitelisted one-per-line in `scripts/pip-audit-ignore.txt`
+  (passed as `--ignore-vuln`); every entry needs a written justification.
+  pip-audit is a dev-extra dependency, never a runtime one.
+- **SBOM:** `make sbom` (or `IMAGE=<image> bash scripts/gen_sbom.sh`) generates
+  SPDX + CycloneDX SBOMs with [syft](https://github.com/anchore/syft) into
+  `sbom/`. CI wiring (generate on release, attach as release assets, sign)
+  is intentionally left to the workflow owner — it needs a token with
+  release-asset scope; the script is the CI-ready entrypoint.
+- **Compliance notes:** [docs/compliance.md](docs/compliance.md) covers data
+  classification, audit retention (WORM / object lock), access control, the
+  AgentAlignment data-egress statement, and known audit limitations.
+- **Operator CLI:** `scripts/guardrail_ctl.py` — `rules lint` validates a
+  rule pack (structure, thresholds, negate placement) and dry-runs it
+  against built-in sample traces (non-zero exit on an invalid pack, so it
+  gates a GitOps pipeline); `decision replay <audit.jsonl>` gives an
+  offline outcome distribution, scanner/rule drill-down and exchange_id
+  request/response pairing over the JSONL audit log.
+
 ### Structured deny contract
 
 On deny, `AuthorizationError.mcp_error` carries a JSON-RPC 2.0 error body
@@ -791,15 +820,18 @@ mcp-guardrails/
 │   ├── servicer.py               # ExtMcpServicer (gRPC wire mapping)
 │   ├── config.py                 # GuardrailConfig.from_env()
 │   ├── otel.py                   # OTel spans/metrics + always-on JSONL audit
+│   ├── notify.py                 # HUMAN_REVIEW webhook notifier (fire-and-forget, urllib)
 │   ├── redaction.py              # RedactionScanner (secret/PII masking, [REDACTED:<TYPE>] mutation)
 │   ├── proto_bridge.py           # sys.path bridge for the generated stubs
 │   └── rules/
 │       ├── __init__.py           # RulePack loader (path / module / env, SIGHUP reload)
 │       └── default.py            # bundled homelab starter rule pack
-├── tests/                        # 305+ unit tests + e2e_smoke.py
-├── scripts/                      # proto_check.py, version_check.py, e2e_agentgateway.sh (real agentgateway e2e)
+├── tests/                        # 320+ unit tests (incl. hypothesis property tests) + e2e_smoke.py
+├── scripts/                      # proto_check.py, version_check.py, guardrail_ctl.py (rules lint /
+│                               #   decision replay), gen_sbom.sh, pip-audit-ignore.txt, e2e_agentgateway.sh
 ├── deploy/k8s/                   # K8s manifests (Deployment, Service, ConfigMap, CRD)
 ├── examples/                     # rule pack, env file, standalone agentgateway config, PII demo upstream
+├── docs/compliance.md            # data classification, audit retention, access control, egress statement
 ├── .github/workflows/            # CI + release workflows
 ├── server.py                     # grpc.aio entrypoint (SIGHUP reload, SIGTERM drain)
 ├── Dockerfile                    # multi-stage (base/builder/models/runtime), nonroot 65532

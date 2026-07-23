@@ -135,6 +135,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   folds the last 5 tool-call names from the route's Invariant trace
   (metadata only) into the alignment prompt via
   `McpCallContext.trace_summary`.
+* **notify:** `REVIEW_WEBHOOK_URL` (default unset) — decisions carrying the
+  `human_review` flag POST a metadata-only JSON body
+  (`outcome`/`reason`/`ref`/`exchange_id`/`ts`) to the configured endpoint.
+  Fire-and-forget: a background asyncio task over zero-dependency `urllib`
+  with a 2s timeout; delivery failures only log and never block or alter
+  the decision path (no retries — the audit log stays authoritative).
+* **server:** graceful shutdown ordering (A-P2-4) — on SIGTERM/SIGINT the
+  gRPC health service flips to `NOT_SERVING` first (watchdog cancelled so
+  it cannot flip back), then the sidecar waits `SHUTDOWN_DRAIN_S` (default
+  5.0s) for readiness propagation before `server.stop(grace)` drains
+  in-flight RPCs.
+* **tooling:** `scripts/guardrail_ctl.py` operator CLI —
+  `rules lint [--path/--module]` validates a rule pack (empty steps,
+  unknown fields, negate placement, threshold legality, duplicate names)
+  and dry-runs every rule against built-in sample traces (non-zero exit on
+  an invalid pack); `decision replay <audit.jsonl>` offline-analyses the
+  JSONL audit log (outcome distribution, per-scanner/rule drill-down,
+  `exchange_id` request/response pairing).
+* **supply-chain:** `make audit` runs pip-audit against `requirements.txt`
+  with a `scripts/pip-audit-ignore.txt` `--ignore-vuln` whitelist;
+  `make sbom` / `scripts/gen_sbom.sh` generate SPDX + CycloneDX SBOMs via
+  syft (CI wiring noted as pending a workflow token). Both tools are
+  dev-extra dependencies, never runtime.
+* **tests:** `tests/test_property.py` hypothesis property tests over
+  `scan_windows` (UTF-8-safe chunks, head/tail coverage, truncated-flag
+  consistency), `extract_text` (never raises on arbitrary JSON),
+  `servicer._safe_json_loads` (never raises on arbitrary bytes) and
+  `redact_value` (structure preservation + JSON serialisability).
+  `hypothesis` added to the `dev` extra; the module importorskips when
+  absent.
+* **docs:** `docs/compliance.md` — data classification (payload content,
+  audit log, fingerprints, caller field), audit retention guidance
+  (WORM/object-lock reference architecture, suggested retention periods),
+  access-control recommendations, the AgentAlignment data-egress
+  statement, and known audit limitations (hash-chain not implemented,
+  best-effort local writes, fire-and-forget webhook).
 * **tests:** `tests/test_redteam.py` red-team capability baseline —
   base64-encoded injection, zero-width/confusables, markdown-image exfil,
   `### SYSTEM` case variants, head/mid/tail padding bypasses, and
