@@ -4,7 +4,7 @@
 PY ?= python3
 PORT ?= 9001
 IMAGE ?= ghcr.io/soulwhisper/mcp-guardrails
-TAG ?= 0.3.5  # x-release-please-version
+TAG ?= 0.4.0  # x-release-please-version
 
 .PHONY: help proto proto-check version-check install dev test test-cov lint format clean docker docker-run run ci audit sbom
 
