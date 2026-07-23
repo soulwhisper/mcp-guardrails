@@ -37,34 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * **release-please:** allow minor bump for feat commits (cut 0.4.0) ([#76](https://github.com/soulwhisper/mcp-guardrails/issues/76)) ([55e697f](https://github.com/soulwhisper/mcp-guardrails/commit/55e697f5e022783e00ca3bb6fc325068bae1921c))
 
-## [0.3.5](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.4...v0.3.5) (2026-07-21)
-
-
-### Features
-
-* response-side PII/secret redaction (mutation pipeline) + real agentgateway interop e2e ([#62](https://github.com/soulwhisper/mcp-guardrails/issues/62)) ([3ffb64a](https://github.com/soulwhisper/mcp-guardrails/commit/3ffb64a0a865ff2a754177ada7a55d00cd993a9d))
-
-
-### Bug Fixes
-
-* harden deployment, audit redaction, and version consistency ([#58](https://github.com/soulwhisper/mcp-guardrails/issues/58)) ([4d6e56d](https://github.com/soulwhisper/mcp-guardrails/commit/4d6e56d9c9f73b7db511cf74ca3ac363b39c4263))
-* migrate ExtMcp contract to upstream agentgateway proto ([#60](https://github.com/soulwhisper/mcp-guardrails/issues/60)) ([e3ac316](https://github.com/soulwhisper/mcp-guardrails/commit/e3ac3169f22a441979e332dccff317b1b44e5b36))
-* P1 security hardening — truncation bypass + per-route trace isolation ([#61](https://github.com/soulwhisper/mcp-guardrails/issues/61)) ([6d0164c](https://github.com/soulwhisper/mcp-guardrails/commit/6d0164cff229586dc00ad8f2576ecc6b0d21ebab))
-
-
-### Continuous Integration
-
-* **github-action:** update actions/checkout digest ( 9c091bb → 3d3c42e ) ([#57](https://github.com/soulwhisper/mcp-guardrails/issues/57)) ([a0e356c](https://github.com/soulwhisper/mcp-guardrails/commit/a0e356c49cea7f369a2bf46f22eecbb65b8fc505))
-* **github-action:** update github/codeql-action digest ( 7188fc3 → e064762 ) ([#64](https://github.com/soulwhisper/mcp-guardrails/issues/64)) ([3665218](https://github.com/soulwhisper/mcp-guardrails/commit/3665218d105a53720d290300c861ff8fbcafcd63))
-* **github-action:** update github/codeql-action digest ( 99df26d → 7188fc3 ) ([#54](https://github.com/soulwhisper/mcp-guardrails/issues/54)) ([f8e3fb2](https://github.com/soulwhisper/mcp-guardrails/commit/f8e3fb27559ea441852850d40b6f64a6650e5aa1))
-
-
-### Chores
-
-* clean stale docs/configs + pin dependency upper bounds ([#63](https://github.com/soulwhisper/mcp-guardrails/issues/63)) ([519c4e6](https://github.com/soulwhisper/mcp-guardrails/commit/519c4e6e36d6a0b5eb9f4661f56e165a97eadbf0))
-* **container:** update image python ( d3400aa → cea0e60 ) ([#56](https://github.com/soulwhisper/mcp-guardrails/issues/56)) ([287d21b](https://github.com/soulwhisper/mcp-guardrails/commit/287d21b6a4c1661fb8aa68a3c2167e1030fcc186))
-
-## [Unreleased]
+### Detailed change notes (waves 1-3 hardening)
 
 ### Features
 
@@ -272,6 +245,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counter's `outcome` label gains a `"mutated"` value. Dashboards/alerts
   counting successful decisions as `outcome="allow"` should be widened to
   `allow|mutated`.
+
+## [0.3.5](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.4...v0.3.5) (2026-07-21)
+
+
+### Features
+
+* response-side PII/secret redaction (mutation pipeline) + real agentgateway interop e2e ([#62](https://github.com/soulwhisper/mcp-guardrails/issues/62)) ([3ffb64a](https://github.com/soulwhisper/mcp-guardrails/commit/3ffb64a0a865ff2a754177ada7a55d00cd993a9d))
+
+
+### Bug Fixes
+
+* harden deployment, audit redaction, and version consistency ([#58](https://github.com/soulwhisper/mcp-guardrails/issues/58)) ([4d6e56d](https://github.com/soulwhisper/mcp-guardrails/commit/4d6e56d9c9f73b7db511cf74ca3ac363b39c4263))
+* migrate ExtMcp contract to upstream agentgateway proto ([#60](https://github.com/soulwhisper/mcp-guardrails/issues/60)) ([e3ac316](https://github.com/soulwhisper/mcp-guardrails/commit/e3ac3169f22a441979e332dccff317b1b44e5b36))
+* P1 security hardening — truncation bypass + per-route trace isolation ([#61](https://github.com/soulwhisper/mcp-guardrails/issues/61)) ([6d0164c](https://github.com/soulwhisper/mcp-guardrails/commit/6d0164cff229586dc00ad8f2576ecc6b0d21ebab))
+
+
+### Continuous Integration
+
+* **github-action:** update actions/checkout digest ( 9c091bb → 3d3c42e ) ([#57](https://github.com/soulwhisper/mcp-guardrails/issues/57)) ([a0e356c](https://github.com/soulwhisper/mcp-guardrails/commit/a0e356c49cea7f369a2bf46f22eecbb65b8fc505))
+* **github-action:** update github/codeql-action digest ( 7188fc3 → e064762 ) ([#64](https://github.com/soulwhisper/mcp-guardrails/issues/64)) ([3665218](https://github.com/soulwhisper/mcp-guardrails/commit/3665218d105a53720d290300c861ff8fbcafcd63))
+* **github-action:** update github/codeql-action digest ( 99df26d → 7188fc3 ) ([#54](https://github.com/soulwhisper/mcp-guardrails/issues/54)) ([f8e3fb2](https://github.com/soulwhisper/mcp-guardrails/commit/f8e3fb27559ea441852850d40b6f64a6650e5aa1))
+
+
+### Chores
+
+* clean stale docs/configs + pin dependency upper bounds ([#63](https://github.com/soulwhisper/mcp-guardrails/issues/63)) ([519c4e6](https://github.com/soulwhisper/mcp-guardrails/commit/519c4e6e36d6a0b5eb9f4661f56e165a97eadbf0))
+* **container:** update image python ( d3400aa → cea0e60 ) ([#56](https://github.com/soulwhisper/mcp-guardrails/issues/56)) ([287d21b](https://github.com/soulwhisper/mcp-guardrails/commit/287d21b6a4c1661fb8aa68a3c2167e1030fcc186))
 
 ## [0.3.4](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.3...v0.3.4) (2026-07-14)
 
