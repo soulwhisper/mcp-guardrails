@@ -150,6 +150,18 @@ On `CheckRequest` for `tools/call`, the engine does two things in parallel:
 A `BLOCK` from either path is fail-closed by the `DecisionAggregator`; the
 decision maps to the `error` oneof on the wire.
 
+The `RegexScanner` matches each pattern against the raw text AND (unless the
+raw text already BLOCKs) against a detection-only **normalized view** — NFKC
+fold, zero-width/format-character strip, and a Cyrillic/Greek homoglyph map —
+so confusable, full-width and zero-width-split instruction markers still
+hit. The view is never used to rewrite payloads; view hits are marked
+`[normalized-view match]` in the audit reason. The pattern set also covers
+**markdown image exfiltration** (`md_image_exfil`, HUMAN_REVIEW grade):
+`![alt](https://…?k=<value>)` with a ≥32-char data-like query value — a
+passive exfil channel when agent output is rendered. Review grade, not
+BLOCK, because signed CDN image URLs with long token params are a
+legitimate false-positive source.
+
 ### Response-side indirect-injection defense
 
 On `CheckResponse`, the engine scans the upstream's result text
@@ -387,6 +399,7 @@ deadline.
 | Observability  | `OTEL_SERVICE_NAME`              | `mcp-guardrails`                         | Service name reported on OTel spans/metrics.                                                                                                   |
 | Observability  | `AUDIT_LOG_PATH`                 | _(unset)_                                | Append-only JSONL audit log path. `-` or unset -> stdout. Always on; survives OTel outages.                                                    |
 | Observability  | `AUDIT_HMAC_KEY`                 | _(unset)_                                | When set, high-entropy match fingerprints in scanner reasons use keyed HMAC-SHA256 instead of plain SHA-256. Low-entropy patterns (email, credit card) always record length only (no digest) so the audit log cannot be used as an offline enumeration oracle. |
+| Observability  | `AUDIT_HASH_CHAIN`               | `1`                                      | Tamper-evident audit hash chain (A-P0-3). Every audit line carries `prev_hash` / `line_hash` (16-hex SHA-256 prefixes) so edits, drops and reorders are detectable offline via `guardrail_ctl audit verify <file>`. Cost is two digests per line — negligible, hence on by default. ⚠️ Single-writer assumption: multiple replicas appending to ONE shared file interleave the chain — use one replica, per-replica files, or stdout shipping. |
 | Observability  | `AUDIT_CALLER_HEADERS`           | `x-forwarded-user`                       | Comma-separated whitelist of request headers (case-insensitive, first match wins) copied into the audit line's `caller` field. Only whitelisted headers ever reach the audit log. ⚠️ Think twice before adding `x-session-id`: a session id is a quasi-credential — persisting it to the durable audit log enables session hijacking from log access and cross-system correlation. |
 | Observability  | `GUARDRAIL_VERSION`              | _(package version)_                      | Override for the `sidecar_version` field stamped on every audit line. Defaults to the package `__version__`.                                                                                |
 | Observability  | `REVIEW_WEBHOOK_URL`             | _(unset)_                                | When set, every `human_review` decision POSTs a metadata-only JSON body (`outcome`/`reason`/`ref`/`exchange_id`/`ts`) to this URL. Fire-and-forget (background task, 2s timeout); failures only log and never block the decision path. |
@@ -434,6 +447,29 @@ breakdown. Rule-pack reloads emit `{"event": "rules_reload", "ok": …}`
 lines. Scanner reasons never embed raw matches or LLM output — matches use
 `match_len` / `match_sha256|match_hmac` fingerprints, and AgentAlignment
 verdicts record a length fingerprint only.
+
+**Hash chain (A-P0-3, `AUDIT_HASH_CHAIN=1` default):** every line also
+carries `prev_hash` (16-hex SHA-256 prefix of the previous raw line;
+`0000000000000000` genesis on the first) and `line_hash` (prefix of the
+line minus that field). Editing, dropping or reordering any line breaks
+the chain at the next line — verify offline with
+`guardrail_ctl audit verify <file>` (reports the first broken line
+number). Appends never invalidate earlier lines. Multi-replica
+deployments must not share one file (interleaved writes break the chain)
+— one replica, per-replica files, or stdout shipping.
+
+**Normalized-view matches:** the RegexScanner additionally matches every
+pattern against a detection-only normalized view of the text (NFKC fold +
+zero-width/format-char strip + Cyrillic/Greek homoglyph map) whenever the
+raw text did not already BLOCK — the more severe verdict wins, so a benign
+pass-1 hit (an email, a JWT) cannot short-circuit the view and downgrade an
+obfuscated marker — catching confusable / full-width / zero-width-split
+evasions of instruction markers. The view never rewrites the payload
+(redaction and forwarding always use the original). A view hit's reason
+carries a `[normalized-view match]` marker and fingerprints the ORIGINAL
+chunk (`orig_sha256` / `orig_hmac`); `match_len` is the match length in
+the view. Direct hits keep the legacy `match_len` + `match_sha256`
+format.
 
 ### Metrics
 
@@ -769,7 +805,9 @@ guardrail outage is silent than when it is loud. `-32001` is loud.
   against built-in sample traces (non-zero exit on an invalid pack, so it
   gates a GitOps pipeline); `decision replay <audit.jsonl>` gives an
   offline outcome distribution, scanner/rule drill-down and exchange_id
-  request/response pairing over the JSONL audit log.
+  request/response pairing over the JSONL audit log; `audit verify
+  <audit.jsonl>` re-walks the hash chain (`AUDIT_HASH_CHAIN`) and reports
+  the first broken line number (non-zero exit on any break).
 
 ### Structured deny contract
 

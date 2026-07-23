@@ -14,9 +14,11 @@ that survives even when OTel collection is down.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -26,16 +28,63 @@ from .models import Decision, McpCallContext
 
 logger = logging.getLogger("mcp.guardrails")
 
+# Genesis ``prev_hash`` for the first chained line in a stream (A-P0-3).
+AUDIT_CHAIN_GENESIS = "0" * 16
+
+
+def _sha256_16(text: str) -> str:
+    """16-hex-char SHA-256 prefix — the hash-chain digest size."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
 
 class AuditSink:
-    """Append-only JSONL audit sink. Thread-safe via the file's own locking."""
+    """Append-only JSONL audit sink. Thread-safe via the file's own locking.
 
-    def __init__(self, path: str | None = None):
+    Optional tamper-evident **hash chain** (A-P0-3, ``hash_chain=True`` —
+    the default; env ``AUDIT_HASH_CHAIN``): every emitted line gains two
+    fields before serialisation —
+
+    * ``prev_hash`` — ``_sha256_16`` of the previous line's FULL raw JSON
+      text (including its own ``line_hash``); :data:`AUDIT_CHAIN_GENESIS`
+      for the first line of a stream;
+    * ``line_hash`` — ``_sha256_16`` of this line's JSON *without* the
+      ``line_hash`` field (i.e. the record plus ``prev_hash``).
+
+    Editing, dropping or reordering any line breaks the chain at the next
+    line; ``guardrail_ctl audit verify <file>`` re-walks the chain and
+    reports the first broken line number. Appending new lines never
+    invalidates earlier ones. Cost is two SHA-256 digests per line —
+    negligible against the decision path — which is why the chain defaults
+    ON.
+
+    Multi-process caveat: the chain assumes a single writer per stream.
+    Multiple replicas appending to one shared FILE would interleave
+    ``prev_hash`` links and fail verification — run a single replica, write
+    per-replica files, or ship stdout to the log collector (the chained
+    lines then arrive serialised per source stream).
+    """
+
+    def __init__(self, path: str | None = None, *, hash_chain: bool = True):
         # None / "-" / "" -> stdout.
         self._path = path if path and path != "-" else None
+        self._hash_chain = hash_chain
+        self._prev_line: str | None = None
+        self._chain_lock = threading.Lock()
 
     def emit(self, record: dict[str, Any]) -> None:
-        line = json.dumps(record, default=str, sort_keys=True)
+        if self._hash_chain:
+            with self._chain_lock:
+                prev = (
+                    AUDIT_CHAIN_GENESIS if self._prev_line is None else _sha256_16(self._prev_line)
+                )
+                chained = {**record, "prev_hash": prev}
+                body = json.dumps(chained, default=str, sort_keys=True)
+                line = json.dumps(
+                    {**chained, "line_hash": _sha256_16(body)}, default=str, sort_keys=True
+                )
+                self._prev_line = line
+        else:
+            line = json.dumps(record, default=str, sort_keys=True)
         if self._path is None:
             print(line, flush=True)
         else:
@@ -55,10 +104,11 @@ class Observability:
         service_name: str = "mcp-guardrails",
         otel_endpoint: str | None = None,
         audit_path: str | None = None,
+        audit_hash_chain: bool = True,
     ):
         self.service_name = service_name
         self.otel_endpoint = otel_endpoint
-        self.audit = AuditSink(audit_path)
+        self.audit = AuditSink(audit_path, hash_chain=audit_hash_chain)
         self._tracer = None
         self._meter = None
         self._counters: dict[str, Any] = {}
@@ -272,9 +322,7 @@ class Observability:
             # hit. Rule names come from the loaded rule pack (bounded, low
             # cardinality by construction).
             if (
-                invariant_hits is not None
-                and name.startswith("invariant:")
-                and out == "block"
+                invariant_hits is not None and name.startswith("invariant:") and out == "block"
             ):  # pragma: no cover - otel path
                 with suppress(Exception):
                     invariant_hits.add(1, {"rule": name.split(":", 1)[1]})

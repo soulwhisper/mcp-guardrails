@@ -247,6 +247,14 @@ class GuardrailConfig:
     # hijacking / cross-log correlation) and must not land in the durable
     # audit log unless an operator explicitly opts in.
     audit_caller_headers: tuple[str, ...] = ("x-forwarded-user",)
+    # A-P0-3: tamper-evident audit hash chain (AUDIT_HASH_CHAIN, default 1).
+    # Every audit line carries ``prev_hash`` / ``line_hash`` (16-hex SHA-256
+    # prefixes) so edits/drops/reorders are detectable offline via
+    # ``guardrail_ctl audit verify <file>``. Two digests per line — cost is
+    # negligible, hence on by default. Single-writer assumption: multiple
+    # replicas appending to ONE shared file interleave the chain — use one
+    # replica, per-replica files, or stdout shipping.
+    audit_hash_chain: bool = True
     # Sidecar version string recorded in every audit line
     # (``sidecar_version``). Defaults to the package ``__version__``; the env
     # override exists for builds that stamp a different release identity
@@ -362,6 +370,7 @@ class GuardrailConfig:
             otel_endpoint=otel,
             otel_service_name=os.environ.get("OTEL_SERVICE_NAME", "mcp-guardrails"),
             audit_log_path=os.environ.get("AUDIT_LOG_PATH") or None,
+            audit_hash_chain=_env_bool("AUDIT_HASH_CHAIN", True),
             audit_caller_headers=tuple(
                 h.strip().lower()
                 for h in os.environ.get("AUDIT_CALLER_HEADERS", "x-forwarded-user").split(",")

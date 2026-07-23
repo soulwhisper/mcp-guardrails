@@ -211,7 +211,15 @@ into every scanner's `context` kwarg):
    - `RegexScanner` (zero-dep, always on unless `ENABLE_REGEX_SCANNER=0`)
      — first-match-wins over `default_patterns()`: hidden ASCII, private
      keys, AWS / GitHub / GitLab / Slack tokens, high-entropy blobs,
-     credit cards, emails.
+     markdown-image exfil URLs (review grade), credit cards, emails.
+     Two-pass matching: pass 1 evaluates the raw text in pattern order;
+     only on a full miss, pass 2 re-evaluates every pattern against a
+     detection-only **normalized view** (NFKC fold + Unicode Cf strip +
+     Cyrillic/Greek homoglyph map), catching confusable / full-width /
+     zero-width-split evasions. The view is computed at most once per
+     scan call and never mutates the payload; view hits are marked
+     `[normalized-view match]` and fingerprint the original chunk
+     (`orig_sha256` / `orig_hmac`).
    - `OnnxPromptGuardScanner` (lazy import; falls back to regex-only if
      `onnxruntime` / `transformers` is absent) —  PromptGuard-2 for the
      `TOOL` role.
@@ -683,7 +691,22 @@ when OTel collection is down. In K8s, point `AUDIT_LOG_PATH` at a mounted
 volume (or leave it on stdout and let your container log collector pick it
 up). Retention, access-control and integrity guidance lives in
 [`docs/compliance.md`](docs/compliance.md) (WORM / object-lock reference
-architecture, known limitations such as the missing hash-chain).
+architecture, remaining known limitations).
+
+**Hash chain (A-P0-3, `AUDIT_HASH_CHAIN=1` default).** `AuditSink` adds
+two fields per line before serialisation: `prev_hash` — the 16-hex
+SHA-256 prefix of the previous line's full raw JSON (the all-zero genesis
+constant for the first line of a stream) — and `line_hash` — the prefix
+of this line's JSON minus the `line_hash` field. Editing, dropping or
+reordering any line breaks the chain at the next line; appends never
+invalidate earlier lines. Verify offline with
+`guardrail_ctl audit verify <file>` (first broken line number, non-zero
+exit on a break). The chain state is a per-process in-memory cursor, so
+the format assumes ONE writer per stream: multiple replicas appending to
+a single shared file interleave `prev_hash` links and fail verification —
+run a single replica, per-replica files, or ship stdout through the log
+collector. Disable with `AUDIT_HASH_CHAIN=0` (plain lines, no chain
+fields).
 
 ### HUMAN_REVIEW webhook (optional, fire-and-forget)
 

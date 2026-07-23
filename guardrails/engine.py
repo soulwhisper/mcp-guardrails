@@ -200,6 +200,7 @@ class GuardrailEngine:
             service_name=config.otel_service_name,
             otel_endpoint=config.otel_endpoint,
             audit_path=config.audit_log_path,
+            audit_hash_chain=config.audit_hash_chain,
         )
 
         components = EngineComponents(

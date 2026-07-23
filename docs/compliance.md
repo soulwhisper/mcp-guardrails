@@ -40,9 +40,15 @@ reference architecture:
      your privacy policy demands it.
    - `rules_reload` events: keep for the life of the deployment — they
      anchor which policy version produced a given decision.
-4. **Integrity.** Today integrity is provided by the WORM store (see §5:
-   hash-chaining is NOT implemented). For non-repudiation, also record the
-   store's object version IDs / retention markers in your change log.
+4. **Integrity.** The audit stream is hash-chained by default
+   (`AUDIT_HASH_CHAIN=1`, A-P0-3): each line carries `prev_hash` /
+   `line_hash` (16-hex SHA-256 prefixes) and
+   `guardrail_ctl audit verify <file>` re-walks the chain offline,
+   reporting the first broken line. This detects post-hoc edits, drops and
+   reorders — but it is NOT non-repudiation (an attacker who controls the
+   writer from the start can forge a consistent chain), so still land the
+   archive on WORM storage and record the store's object version IDs /
+   retention markers in your change log.
 5. **Clock.** Audit `ts`/`ts_ms` come from the sidecar's system clock. Run
    NTP on the nodes; without it, cross-log correlation drifts.
 
@@ -87,12 +93,21 @@ then resolved locally per `HUMAN_REVIEW_MODE`. The default
 
 ## 5. Known audit limitations
 
-- **No hash-chaining / signed log entries.** Audit lines are independent
-  JSON objects; nothing cryptographically links line N to line N-1, so a
-  writer with access to the live stream (before WORM landing) could drop
-  or reorder lines. Mitigation today: ship lines to object-lock storage
-  with minimal local buffering. Tamper-evident chaining is a tracked
-  future enhancement (A-P2 series).
+- **Hash chain is tamper-evident, not signed (implemented, A-P0-3).**
+  With `AUDIT_HASH_CHAIN=1` (default) every line carries
+  `prev_hash` / `line_hash` (16-hex SHA-256 prefixes), and
+  `guardrail_ctl audit verify <file>` reports the first broken line —
+  post-hoc edits, drops and reorders of the archived file are detectable.
+  Residual limits: (a) the chain is keyed by nothing — an attacker who
+  compromises the LIVE writer can simply emit a fresh consistent chain,
+  so this is tamper-evidence for the archive, not non-repudiation (WORM
+  storage remains the primary integrity control); (b) the chain cursor is
+  per-process — multiple replicas appending to ONE shared file interleave
+  links and fail verification (single replica, per-replica files, or
+  stdout shipping); (c) a restart begins a new chain at the genesis
+  `prev_hash`, so a truncation of the file head followed by a fresh
+  process is not distinguishable from a restart — alert on ingestion-side
+  gaps instead.
 - **Best-effort local write.** If `AUDIT_LOG_PATH` is set and the write
   fails (disk full), the sidecar logs a warning and continues — it does
   not fail the exchange. The stdout path is at the mercy of the container

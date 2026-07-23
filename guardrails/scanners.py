@@ -19,7 +19,7 @@ import hashlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
 from .models import ScanOutcome, ScanResult
 
@@ -113,10 +113,116 @@ _KEY_VALUE_CRED = re.compile(
 )
 _PRIVATE_KEY = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")
 _GENERIC_HIGH_ENTROPY = re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b")
+# Markdown image exfiltration: `![alt](https://host/path?k=<long-value>)` is
+# a classic passive data-exfil channel — when the agent's output is rendered,
+# the image GET carries the query string to the attacker's host. We flag
+# images whose URL query carries a *suspiciously data-like* value:
+#
+#   * a single query VALUE of >=32 chars from a base64/url-ish alphabet
+#     (``[A-Za-z0-9+/=_%~-]``) — long opaque blobs, base64 fragments,
+#     percent-encoded data. 32 chars is the threshold: below it you mostly
+#     see benign tracking ids / short slugs; at/above it the value is long
+#     enough to smuggle a secret fragment (an AWS key id is 20, a JWT
+#     segment is typically 30+).
+#
+# False-positive trade-off (why HUMAN_REVIEW, not BLOCK): legitimate
+# rendered markdown commonly embeds signed CDN image URLs with long token
+# query params (``?sig=...``, ``?token=...``), which this pattern also
+# matches. Hard-blocking those breaks benign rendering, so the verdict is
+# review-grade: HUMAN_REVIEW_MODE / the AgentAlignment gate decides, and
+# the audit line records the fingerprint. Pure-exfil payloads usually ALSO
+# trip high_entropy_blob or a key pattern, which still BLOCKs.
+_MD_IMAGE_EXFIL = re.compile(
+    r"!\[[^\]\n]{0,200}\]\(\s*https?://[^\s)]+[?&][A-Za-z0-9_~-]*="
+    r"[A-Za-z0-9+/=_%~-]{32,}[^\s)]*\)",
+    re.IGNORECASE,
+)
 
 # PII (very conservative; tune per deployment).
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
 _CREDIT_CARD = re.compile(r"\b(?:\d[ -]*?){13,16}\b")
+
+
+# ---------------------------------------------------------------------------
+# Detection-only normalized view (confusable / zero-width evasion defence)
+# ---------------------------------------------------------------------------
+
+# Common Cyrillic / Greek homoglyphs of ASCII letters. Attackers substitute
+# these into instruction markers (a "### SYSTEM" written with Cyrillic
+# Dze/Upsilon/Tau/Epsilon/Mu) to slip past ASCII regexes while the rendered
+# text still reads as the marker to a human or LLM. The map is deliberately
+# limited to unambiguous lookalikes — it is NOT a full Unicode confusables
+# table (keep the false-positive surface minimal). Keys are written as
+# chr(0xXXXX) code points so the table stays ASCII — grep/lint-safe (RUF001)
+# and free of invisible/ambiguous literals.
+_HOMOGLYPH_MAP = str.maketrans(
+    {
+        chr(0x0410): "A",  # CYRILLIC CAPITAL LETTER A
+        chr(0x0412): "B",  # CYRILLIC CAPITAL LETTER VE
+        chr(0x0421): "C",  # CYRILLIC CAPITAL LETTER ES
+        chr(0x0415): "E",  # CYRILLIC CAPITAL LETTER IE
+        chr(0x041d): "H",  # CYRILLIC CAPITAL LETTER EN
+        chr(0x0406): "I",  # CYRILLIC CAPITAL LETTER BYELORUSSIAN-UKRAINIAN I
+        chr(0x0408): "J",  # CYRILLIC CAPITAL LETTER JE
+        chr(0x041a): "K",  # CYRILLIC CAPITAL LETTER KA
+        chr(0x041c): "M",  # CYRILLIC CAPITAL LETTER EM
+        chr(0x041e): "O",  # CYRILLIC CAPITAL LETTER O
+        chr(0x0420): "P",  # CYRILLIC CAPITAL LETTER ER
+        chr(0x0405): "S",  # CYRILLIC CAPITAL LETTER DZE
+        chr(0x0422): "T",  # CYRILLIC CAPITAL LETTER TE
+        chr(0x0425): "X",  # CYRILLIC CAPITAL LETTER HA
+        chr(0x0423): "Y",  # CYRILLIC CAPITAL LETTER U
+        chr(0x0430): "a",  # CYRILLIC SMALL LETTER A
+        chr(0x0441): "c",  # CYRILLIC SMALL LETTER ES
+        chr(0x0435): "e",  # CYRILLIC SMALL LETTER IE
+        chr(0x0456): "i",  # CYRILLIC SMALL LETTER BYELORUSSIAN-UKRAINIAN I
+        chr(0x0458): "j",  # CYRILLIC SMALL LETTER JE
+        chr(0x043e): "o",  # CYRILLIC SMALL LETTER O
+        chr(0x0440): "p",  # CYRILLIC SMALL LETTER ER
+        chr(0x0455): "s",  # CYRILLIC SMALL LETTER DZE
+        chr(0x0445): "x",  # CYRILLIC SMALL LETTER HA
+        chr(0x0443): "y",  # Greek upper (lookalikes only)
+        chr(0x0391): "A",  # GREEK CAPITAL LETTER ALPHA
+        chr(0x0392): "B",  # BETA
+        chr(0x0395): "E",  # EPSILON
+        chr(0x0397): "H",  # ETA
+        chr(0x0399): "I",  # IOTA
+        chr(0x039a): "K",  # KAPPA
+        chr(0x039c): "M",  # MU
+        chr(0x039d): "N",  # NU
+        chr(0x039f): "O",  # OMICRON
+        chr(0x03a1): "P",  # RHO
+        chr(0x03a4): "T",  # TAU
+        chr(0x03a5): "Y",  # UPSILON
+        chr(0x03a7): "X",  # CHI
+        chr(0x0396): "Z",  # ZETA
+        chr(0x03bf): "o",  # omicron
+        chr(0x03bd): "v",  # nu
+    }
+)
+
+
+def normalized_view(text: str) -> str:
+    """Return a **matching-only** normalized view of ``text``.
+
+    Pipeline: NFKC fold (collapses full-width forms, compatibility
+    ligatures, circled/squared letters, …) -> strip Unicode format
+    characters (category Cf: zero-width spaces/joiners, bidi controls,
+    soft hyphens, word joiners, …) -> map common Cyrillic/Greek homoglyphs
+    to their ASCII lookalikes.
+
+    Scope discipline (detection-only): the view is used EXCLUSIVELY as a
+    second matching surface for the RegexScanner. It never rewrites the
+    payload — the mutation/redaction path, the forwarded payload, and
+    ``payload_sha256`` all continue to operate on the original text. See
+    ``Pattern.evaluate_normalized`` for the reason/fingerprint semantics of
+    a normalized-view hit.
+    """
+    import unicodedata
+
+    folded = unicodedata.normalize("NFKC", text)
+    stripped = "".join(ch for ch in folded if unicodedata.category(ch) != "Cf")
+    return stripped.translate(_HOMOGLYPH_MAP)
 
 
 def _match_fingerprint(value: str, *, high_entropy: bool = True) -> str:
@@ -183,6 +289,44 @@ class Pattern:
             score=self.score,
         )
 
+    def evaluate_normalized(self, original: str, view: str) -> ScanResult | None:
+        """Match against the detection-only normalized view (see
+        :func:`normalized_view`).
+
+        Reason/fingerprint semantics of a normalized-view hit differ from a
+        direct hit and are documented for audit consumers:
+
+        * the reason is suffixed ``[normalized-view match]`` so downstream
+          tooling can tell the payload itself did NOT literally contain the
+          pattern — only its NFKC/Cf-stripped/homoglyph-folded view did;
+        * the fingerprint is based on the ORIGINAL text
+          (``orig_sha256`` = 12-hex SHA-256 prefix of the original chunk,
+          honouring ``AUDIT_HMAC_KEY`` like :func:`_match_fingerprint`)
+          because the matched span lives in the transformed view and cannot
+          be mapped back to original offsets cheaply. ``match_len`` is the
+          match length in the VIEW, which can differ from the original.
+        """
+        m = self.regex.search(view)
+        if m is None:
+            return None
+        import hmac as _hmac
+        import os as _os
+
+        raw = original.encode("utf-8", errors="ignore")
+        key = _os.environ.get("AUDIT_HMAC_KEY")
+        if key:
+            digest = _hmac.new(key.encode("utf-8"), raw, hashlib.sha256).hexdigest()[:12]
+            tag = f"orig_hmac={digest}"
+        else:
+            digest = hashlib.sha256(raw).hexdigest()[:12]
+            tag = f"orig_sha256={digest}"
+        return ScanResult(
+            scanner=f"regex:{self.name}",
+            outcome=self.outcome,
+            reason=(f"{self.reason} [normalized-view match] (match_len={len(m.group(0))} {tag})"),
+            score=self.score,
+        )
+
 
 def default_patterns() -> list[Pattern]:
     """Built-in pattern set, ordered so BLOCK-worthy hits win on first-match."""
@@ -242,6 +386,17 @@ def default_patterns() -> list[Pattern]:
             high_entropy=False,
         ),
         Pattern(
+            "md_image_exfil",
+            _MD_IMAGE_EXFIL,
+            # Review-grade, not BLOCK: signed CDN image URLs with long token
+            # query params are a legitimate false-positive source (see the
+            # pattern comment). The audit fingerprint digests the URL+query
+            # match, not the exfiltrated data itself.
+            ScanOutcome.HUMAN_REVIEW,
+            "markdown image URL with data-carrying query (possible exfil channel)",
+            0.65,
+        ),
+        Pattern(
             "high_entropy_blob",
             _GENERIC_HIGH_ENTROPY,
             ScanOutcome.HUMAN_REVIEW,
@@ -275,9 +430,37 @@ class RegexScanner:
     First-match wins (patterns are evaluated in list order). This makes the
     pattern list a priority chain: put BLOCK patterns before HUMAN_REVIEW
     patterns before ALLOW/redact patterns.
+
+    Two-pass matching: pass 1 evaluates every pattern against the ORIGINAL
+    text (legacy priority order, unchanged). Pass 2 re-evaluates all patterns
+    against the detection-only :func:`normalized_view` of the text (NFKC fold
+    + Cf strip + homoglyph map), catching confusable/zero-width/full-width
+    evasions. Pass 2 is skipped only when it cannot change the verdict:
+
+    * pass 1 already produced a BLOCK (the strongest verdict — nothing in
+      the view can outrank it), or
+    * the text is pure ASCII (the view is provably identical: NFKC, Cf and
+      the homoglyph map only touch non-ASCII code points), or
+    * the computed view equals the original text.
+
+    Otherwise the more severe of the pass-1 / pass-2 hits wins. The severity
+    comparison closes a downgrade evasion: an attacker cannot neutralise an
+    obfuscated BLOCK marker by adding a benign string that trips a low-grade
+    pass-1 pattern (e.g. an email -> ALLOW) and thereby short-circuits
+    pass 2. The view is computed at most once per scan call and never used
+    to mutate the payload; normalized hits are marked ``[normalized-view
+    match]`` in the reason and fingerprint the original text — see
+    :meth:`Pattern.evaluate_normalized`.
     """
 
     name = "regex"
+
+    # Verdict strength ordering for the pass-1/pass-2 arbitration.
+    _SEVERITY: ClassVar[dict[ScanOutcome, int]] = {
+        ScanOutcome.ALLOW: 0,
+        ScanOutcome.HUMAN_REVIEW: 1,
+        ScanOutcome.BLOCK: 2,
+    }
 
     def __init__(self, patterns: Sequence[Pattern] | None = None):
         self._patterns: list[Pattern] = (
@@ -295,10 +478,31 @@ class RegexScanner:
         *,
         context: McpCallContext | None = None,
     ) -> ScanResult:
+        # Pass 1: original text (legacy priority chain). A BLOCK is the
+        # strongest possible verdict — return immediately, no view needed.
+        first_hit: ScanResult | None = None
         for pat in self._patterns:
             hit = pat.evaluate(content)
             if hit is not None:
-                return hit
+                if hit.outcome is ScanOutcome.BLOCK:
+                    return hit
+                first_hit = hit
+                break
+        # Pass 2: detection-only normalized view (computed once, on demand).
+        # Fast path: the view is identity for pure-ASCII text.
+        if not content.isascii():
+            view = normalized_view(content)
+            if view != content:
+                for pat in self._patterns:
+                    hit = pat.evaluate_normalized(content, view)
+                    if hit is not None:
+                        if first_hit is None or (
+                            self._SEVERITY[hit.outcome] > self._SEVERITY[first_hit.outcome]
+                        ):
+                            return hit
+                        break
+        if first_hit is not None:
+            return first_hit
         return ScanResult.allow(self.name)
 
 
@@ -446,8 +650,7 @@ class AgentAlignmentScanner:
         prompt_parts: list[str] = []
         if trace_summary:
             prompt_parts.append(
-                "The agent's most recent tool calls (oldest first):\n"
-                f"{trace_summary}\n"
+                f"The agent's most recent tool calls (oldest first):\n{trace_summary}\n"
             )
         prompt_parts.append(f"Evaluate this agent action:\n\n{text}")
         user_prompt = "\n".join(prompt_parts)
@@ -481,8 +684,7 @@ class AgentAlignmentScanner:
             # model output verbatim.
             return ScanResult.review(
                 self.name,
-                "unparseable_llm_output "
-                f"({_match_fingerprint(raw, high_entropy=False)})",
+                f"unparseable_llm_output ({_match_fingerprint(raw, high_entropy=False)})",
             )
 
         if compromised:
