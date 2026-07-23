@@ -21,6 +21,17 @@ Subcommands
     request/response pairing by ``exchange_id``. Purely offline — the
     engine is never reconstructed. Exit code 0 = analysed; 1 = unreadable
     or empty input.
+
+``audit verify AUDIT.jsonl``
+    Verify the tamper-evident audit hash chain (A-P0-3,
+    ``AUDIT_HASH_CHAIN=1``): every line's ``prev_hash`` must equal the
+    SHA-256/16 prefix of the previous raw line, and its ``line_hash`` must
+    match the recomputed digest of the line minus that field. Reports the
+    FIRST broken line number (1-based) and what failed. Lines without
+    chain fields (legacy / ``AUDIT_HASH_CHAIN=0`` files) are reported as
+    unchained and skipped, not misreported as a break. Exit code 0 =
+    chain intact (or nothing chained to verify); 1 = unreadable input or
+    a break.
 """
 
 from __future__ import annotations
@@ -345,6 +356,96 @@ def cmd_decision_replay(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# audit verify — hash-chain integrity check (A-P0-3)
+# ---------------------------------------------------------------------------
+
+
+def cmd_audit_verify(args: argparse.Namespace) -> int:
+    """Chain-walk an audit JSONL and report the first broken line.
+
+    For each line N: ``prev_hash`` must equal the 16-hex SHA-256 prefix of
+    line N-1's raw text (``AUDIT_CHAIN_GENESIS`` for line 1), and
+    ``line_hash`` must equal the prefix recomputed from the line's JSON
+    minus the ``line_hash`` field. A tampered, dropped or reordered line
+    breaks the chain at itself or its successor; the first break localises
+    the tamper.
+    """
+    try:
+        from guardrails.otel import AUDIT_CHAIN_GENESIS, _sha256_16
+    except ImportError:
+        print(
+            "error: the 'guardrails' package is not importable — run from the "
+            "repo root or install it (pip install -e .)",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        with open(args.audit_jsonl, encoding="utf-8") as fh:
+            raw_lines = [ln.rstrip("\n") for ln in fh if ln.strip()]
+    except OSError as exc:
+        print(f"error: cannot read {args.audit_jsonl}: {exc}", file=sys.stderr)
+        return 1
+    if not raw_lines:
+        print(f"error: {args.audit_jsonl} is empty", file=sys.stderr)
+        return 1
+
+    prev_raw: str | None = None
+    checked = 0
+    unchained = 0
+    for lineno, raw in enumerate(raw_lines, start=1):
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            print(f"BROKEN at line {lineno}: malformed JSON", file=sys.stderr)
+            return 1
+        if not isinstance(obj, dict) or "prev_hash" not in obj or "line_hash" not in obj:
+            # Legacy/pre-chain line (written before the hash chain existed or
+            # with AUDIT_HASH_CHAIN=0). Not a chain break: skip it, but do NOT
+            # advance the chain cursor — the next chained line is still
+            # verified against the previous CHAINED line, so stripping the
+            # chain fields off a previously chained line still surfaces as a
+            # prev_hash mismatch at its successor.
+            unchained += 1
+            continue
+        expected_prev = AUDIT_CHAIN_GENESIS if prev_raw is None else _sha256_16(prev_raw)
+        if obj["prev_hash"] != expected_prev:
+            print(
+                f"BROKEN at line {lineno}: prev_hash mismatch "
+                f"(expected {expected_prev}, got {obj['prev_hash']}) — "
+                "an earlier line was edited, dropped or reordered",
+                file=sys.stderr,
+            )
+            return 1
+        body = json.dumps(
+            {k: v for k, v in obj.items() if k != "line_hash"}, default=str, sort_keys=True
+        )
+        expected_line = _sha256_16(body)
+        if obj["line_hash"] != expected_line:
+            print(
+                f"BROKEN at line {lineno}: line_hash mismatch "
+                f"(expected {expected_line}, got {obj['line_hash']}) — "
+                "this line's content was tampered",
+                file=sys.stderr,
+            )
+            return 1
+        prev_raw = raw
+        checked += 1
+
+    print(f"audit file: {args.audit_jsonl}")
+    if checked == 0:
+        print(
+            f"no hash-chained lines ({unchained} legacy/unchained line(s)) — "
+            "written before the hash chain existed or with AUDIT_HASH_CHAIN=0; "
+            "nothing to verify"
+        )
+        return 0
+    suffix = f", {unchained} legacy/unchained line(s) skipped" if unchained else ""
+    print(f"hash chain OK: {checked} line(s) verified, no breaks{suffix}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -378,6 +479,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="list every deny / human_review record with ref + reason",
     )
     replay.set_defaults(func=cmd_decision_replay)
+
+    audit_p = sub.add_parser("audit", help="audit-log integrity tooling")
+    audit_sub = audit_p.add_subparsers(dest="audit_command", required=True)
+    verify = audit_sub.add_parser(
+        "verify", help="verify the audit hash chain (prev_hash/line_hash)"
+    )
+    verify.add_argument("audit_jsonl", help="path to the audit JSONL file")
+    verify.set_defaults(func=cmd_audit_verify)
     return parser
 
 
