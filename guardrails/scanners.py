@@ -442,7 +442,7 @@ class RegexScanner:
       the homoglyph map only touch non-ASCII code points), or
     * the computed view equals the original text.
 
-    Otherwise the more severe of the pass-1 / pass-2 hits wins. The severity
+    Otherwise the more severe of the pass-1/pass-2 hits wins. The severity
     comparison closes a downgrade evasion: an attacker cannot neutralise an
     obfuscated BLOCK marker by adding a benign string that trips a low-grade
     pass-1 pattern (e.g. an email -> ALLOW) and thereby short-circuits
