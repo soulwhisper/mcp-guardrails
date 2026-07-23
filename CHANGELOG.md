@@ -586,7 +586,7 @@ ExtMcp gRPC contract as a fail-closed policy sidecar.
 
 - **ExtMcp gRPC servicer** (`guardrails/servicer.py`) implementing the
   agentgateway ExtMcp v1alpha1 contract: `CheckRequest(McpRequest) ->
-  McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
+McpRequestResult` and `CheckResponse(McpResponse) -> McpResponseResult`.
   Both return one of `allowed` (Pass), `mutated` (Mutated), or `error`
   (AuthorizationError) via a protobuf `oneof`. Malformed JSON-RPC payloads
   map to `INVALID_ARGUMENT`; policy denies map to `PERMISSION_DENIED`
