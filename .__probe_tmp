@@ -1,8 +1,4 @@
-L1: X\u200bY single-zwsp
-L2: X\\u200bY double-zwsp
-L3: XA single-A
-L4: X\\u0041Y double-A
-L5: X\ufeffY single-feff
-L6: X\\ufeffY double-feff
-L7: X\Y lone-bs-non-u
-L8: X\qY lone-bs-q
+M1: А -> should be escape-u-0410
+M2: Ώ -> escape-u-038f test
+M3: Ѕ -> escape-u-0405
+M4: plain text
