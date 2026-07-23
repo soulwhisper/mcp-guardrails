@@ -23,7 +23,7 @@ dependencies = [
     # stubs are generated with grpcio-tools 1.82.1 (protobuf 7.35.x gencode),
     # and protobuf refuses to load gencode newer than its own runtime.
     "grpcio>=1.82.1,<1.83",
-    "grpcio-health-checking>=1.82.1,<1.83",
+    "grpcio-health-checking>=1.83,<1.84",
     "protobuf>=7.35",
     # OpenTelemetry — always available; degrades gracefully to audit-log-only
     # when no OTLP endpoint is configured.

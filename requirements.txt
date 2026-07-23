@@ -9,7 +9,7 @@
 
 # --- gRPC stack (wire-compat critical; committed stubs generated with grpcio-tools 1.82.1) ---
 grpcio>=1.82.1,<1.83
-grpcio-health-checking>=1.82.1,<1.83
+grpcio-health-checking>=1.83,<1.84
 # grpcio-tools is a BUILD-TIME / DEV dependency only — NOT listed here.
 # Dev-only tooling (tests/test_property.py, `make audit`) also lives in the
 # pyproject [project.optional-dependencies].dev extra, NOT here:
