@@ -21,6 +21,7 @@ ENV/
 
 # Test / coverage
 .pytest_cache/
+.hypothesis/
 .coverage
 .coverage.*
 htmlcov/
@@ -57,3 +58,6 @@ uv.lock
 .python-version
 pyvenv.cfg
 .omp/
+
+# SBOM artifacts (make sbom)
+sbom/
