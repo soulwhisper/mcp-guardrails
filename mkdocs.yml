@@ -51,15 +51,16 @@ extra_css:
 
 nav:
   - Home: index.md
+  - Getting Started: getting-started.md
   - Guardrails:
       - guardrails/index.md
+      - Scan Coverage: guardrails/scan-coverage.md
       - Regex Scanner: guardrails/regex-scanner.md
       - PromptGuard (Llama model filtering): guardrails/promptguard.md
       - Agent Alignment: guardrails/agent-alignment.md
       - Redaction: guardrails/redaction.md
       - Invariant Rules: guardrails/invariant-rules.md
       - Tool ACL: guardrails/tool-acl.md
-      - Scan Coverage: guardrails/scan-coverage.md
   - Configuration: configuration.md
   - Operations:
       - Auditing: operations/auditing.md

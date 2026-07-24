@@ -77,6 +77,24 @@ driven by [conventional commits](https://www.conventionalcommits.org/):
    float. A `RELEASE_PLEASE_TOKEN` PAT (classic, `repo` scope) is required
    for the tag push to trigger downstream workflows.
 
+## Supply chain & operator tooling
+
+- **Dependency audit** — `make audit` runs
+  [pip-audit](https://pypi.org/project/pip-audit/) against
+  `requirements.txt` (the locked runtime surface). Accepted-risk CVEs are
+  whitelisted one-per-line in `scripts/pip-audit-ignore.txt` (passed as
+  `--ignore-vuln`); every entry needs a written justification. pip-audit is
+  a dev-extra dependency, never a runtime one.
+- **SBOM** — `make sbom` (or `IMAGE=<image> bash scripts/gen_sbom.sh`)
+  generates SPDX + CycloneDX SBOMs with
+  [syft](https://github.com/anchore/syft) into `sbom/`. CI wiring (generate
+  on release, attach as release assets, sign) is intentionally left to the
+  workflow owner — it needs a token with release-asset scope; the script is
+  the CI-ready entrypoint.
+- **Operator CLI** — `scripts/guardrail_ctl.py` (`rules lint`,
+  `decision replay`, `audit verify`) is documented in
+  [Auditing](operations/auditing.md#operator-cli).
+
 ## Adding things
 
 - **A scanner** — implement the `Scanner` protocol (`async scan(content, role, *, context) -> ScanResult`), wrap sync ML inference in `asyncio.to_thread`, register it in `GuardrailEngine.from_config` behind an `enable_*` flag with an `ImportError` fallback, add an env knob in `config.py`, document it in the README/config tables, and cover allow/block/review + timeout/exception paths with tests.

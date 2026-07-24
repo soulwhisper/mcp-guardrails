@@ -118,38 +118,10 @@ Both RPCs return one of three states via a protobuf `oneof`:
 The vendored contract lives in `proto/ext_mcp.proto` (from
 `agentgateway/agentgateway`, `crates/protos/proto/ext_mcp.proto`).
 
-## Quick start
-
-### 1. Run the sidecar (Docker)
-
-```bash
-docker run --rm -p 9001:9001 \
-  --env-file examples/docker-run.env \
-  -v $(pwd)/examples/rules.policy:/etc/guardrails/rules.policy:ro \
-  ghcr.io/soulwhisper/mcp-guardrails:0.4.0
-```
-
-The image pre-bakes the PromptGuard-2 ONNX model (pinned via the
-`PG2_REVISION` build-arg), so no HuggingFace token and no runtime download is
-needed.
-
-### 2. Deploy on Kubernetes
-
-Apply the manifests in `deploy/k8s/` (Deployment + Service + ConfigMap rule
-pack + `AgentgatewayPolicy` CRD). See the [Deployment](deployment.md) guide
-for the full walkthrough.
-
-### 3. Wire agentgateway
-
-Either mount the `AgentgatewayPolicy` CRD (Kubernetes) or point a standalone
-agentgateway at the sidecar with
-[`examples/agentgateway.standalone.yaml`](https://github.com/soulwhisper/mcp-guardrails/blob/main/examples/agentgateway.standalone.yaml).
-The policy maps `tools/call` to `Full` (request + response double gate),
-`tools/list` / `prompts/get` / `resources/read` to `Response`, and
-`ping` / `initialize` to `None`.
-
 ## Where to next
 
+- [Getting started](getting-started.md) — run the sidecar, deploy on
+  Kubernetes, wire agentgateway, verify.
 - [Guardrails overview](guardrails/index.md) — the decision pipeline and every
   guardrail in detail.
 - [Configuration](configuration.md) — the complete environment-variable
