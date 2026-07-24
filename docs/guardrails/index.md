@@ -9,17 +9,17 @@ pipeline per MCP exchange. This page is the map; each layer has its own page.
 flowchart TD
     REQ[CheckRequest / CheckResponse] --> EXT[extract_text<br/>flatten params/result to text]
     EXT --> WIN["scan_windows<br/>head / mid / tail chunks<br/>(MAX_CONTENT_BYTES + SCAN_TAIL_BYTES)"]
-    WIN --> SIZE{payload &gt;<br/>SCAN_MAX_PAYLOAD_BYTES?}
+    WIN --> SIZE{"payload exceeds<br/>SCAN_MAX_PAYLOAD_BYTES?"}
     SIZE -->|yes| PS[ScanResult: payload_size<br/>HUMAN_REVIEW]
     SIZE -->|no| SC
     PS --> SC[Scanners per chunk]
     SC --> RX["RegexScanner<br/>(request + response)"]
     SC --> PG["OnnxPromptGuardScanner<br/>(request + response)"]
-    subgraph Request side only
+    subgraph RS["Request side only"]
         ACL["Tool ACL<br/>ALLOW_TOOLS / DENY_TOOLS"] --> INV2
         INV["InvariantEngine<br/>record(tool, args)"] --> INV2["evaluate rules<br/>ToxicFlow / Loop / RateLimit / Aggregate"]
     end
-    subgraph Response side only, opt-in
+    subgraph RESP["Response side only, opt-in"]
         AA["AgentAlignmentScanner<br/>second stage, gated on HUMAN_REVIEW"]
     end
     RX --> AGG
@@ -27,7 +27,7 @@ flowchart TD
     INV2 --> AGG
     AA --> AGG
     AGG["DecisionAggregator<br/>fail-closed"]
-    AGG --> RED["RedactionScanner<br/>structural masking<br/>[REDACTED:TYPE]"]
+    AGG --> RED["RedactionScanner<br/>structural masking<br/>#91;REDACTED:TYPE#93;"]
     RED --> DEC[Decision<br/>pass / mutated / error]
 ```
 
