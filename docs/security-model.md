@@ -63,7 +63,12 @@ cannot iterate a payload against scanner feedback. The full internal reason
 structured deny body (`AuthorizationError.mcp_error`, code `-32001`) adds a
 generalised policy `category` (e.g. `content_policy`, `tool_policy`,
 `tool_flow`) and a generic `remedy` hint — never pattern names or rule
-internals.
+internals. The request side also populates `McpRequestResult.metadata` with
+`guardrail.scan_score`, `guardrail.rules_hit`, `guardrail.redactions`,
+`guardrail.exchange_id` and `guardrail.outcome` so the dataplane can
+log/route on guardrail verdicts without parsing the audit stream.
+(`McpResponseResult` has no `metadata` field in the proto — response-side
+metadata is not emitted; `header_mutation` is deliberately unused.)
 
 The fail-closed posture is deliberate: an agent that can call real tools is
 far more dangerous when a guardrail outage is silent than when it is loud.
