@@ -128,11 +128,20 @@ responses route to the [AgentAlignment](agent-alignment.md) LLM check when
   in the tens-of-milliseconds range, and `PG_MAX_WINDOWS` bounds the worst
   case per chunk. Keep `SCANNER_TIMEOUT_MS` (default 500ms) comfortably above
   your expected window count.
-- First-inference cold start is dominated by model load (several seconds);
+- First-inference cold start is dominated by model load (~8-10s measured);
   the [readiness probe](../operations/health.md) absorbs this — the Pod stays
   out of Service endpoints until warmup completes.
 - The scanner runs inference via `asyncio.to_thread`, so a busy model never
   stalls the asyncio event loop.
+
+Reference measurements (CPU, single client, full-precision
+`model.onnx` ~1.1GB in memory, ONNX Runtime 1.27, Python 3.13):
+
+| Operation | Mean | P50 | P90 | P99 |
+| --- | --- | --- | --- | --- |
+| `CheckRequest` (minimal) | 35.9ms | 34.3ms | 44.7ms | 64.1ms |
+| `CheckRequest` (content) | 43.5ms | 42.6ms | 51.1ms | 58.4ms |
+| `CheckResponse` (content) | 36.1ms | 35.2ms | 41.7ms | 61.4ms |
 
 For measured numbers on your hardware, run `python3 tests/load_test.py`
 (requires `onnxruntime` + the model cache).
