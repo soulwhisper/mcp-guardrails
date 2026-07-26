@@ -5,6 +5,33 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.4.0...v0.5.0) (2026-07-24)
+
+
+### Features
+
+* **deps:** update grpc stack to 1.83.0 (grpcio, health-checking, grpcio-tools) ([#84](https://github.com/soulwhisper/mcp-guardrails/issues/84)) ([3b920d1](https://github.com/soulwhisper/mcp-guardrails/commit/3b920d142d9e445463865803c871dc78c4b34687))
+* **deps:** update grpcio ( 1.82.1 → 1.83.0 ) ([#81](https://github.com/soulwhisper/mcp-guardrails/issues/81)) ([a9856f1](https://github.com/soulwhisper/mcp-guardrails/commit/a9856f11ce04bad87b0623c9a7938c7144f6c0cc))
+* wave-4 detection depth — confusable normalised view, markdown-exfil pattern, audit hash-chain ([#77](https://github.com/soulwhisper/mcp-guardrails/issues/77)) ([dd839f2](https://github.com/soulwhisper/mcp-guardrails/commit/dd839f299e5d3578971b77d67afc39e0c3de455f))
+
+
+### Documentation
+
+* fix unrendered decision-pipeline mermaid flowchart ([#87](https://github.com/soulwhisper/mcp-guardrails/issues/87)) ([a978fbe](https://github.com/soulwhisper/mcp-guardrails/commit/a978fbe3680ad7bbce15339a64b5d533755c2424))
+* restructure site nav, slim README with Pages pointers, drop dead docs-requirements.txt ([#86](https://github.com/soulwhisper/mcp-guardrails/issues/86)) ([77b9b67](https://github.com/soulwhisper/mcp-guardrails/commit/77b9b670280325026f2d685e3df0f5e19cbc0959))
+* Zensical documentation site ([#79](https://github.com/soulwhisper/mcp-guardrails/issues/79)) ([01238d7](https://github.com/soulwhisper/mcp-guardrails/commit/01238d763b1b194ed790aa413b10eaa1cdec4340))
+
+
+### Continuous Integration
+
+* **github-action:** update docker/login-action digest ( 06fb636 → abd2ef4 ) ([#88](https://github.com/soulwhisper/mcp-guardrails/issues/88)) ([01b967b](https://github.com/soulwhisper/mcp-guardrails/commit/01b967bb2bfbdcf585c2a8c41e3a97d51adc7ca5))
+* **github-action:** update docker/login-action digest ( af1e73f → 06fb636 ) ([#80](https://github.com/soulwhisper/mcp-guardrails/issues/80)) ([588184a](https://github.com/soulwhisper/mcp-guardrails/commit/588184accefe21494756c31c11d4d0c99cee0064))
+
+
+### Chores
+
+* **renovate:** group grpc stack updates into a single PR ([#85](https://github.com/soulwhisper/mcp-guardrails/issues/85)) ([3c75f32](https://github.com/soulwhisper/mcp-guardrails/commit/3c75f323fea52ab30ba57590b36742feef8039d2))
+
 ## [Unreleased]
 
 ### Features

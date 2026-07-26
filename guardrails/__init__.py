@@ -14,5 +14,5 @@ engine falls back to regex-only when the ONNX stack is absent.
 
 from .models import Decision, ScanOutcome, ScanResult
 
-__version__ = "0.4.0"  # x-release-please-version
+__version__ = "0.5.0"  # x-release-please-version
 __all__ = ["Decision", "ScanOutcome", "ScanResult", "__version__"]
