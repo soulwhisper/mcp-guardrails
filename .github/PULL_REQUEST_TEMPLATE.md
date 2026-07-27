@@ -1,5 +1,5 @@
 <!--
-Thanks for contributing to extmcp-guardrails! Please fill in every section.
+Thanks for contributing to mcp-guardrails! Please fill in every section.
 PRs that change deny / mutation behaviour or the wire contract need extra
 scrutiny — flag those explicitly in the Guardrail-policy impact section.
 -->

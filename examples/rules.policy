@@ -12,7 +12,7 @@ A rule is any object exposing:
     name: str
     def match(self, trace: Sequence[TraceEntry]) -> Optional[str]
 
-The bundle ships two concrete rule types you compose packs from:
+The bundle ships four concrete rule types you compose packs from:
 
 * ``ToxicFlowRule`` — an *ordered subsequence* of tool calls (steps need not
   be contiguous in the trace; intervening calls are allowed). Use this for
@@ -21,6 +21,17 @@ The bundle ships two concrete rule types you compose packs from:
 * ``LoopRule`` — fires when the *same* (tool, args) fingerprint repeats
   ``threshold`` times within the sliding window. Use this for
   prompt-injection retry loops hammering a denied tool.
+
+* ``RateLimitRule`` — sliding time-window rate limit, counted per tool
+  name: fires when one tool is called more than ``max_calls`` times within
+  the trailing ``window_s`` seconds (uses the ``ts`` the engine stamps on
+  every recorded call). Use this for volumetric abuse with varying args.
+
+* ``AggregateRule`` — sliding time-window SUM of a numeric argument field
+  (``field`` dotted path, ``cast`` to number): fires when the total over
+  matching calls within ``window_s`` exceeds ``max_total``. Use this for
+  cumulative budgets (bytes exfiltrated, recipients contacted). The window
+  is recomputed per evaluation, so contributions slide out exactly.
 
 Each ``FlowStep`` carries:
 
@@ -37,6 +48,11 @@ Each ``FlowStep`` carries:
 * ``args_any`` — if True, the step ignores args (only the tool name is
                  checked). Defaults to False; when ``args`` is empty the
                  step also matches any args.
+* ``negate``   — if True, the step is a negative guard: it never advances
+                 the sequence, but any entry matching it while the guard is
+                 armed (between the surrounding positive steps) VOIDS the
+                 in-progress match, including parked sticky progress. Use
+                 for "A then C with no B between" patterns.
 
 Rule order in ``RULES`` is priority order — first match wins in
 ``InvariantEngine.evaluate``.
@@ -49,7 +65,13 @@ from __future__ import annotations
 
 import re
 
-from guardrails.invariant import FlowStep, LoopRule, ToxicFlowRule
+from guardrails.invariant import (
+    AggregateRule,
+    FlowStep,
+    LoopRule,
+    RateLimitRule,
+    ToxicFlowRule,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +251,59 @@ RULES = [
         ],
     ),
 
-    # 6. Retry storm (prompt-injection signature: a compromised agent hammering
+    # 6. Inbox -> external email WITHOUT an approval call in between
+    #    (negate-step demo). FlowStep(negate=True) arms a negative guard
+    #    between the surrounding positive steps: if any entry matches it
+    #    (here an ``email_approve`` call) the in-progress flow is VOIDED —
+    #    including any parked sticky progress — and matching restarts from
+    #    step 0. So: inbox_read -> email_send fires, but
+    #    inbox_read -> email_approve -> email_send does not.
+    ToxicFlowRule(
+        name="inbox-to-external-email-unapproved",
+        description=(
+            "Read an inbox then email an external recipient with no "
+            "approval call in between (unapproved exfiltration)"
+        ),
+        steps=[
+            FlowStep(tool="inbox_read"),
+            FlowStep(tool="email_approve", negate=True),
+            FlowStep(
+                tool="email_send",
+                args={
+                    "to": lambda v: isinstance(v, str) and bool(_EXTERNAL_EMAIL.search(v)),
+                },
+            ),
+        ],
+    ),
+
+    # 7. Rate limit: any single tool called >30 times within 60s in one trace
+    #    key (volumetric abuse — enumeration / spray with VARYING args, which
+    #    LoopRule's identical-fingerprint check does not catch). Counting is
+    #    per tool name; "*" matches every tool but each keeps its own budget.
+    RateLimitRule(
+        name="per-tool-rate-limit",
+        tool="*",
+        window_s=60.0,
+        max_calls=30,
+        description="Same tool called >30 times within 60s (volumetric abuse)",
+    ),
+
+    # 8. Aggregate budget: cumulative exfiltration over an hour. Sums the
+    #    "size" argument of every file-read call within the trailing 3600s
+    #    window; fires when the total exceeds 10MiB — catches slow-bleed
+    #    exfiltration where every single read is under the per-call limit.
+    #    The window is recomputed from entry timestamps each evaluation, so
+    #    contributions slide out exactly (no persistent accumulator).
+    AggregateRule(
+        name="hourly-read-volume-budget",
+        field="size",
+        max_total=10 * 1024 * 1024,
+        tool=_FILE_READ_TOOL,
+        window_s=3600.0,
+        description="Cumulative file-read volume >10MiB within 1h (slow exfiltration)",
+    ),
+
+    # 9. Retry storm (prompt-injection signature: a compromised agent hammering
     #    the same denied tool over and over hoping a guardrail hiccups).
     #    LoopRule fires on identical (tool, args) fingerprints within the
     #    window — a parameterised search (args differ each call) does NOT

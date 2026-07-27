@@ -1,0 +1,5 @@
+/* Hide the first H1 inside page content (the page title is already shown
+   by the Material theme navigation / tabs). */
+.md-content__inner > h1:first-of-type {
+  display: none;
+}

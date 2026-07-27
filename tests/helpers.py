@@ -7,10 +7,10 @@ meant to be imported as a module).
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any
 
-from guardrails.models import Decision, ScanResult
+from guardrails.models import Decision, McpCallContext, ScanResult
 
 
 class StubEngine:
@@ -48,7 +48,7 @@ class ScriptedScanner:
         content: str,
         role: str,
         *,
-        context: Mapping[str, Any] | None = None,
+        context: McpCallContext | None = None,
     ) -> ScanResult:
         self.calls.append((content, role))
         if not self._results:

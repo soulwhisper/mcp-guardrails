@@ -17,7 +17,7 @@
 #
 # Final image ~600-800MB (onnxruntime + transformers + model weights).
 
-ARG PY_VERSION=3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
+ARG PY_VERSION=3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
 
 # ---------- base ----------
 FROM python:${PY_VERSION} AS base
@@ -59,6 +59,13 @@ FROM base AS models
 ARG SKIP_MODEL_DOWNLOAD=0
 ARG LF_ONNX_MODEL=gravitee-io/Llama-Prompt-Guard-2-86M-onnx
 ARG LF_ONNX_FILE=model.onnx
+# Supply-chain pin (S-M6): pin the model download to an immutable HF commit
+# so a re-tagged or compromised upstream repo cannot silently swap the
+# weights baked into the image. To update:
+#   curl -s https://huggingface.co/api/models/$LF_ONNX_MODEL | jq -r .sha
+# and bump the default here (and LF_ONNX_REVISION for non-container runs).
+# Optional hardening: also verify a known sha256 of the .onnx after download.
+ARG PG2_REVISION=45a05fbd5337a864edc608f994911f009c37ca57
 # Install ONLY what the download needs (huggingface_hub + hf-xet) — NOT the
 # full runtime deps. This decouples the model-download layer from the builder
 # stage, so a requirements.txt bump does NOT invalidate the (slow, ~350MB) model
@@ -71,7 +78,7 @@ RUN --mount=type=cache,target=/hf-cache,sharing=locked \
     if [ -f /run/secrets/HF_TOKEN ]; then export HF_TOKEN=$(cat /run/secrets/HF_TOKEN); fi; \
     if [ "${SKIP_MODEL_DOWNLOAD}" = "1" ]; then \
         echo "SKIP: model pre-download (SKIP_MODEL_DOWNLOAD=1)"; \
-        echo "      Runtime will lazy-fetch on first scan."; \
+        echo "      Build-validation only: runtime sets HF_HUB_OFFLINE=1 and will fail closed if the model is absent."; \
         mkdir -p /models/hf/pg2; \
         exit 0; \
     fi; \
@@ -82,11 +89,13 @@ from huggingface_hub import snapshot_download
 import os, shutil
 m = "${LF_ONNX_MODEL}"
 f = "${LF_ONNX_FILE}"
+rev = "${PG2_REVISION}" or None
 # Download the ONNX model + tokenizer files into the cache mount (persisted
 # across builds), then materialise REAL bytes into the image layer at
 # /models/hf/pg2 so the runtime image is self-contained (independent of the
-# ephemeral cache mount).
-path = snapshot_download(repo_id=m, allow_patterns=[f, "config.json", "tokenizer*", "special_tokens_map.json", "vocab*"])
+# ephemeral cache mount). The revision is pinned (PG2_REVISION, S-M6) so the
+# baked weights are an immutable upstream commit, not a mutable ref.
+path = snapshot_download(repo_id=m, revision=rev, allow_patterns=[f, "config.json", "tokenizer*", "special_tokens_map.json", "vocab*"])
 os.makedirs("/models/hf/pg2", exist_ok=True)
 for item in os.listdir(path):
     src = os.path.join(path, item)

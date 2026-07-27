@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+# agentgateway v1.3.1 standalone config — verified live against this repo's
+# ExtMcp guardrail sidecar (see scripts/e2e_agentgateway.sh).
+#
+# Topology:
+#   client -> :3000 (CORS + mcpGuardrails processor, failClosed)
+#          -> ExtMcp sidecar gRPC localhost:9001 (h2c, plaintext)
+#          -> MCP backend (stdio python upstream: echo / pii_leak / secret_leak)
+#
+# The @PLACEHOLDER@ tokens are substituted by scripts/e2e_agentgateway.sh;
+# to run by hand, replace them with real paths first:
+#   @UPSTREAM_PYTHON@  python interpreter with the `mcp` package installed
+#   @UPSTREAM_SCRIPT@  path to examples/mcp_pii_upstream.py
+#   @SIDECAR_PORT@     sidecar listen port (default 9001)
+#   @AGW_PORT@         gateway front-door port (default 3000)
+binds:
+- port: @AGW_PORT@
+  listeners:
+  - routes:
+    - policies:
+        cors:
+          allowOrigins:
+          - "*"
+          allowHeaders:
+          - mcp-protocol-version
+          - content-type
+          - mcp-session-id
+          exposeHeaders:
+          - "Mcp-Session-Id"
+        mcpGuardrails:
+          processors:
+          - kind: remote
+            host: "localhost:@SIDECAR_PORT@"
+            # failClosed: if the sidecar is unreachable, agentgateway denies
+            # the MCP exchange (JSON-RPC -32603) rather than forwarding
+            # unguarded. The only safe default for write-capable agents.
+            failureMode: failClosed
+            # Inline backend policy for the callout: deadline for the ExtMcp
+            # gRPC request. On expiry, failureMode (failClosed) engages.
+            # NOTE: not in the published docs; derived from
+            # crates/agentgateway/src/mcp/guardrails/mod.rs Remote.policies ->
+            # SimpleLocalBackendPolicies.http.requestTimeout (v1.3.1 source).
+            policies:
+              http:
+                requestTimeout: 5s
+            # Per-method gate selection:
+            #   full     = CheckRequest + CheckResponse (double gate)
+            #   response = CheckResponse only (scan tool descriptions)
+            methods:
+              tools/call: full
+              tools/list: response
+      backends:
+      - mcp:
+          targets:
+          - name: pyupstream
+            stdio:
+              cmd: @UPSTREAM_PYTHON@
+              args: ["@UPSTREAM_SCRIPT@"]

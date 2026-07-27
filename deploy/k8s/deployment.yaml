@@ -63,8 +63,20 @@ spec:
           type: RuntimeDefault
       containers:
         - name: guardrail
-          image: ghcr.io/soulwhisper/mcp-guardrails:0.3.1
+          image: ghcr.io/soulwhisper/mcp-guardrails:0.5.0  # x-release-please-version
           imagePullPolicy: IfNotPresent
+          # Container-level hardening (S-M6): no privilege escalation, all
+          # Linux capabilities dropped, read-only root filesystem. The app
+          # only needs read access (/app code, /models weights, /etc/guardrails
+          # rules) — audit goes to stdout (/dev/stdout is a symlink into /proc
+          # and stays writable), HF runs offline against the pre-baked model.
+          # A writable /tmp emptyDir covers Python/grpc scratch files.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
           ports:
             - name: grpc-h2c
               containerPort: 9001
@@ -85,8 +97,45 @@ spec:
               value: "true"
             - name: ENABLE_AGENT_ALIGNMENT
               value: "false"
-            - name: INVARIANT_WINDOW
-              value: "64"
+            # INVARIANT_WINDOW intentionally NOT set: inherits the default 256
+            # (raised from 64 in S-H4 so long agent plans don't push the head
+            # of a toxic flow out of the window before the tail arrives).
+            # - name: INVARIANT_MAX_TRACES   # max per-route trace windows (default 1024)
+            #   value: "1024"
+            # - name: SCAN_TAIL_BYTES        # tail window scanned on over-budget payloads (default 8192)
+            #   value: "8192"
+            # - name: ENABLE_REDACTION       # secret/PII redaction on allowed payloads (default true)
+            #   value: "true"
+            # - name: REDACT_REQUEST_PARAMS  # also redact params.arguments on requests (default false)
+            #   value: "false"
+            # - name: REDACTION_MAX_BYTES    # payload byte cap for redaction; over-cap -> skip + redaction_skipped=size (default 262144)
+            #   value: "262144"
+            # - name: REDACT_ON_REVIEW       # redact HUMAN_REVIEW payloads too (default true; false restores legacy pass-unmutated)
+            #   value: "true"
+            # - name: SCAN_MAX_PAYLOAD_BYTES # hard payload cap; over-cap -> HUMAN_REVIEW "payload_size" on top of head/mid/tail scan (default 1048576)
+            #   value: "1048576"
+            # - name: INVARIANT_ARGS_MAX_BYTES # per-entry args cap in the Invariant trace window (default 4096)
+            #   value: "4096"
+            # - name: GRPC_MAX_RECV_BYTES    # gRPC max message size (default 8388608)
+            #   value: "8388608"
+            # - name: GRPC_MAX_CONCURRENT_RPCS # in-flight RPC bound (default 128)
+            #   value: "128"
+            # - name: AUDIT_HMAC_KEY         # key audit-log match digests with HMAC-SHA256 instead of plain SHA-256 (recommended)
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: guardrail-audit-hmac
+            #       key: AUDIT_HMAC_KEY
+            #       optional: true
+            # - name: AUDIT_CALLER_HEADERS   # whitelist of request headers copied to the audit `caller` field
+            #   value: "x-forwarded-user,x-session-id"
+            # - name: REVIEW_WEBHOOK_URL   # POST metadata-only JSON on human_review decisions (fire-and-forget, 2s timeout; unset disables)
+            # - name: SHUTDOWN_DRAIN_S     # wait after NOT_SERVING before draining, for readiness propagation (default 5.0; keep < preStop/terminationGracePeriod)
+            # - name: UNHEALTHY_SCANNER_ERROR_RATE # scanner error/timeout rate flipping health to NOT_SERVING (default 0.5)
+            #   value: "0.5"
+            # - name: UNHEALTHY_SCANNER_WINDOW     # sliding window of recent scan invocations (default 100)
+            #   value: "100"
+            # - name: UNHEALTHY_SCANNER_MIN_SAMPLES # min samples before the health verdict applies (default 20)
+            #   value: "20"
             - name: INVARIANT_RULES_PATH
               value: "/etc/guardrails/rules.policy"
             - name: SCANNER_TIMEOUT_MS
@@ -118,6 +167,12 @@ spec:
               value: "model.onnx"
             - name: LF_PROMPTGUARD_BLOCK_THRESHOLD
               value: "0.9"
+            # - name: PG_REVIEW_THRESHOLD    # grey-zone review threshold (default 0.5): scores in
+            #                                # [review, block) flag HUMAN_REVIEW -> AgentAlignment gate
+            #   value: "0.5"
+            # - name: PG_MAX_WINDOWS         # PromptGuard sliding-window cap per chunk (default 16);
+            #                                # budget adapts to token length, this is the latency bound
+            #   value: "16"
             # --- AgentAlignment LLM (second-stage, opt-in) ---
             # Only needed when ENABLE_AGENT_ALIGNMENT=1. The LLM client reads
             # the API key directly from LF_ALIGNMENT_API_KEY.
@@ -148,14 +203,16 @@ spec:
             limits:
               cpu: "2"
               memory: 4Gi
-          # Readiness: gRPC health probe on the standard grpc.health.v1.Health
-          # service. The server only sets SERVING after the engine is warmed
-          # up (model loaded), so this naturally keeps the Pod out of rotation
-          # during cold-start.
+          # Readiness: gRPC health probe on the ExtMcp service. server.py
+          # registers SERVING for both "" and "ExtMcp" only after engine
+          # warmup, so this naturally keeps the Pod out of rotation during
+          # cold-start. Use the named service here so kubelet checks the
+          # actual ExtMcp surface rather than a non-existent fully-qualified
+          # health service name.
           readinessProbe:
             grpc:
               port: 9001
-              service: "grpc.health.v1.Health"
+              service: "ExtMcp"
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
@@ -174,7 +231,12 @@ spec:
             - name: rules
               mountPath: /etc/guardrails
               readOnly: true
+            # Writable scratch dir (root fs is read-only).
+            - name: tmp
+              mountPath: /tmp
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: rules
           configMap:
             name: guardrail-rules

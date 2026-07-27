@@ -5,6 +5,379 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.4.0...v0.5.0) (2026-07-24)
+
+
+### Features
+
+* **deps:** update grpc stack to 1.83.0 (grpcio, health-checking, grpcio-tools) ([#84](https://github.com/soulwhisper/mcp-guardrails/issues/84)) ([3b920d1](https://github.com/soulwhisper/mcp-guardrails/commit/3b920d142d9e445463865803c871dc78c4b34687))
+* **deps:** update grpcio ( 1.82.1 → 1.83.0 ) ([#81](https://github.com/soulwhisper/mcp-guardrails/issues/81)) ([a9856f1](https://github.com/soulwhisper/mcp-guardrails/commit/a9856f11ce04bad87b0623c9a7938c7144f6c0cc))
+* wave-4 detection depth — confusable normalised view, markdown-exfil pattern, audit hash-chain ([#77](https://github.com/soulwhisper/mcp-guardrails/issues/77)) ([dd839f2](https://github.com/soulwhisper/mcp-guardrails/commit/dd839f299e5d3578971b77d67afc39e0c3de455f))
+
+
+### Documentation
+
+* fix unrendered decision-pipeline mermaid flowchart ([#87](https://github.com/soulwhisper/mcp-guardrails/issues/87)) ([a978fbe](https://github.com/soulwhisper/mcp-guardrails/commit/a978fbe3680ad7bbce15339a64b5d533755c2424))
+* restructure site nav, slim README with Pages pointers, drop dead docs-requirements.txt ([#86](https://github.com/soulwhisper/mcp-guardrails/issues/86)) ([77b9b67](https://github.com/soulwhisper/mcp-guardrails/commit/77b9b670280325026f2d685e3df0f5e19cbc0959))
+* Zensical documentation site ([#79](https://github.com/soulwhisper/mcp-guardrails/issues/79)) ([01238d7](https://github.com/soulwhisper/mcp-guardrails/commit/01238d763b1b194ed790aa413b10eaa1cdec4340))
+
+
+### Continuous Integration
+
+* **github-action:** update docker/login-action digest ( 06fb636 → abd2ef4 ) ([#88](https://github.com/soulwhisper/mcp-guardrails/issues/88)) ([01b967b](https://github.com/soulwhisper/mcp-guardrails/commit/01b967bb2bfbdcf585c2a8c41e3a97d51adc7ca5))
+* **github-action:** update docker/login-action digest ( af1e73f → 06fb636 ) ([#80](https://github.com/soulwhisper/mcp-guardrails/issues/80)) ([588184a](https://github.com/soulwhisper/mcp-guardrails/commit/588184accefe21494756c31c11d4d0c99cee0064))
+
+
+### Chores
+
+* **renovate:** group grpc stack updates into a single PR ([#85](https://github.com/soulwhisper/mcp-guardrails/issues/85)) ([3c75f32](https://github.com/soulwhisper/mcp-guardrails/commit/3c75f323fea52ab30ba57590b36742feef8039d2))
+
+## [Unreleased]
+
+### Features
+
+* **scanners:** detection-only normalized view in `RegexScanner` — pass 1
+  evaluates the raw text; unless pass 1 already BLOCKs, every pattern is
+  re-evaluated against an NFKC-folded, Cf-stripped, homoglyph-mapped
+  (Cyrillic/Greek → ASCII lookalikes) view (skipped for pure-ASCII text),
+  and the more severe verdict wins — so a benign pass-1 hit (e.g. an email)
+  cannot short-circuit the view and downgrade an obfuscated BLOCK marker.
+  Catches confusable / full-width / zero-width-split evasions of
+  instruction markers. The view never mutates payloads; view hits are
+  marked `[normalized-view match]` and fingerprint the original chunk
+  (`orig_sha256` / `orig_hmac`). Closes the confusable-marker red-team
+  residual (xfail promoted to regression test).
+* **scanners:** `md_image_exfil` pattern (HUMAN_REVIEW grade) — markdown
+  image URLs (`![](https://…)`) whose query carries a ≥32-char data-like
+  value (base64/percent-encoded exfil channel when agent output is
+  rendered). Review rather than BLOCK because signed CDN image URLs with
+  long token params are a legitimate false-positive source. Closes the
+  markdown-image-exfil red-team residual.
+* **audit:** tamper-evident hash chain (A-P0-3) — `AuditSink` now appends
+  `prev_hash` / `line_hash` (16-hex SHA-256 prefixes) to every audit line;
+  `guardrail_ctl audit verify <file>` re-walks the chain and reports the
+  first broken line number. Config `AUDIT_HASH_CHAIN` (default `1`).
+  Single-writer assumption documented (one replica / per-replica files /
+  stdout shipping). `docs/compliance.md` §5 updated accordingly.
+* **red-team:** new regression samples — full-width and mixed
+  confusable/case marker variants, markdown-exfil positives, and a
+  short-query benign-image false-positive control.
+
+## [0.4.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.5...v0.4.0) (2026-07-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **github-action:** Update actions/setup-python action ( v6.3.0 → v7.0.0 ) ([#70](https://github.com/soulwhisper/mcp-guardrails/issues/70))
+* **deps:** Update huggingface-hub ( 0.36.2 → 1.24.0 ) ([#71](https://github.com/soulwhisper/mcp-guardrails/issues/71))
+* **deps:** Update openai ( 1.109.1 → 2.46.0 ) ([#72](https://github.com/soulwhisper/mcp-guardrails/issues/72))
+* **deps:** Update transformers ( 4.57.6 → 5.14.1 ) ([#73](https://github.com/soulwhisper/mcp-guardrails/issues/73))
+
+### Features
+
+* audit & observability hardening — exchange correlation, redacted LLM audit, runtime health ([#67](https://github.com/soulwhisper/mcp-guardrails/issues/67)) ([4728ac3](https://github.com/soulwhisper/mcp-guardrails/commit/4728ac360ab22904d5ce5237376fa215751f4416))
+* contract fulfilment + rule-layer hardening — mcp_error, gateway metadata, sticky flows, tool ACL ([#68](https://github.com/soulwhisper/mcp-guardrails/issues/68)) ([772bd13](https://github.com/soulwhisper/mcp-guardrails/commit/772bd13a40afe66cb4184c4b0d7257998a81f5a5))
+* **deps:** Update huggingface-hub ( 0.36.2 → 1.24.0 ) ([#71](https://github.com/soulwhisper/mcp-guardrails/issues/71)) ([248b845](https://github.com/soulwhisper/mcp-guardrails/commit/248b845685c84c0286bd689d2e2116e3a97a121c))
+* **deps:** Update openai ( 1.109.1 → 2.46.0 ) ([#72](https://github.com/soulwhisper/mcp-guardrails/issues/72)) ([1213204](https://github.com/soulwhisper/mcp-guardrails/commit/1213204230fb361bd532398e0a4b45d89654988d))
+* **deps:** Update transformers ( 4.57.6 → 5.14.1 ) ([#73](https://github.com/soulwhisper/mcp-guardrails/issues/73)) ([568b16b](https://github.com/soulwhisper/mcp-guardrails/commit/568b16b20a537b880ea0e0c67a7d6e2ed14397e6))
+* wave-1 security hardening — scanner coverage, leak containment, DoS bounds ([#65](https://github.com/soulwhisper/mcp-guardrails/issues/65)) ([90b85a4](https://github.com/soulwhisper/mcp-guardrails/commit/90b85a471293bbebbd4a6aea28eadd30bed7271f))
+* wave-3 rule & scanner depth — rate/aggregate rules, negation, PG grey-zone, red-team baseline ([#74](https://github.com/soulwhisper/mcp-guardrails/issues/74)) ([a1c4e98](https://github.com/soulwhisper/mcp-guardrails/commit/a1c4e98b867156efb2be7b5e82f124f3a102138b))
+* wave-3 tooling & compliance — guardrail_ctl, review webhook, property tests, graceful drain ([#75](https://github.com/soulwhisper/mcp-guardrails/issues/75)) ([4c9aca9](https://github.com/soulwhisper/mcp-guardrails/commit/4c9aca9aae9bff033a67db9697436b18e72479f6))
+
+
+### Continuous Integration
+
+* **github-action:** Update actions/setup-python action ( v6.3.0 → v7.0.0 ) ([#70](https://github.com/soulwhisper/mcp-guardrails/issues/70)) ([3554981](https://github.com/soulwhisper/mcp-guardrails/commit/35549816b11c23d3b39a2e4f2eeae23c575a93bc))
+* **github-action:** update github/codeql-action digest ( e064762 → e4fba86 ) ([#69](https://github.com/soulwhisper/mcp-guardrails/issues/69)) ([e51cb5b](https://github.com/soulwhisper/mcp-guardrails/commit/e51cb5bd2f70789371fef67253fdd2e65a5eed65))
+
+
+### Chores
+
+* **release-please:** allow minor bump for feat commits (cut 0.4.0) ([#76](https://github.com/soulwhisper/mcp-guardrails/issues/76)) ([55e697f](https://github.com/soulwhisper/mcp-guardrails/commit/55e697f5e022783e00ca3bb6fc325068bae1921c))
+
+### Detailed change notes (waves 1-3 hardening)
+
+### Features
+
+* **contract:** structured `mcp_error` JSON-RPC body on deny (F-P1-1) —
+  `AuthorizationError.mcp_error` now carries a JSON-RPC 2.0 error object
+  (`code: -32001`, the same generalised message/ref as the wire `reason`,
+  plus `data` with a generalised policy category and remediation hint).
+  Pattern names, rule internals and match detail stay audit-only.
+* **contract:** `McpRequestResult.metadata` emission (F-P1-2) —
+  `guardrail.scan_score` (max scanner score), `guardrail.rules_hit`
+  (invariant rules that fired), `guardrail.redactions` (substitution
+  count), `guardrail.exchange_id`, `guardrail.outcome`. Response side has
+  no `metadata` field in the proto (request-side only);
+  `header_mutation` remains unused (documented).
+* **scanners:** `extract_text` covers `resources/read` results
+  (`contents[]`, incl. base64 `blob` decode capped at 256KiB per blob,
+  undecodable blobs kept verbatim) and `prompts/get` results
+  (`messages[]`); non-text `content[]` items (image/audio/resource_link)
+  fall back to their JSON dump so keys/annotations stay visible (F-P1-4 /
+  S-M2).
+* **invariant:** tool-level ACL via `ALLOW_TOOLS` / `DENY_TOOLS`
+  (comma-separated, `prefix/*` wildcards, DENY wins; a non-empty ALLOW is
+  a whitelist). Checked before content scanners run; denies as
+  `tool_acl` (F-P1-5).
+* **invariant:** trace-key templating via `INVARIANT_TRACE_KEY_HEADERS`
+  (e.g. `x-session-id`) — toxic-flow traces isolate per session header
+  value, falling back to the route dimension when absent (S-H5 /
+  F-P0-1(b)). The `McpCallContext` is now threaded into every scanner's
+  `context` kwarg.
+* **scanners:** three-window `scan_windows` split (head / mid / tail)
+  for over-budget payloads — the mid window closes the blind spot where
+  an injection padded past the head but short of the tail went unseen
+  (S-H2); plus the `SCAN_MAX_PAYLOAD_BYTES` hard cap (default 1MiB):
+  over-cap payloads are still scanned via the windows AND flagged with a
+  `payload_size` `HUMAN_REVIEW` carrying scanned/total bytes.
+* **scanners:** adaptive PromptGuard sliding-window budget — the number
+  of scored 512-token windows grows with the payload's token length
+  (`clamp(ceil(tokens/step)+1, 4, PG_MAX_WINDOWS)`, cap default 16) so
+  long payloads get their middle scored instead of only the first strided
+  windows + tail. Fail-closed `id2label` validation at model load: the
+  scanner refuses to score (BLOCK under failClosed) unless the model's
+  last class names a malicious/injection/jailbreak label, and adopts
+  `max_position_embeddings` as the window size.
+* **audit:** `AUDIT_HMAC_KEY` env var — when set, high-entropy match
+  fingerprints in scanner reasons use keyed HMAC-SHA256 instead of plain
+  SHA-256. Low-entropy patterns (email, credit card, connection strings,
+  key=value credentials) now record `match_len` only (no digest), so the
+  audit log cannot be used as an offline enumeration oracle.
+* **redaction:** `REDACT_ON_REVIEW` (default true) — `HUMAN_REVIEW`
+  payloads also flow through the redaction transformer: the review
+  verdict is kept and the mutated payload rides along, so review-grade
+  PII/credentials are masked on the wire instead of passing through
+  verbatim. `false` restores the legacy pass-unmutated behaviour (S-H3).
+* **networking:** gRPC hardening knobs `GRPC_MAX_RECV_BYTES` (default
+  8MiB) and `GRPC_MAX_CONCURRENT_RPCS` (default 128) bound message size
+  and in-flight RPCs so a runaway caller cannot exhaust memory or starve
+  the event loop (S-M4).
+* **health:** runtime scanner-degradation verdict (A-P0-4) — a sliding
+  window of recent scan outcomes (`UNHEALTHY_SCANNER_ERROR_RATE` /
+  `UNHEALTHY_SCANNER_WINDOW` / `UNHEALTHY_SCANNER_MIN_SAMPLES`) flips the
+  gRPC health service to `NOT_SERVING` when the error/timeout rate
+  exceeds the threshold, recovering automatically. Tracked under
+  `failOpen` too.
+* **metrics:** new instruments — `mcp.guardrails.redactions` (redaction
+  substitutions), `mcp.guardrails.invariant_hits` (invariant rule hits),
+  `mcp.guardrails.rules_reload{result}` (rule-pack hot-reload outcomes).
+* **deploy:** container `securityContext` hardening in the K8s manifests
+  (non-root uid/gid 65532, `readOnlyRootFilesystem`, dropped
+  capabilities) alongside the pod-level `runAsNonRoot`.
+* **invariant:** `RateLimitRule` — sliding time-window call-rate limit
+  counted per tool name (`window_s` / `max_calls`); catches volumetric
+  abuse with varying args (enumeration / spray) that `LoopRule`'s
+  identical-fingerprint check cannot see. `TraceEntry` gains a
+  `time.monotonic()` `ts` field stamped by `record()` (defaults to `0.0`
+  for hand-built entries, treated as "now" by windowed rules).
+* **invariant:** `AggregateRule` — sliding time-window SUM of a numeric
+  argument field (dotted path + `cast`) over matching calls; fires when
+  the trailing-window total exceeds `max_total` (cumulative budgets:
+  bytes exfiltrated, recipients contacted). The window is recomputed from
+  entry timestamps per evaluation, so contributions slide out exactly —
+  no persistent accumulator.
+* **invariant:** `FlowStep(negate=True)` — negative guard steps for
+  `ToxicFlowRule`: an entry matching an armed guard (between the
+  surrounding positive steps) voids the in-progress match, including
+  parked sticky progress, and matching restarts from step 0. Enables
+  "A then C with no B between" patterns (e.g. inbox read -> external send
+  with no approval call).
+* **scanners:** PromptGuard grey-zone dual threshold via
+  `PG_REVIEW_THRESHOLD` (default 0.5): scores >=
+  `LF_PROMPTGUARD_BLOCK_THRESHOLD` BLOCK, scores in `[review, block)`
+  flag `HUMAN_REVIEW` (feeding the second-stage AgentAlignment gate),
+  lower scores ALLOW. `0` disables the grey zone; values above the block
+  threshold are clamped.
+* **scanners:** AgentAlignment egress safety + trajectory context — the
+  flagged chunk is pre-redacted with an extended `RedactionScanner`
+  pattern set (block-grade secrets/PII **plus** the review-grade
+  credential shapes — JWT, connection strings, key=value credentials —
+  whose HUMAN_REVIEW verdict feeds this second-stage gate) before leaving
+  for the external LLM (no cleartext credential egress), and the engine
+  folds the last 5 tool-call names from the route's Invariant trace
+  (metadata only) into the alignment prompt via
+  `McpCallContext.trace_summary`.
+* **notify:** `REVIEW_WEBHOOK_URL` (default unset) — decisions carrying the
+  `human_review` flag POST a metadata-only JSON body
+  (`outcome`/`reason`/`ref`/`exchange_id`/`ts`) to the configured endpoint.
+  Fire-and-forget: a background asyncio task over zero-dependency `urllib`
+  with a 2s timeout; delivery failures only log and never block or alter
+  the decision path (no retries — the audit log stays authoritative).
+* **server:** graceful shutdown ordering (A-P2-4) — on SIGTERM/SIGINT the
+  gRPC health service flips to `NOT_SERVING` first (watchdog cancelled so
+  it cannot flip back), then the sidecar waits `SHUTDOWN_DRAIN_S` (default
+  5.0s) for readiness propagation before `server.stop(grace)` drains
+  in-flight RPCs.
+* **tooling:** `scripts/guardrail_ctl.py` operator CLI —
+  `rules lint [--path/--module]` validates a rule pack (empty steps,
+  unknown fields, negate placement, threshold legality, duplicate names)
+  and dry-runs every rule against built-in sample traces (non-zero exit on
+  an invalid pack); `decision replay <audit.jsonl>` offline-analyses the
+  JSONL audit log (outcome distribution, per-scanner/rule drill-down,
+  `exchange_id` request/response pairing).
+* **supply-chain:** `make audit` runs pip-audit against `requirements.txt`
+  with a `scripts/pip-audit-ignore.txt` `--ignore-vuln` whitelist;
+  `make sbom` / `scripts/gen_sbom.sh` generate SPDX + CycloneDX SBOMs via
+  syft (CI wiring noted as pending a workflow token). Both tools are
+  dev-extra dependencies, never runtime.
+* **tests:** `tests/test_property.py` hypothesis property tests over
+  `scan_windows` (UTF-8-safe chunks, head/tail coverage, truncated-flag
+  consistency), `extract_text` (never raises on arbitrary JSON),
+  `servicer._safe_json_loads` (never raises on arbitrary bytes) and
+  `redact_value` (structure preservation + JSON serialisability).
+  `hypothesis` added to the `dev` extra; the module importorskips when
+  absent.
+* **docs:** `docs/compliance.md` — data classification (payload content,
+  audit log, fingerprints, caller field), audit retention guidance
+  (WORM/object-lock reference architecture, suggested retention periods),
+  access-control recommendations, the AgentAlignment data-egress
+  statement, and known audit limitations (hash-chain not implemented,
+  best-effort local writes, fire-and-forget webhook).
+* **tests:** `tests/test_redteam.py` red-team capability baseline —
+  base64-encoded injection, zero-width/confusables, markdown-image exfil,
+  `### SYSTEM` case variants, head/mid/tail padding bypasses, and
+  window-flush sequences. Current gaps (confusable markers, markdown
+  image exfil) are `xfail(strict=False)` with the residual documented.
+
+### Bug Fixes
+
+* **invariant:** default window 64 -> 256 (S-H4) and sticky partial-match
+  progress: ToxicFlowRule prefix matches are parked in a TTL-bounded
+  (`INVARIANT_STICKY_TTL_S`, default 600s), LRU-capped sticky map so a
+  flow whose early steps slide out of the window still completes.
+* **invariant:** only `tools/call` requests with a non-empty tool name
+  are recorded into the trace window (F-P1-6).
+* **invariant:** per-entry args cap `INVARIANT_ARGS_MAX_BYTES` (default
+  4KiB, S-M4): oversized args keep their structure with long string
+  values truncated (structure-preserving, so dotted-path arg matchers
+  keep working on the retained prefixes), while the loop fingerprint is
+  computed from the FULL args before truncation — a multi-MB argument can
+  no longer bloat the rolling window.
+* **deploy:** `deploy/k8s/deployment.yaml` no longer pins
+  `INVARIANT_WINDOW=64` (it silently overrode the raised 256 default,
+  re-opening the S-H4 window-eviction gap); the env var is removed so the
+  deployment inherits the code default.
+* **e2e:** `scripts/e2e_agentgateway.sh` assertions realigned with the
+  F-P1-1 generalised deny wire format — case c now asserts `-32001` +
+  category `content_policy` (the `private_key` pattern name no longer
+  reaches the wire) and case d asserts `-32001` + `tool_flow` instead of
+  the internal loop-rule name; both pattern/rule names are additionally
+  verified in the sidecar audit log, where they belong.
+* **docs:** test counts corrected (157 -> 305+), README config table
+  gains the missing `LF_ONNX_LOCAL_DIR` and `PG_REVIEW_THRESHOLD` rows,
+  and `examples/docker-run.env` references the current 0.3.5 image tag.
+
+* **audit:** stop trusting the JSON-RPC `id` inside the wire payload for
+  exchange correlation — `params`/`result` bodies are attacker-controlled,
+  so a forged `id` could pin one tenant's deny on another tenant's
+  exchange. The exchange_id now resolves only from agentgateway-injected
+  `metadata_context` keys (`exchange_id` / `request_id` / `x_request_id` /
+  `trace_id`), then the `x-request-id` header, then a uuid8 fallback; all
+  accepted candidates are stripped of CR/LF/control characters (audit-log
+  injection guard).
+* **audit:** restore PR-#65 ref semantics — the `ref` used in wire deny
+  reasons is always an engine-minted random uuid8 (unique, unguessable);
+  `exchange_id` remains a separate audit-only correlation field. Audit
+  decision lines carry both.
+* **audit:** `ts` is epoch seconds (int) again; millisecond precision is
+  available via the new `ts_ms` field (epoch ms, float). Same for the
+  `rules_reload` audit line. No upgrade note needed — `ts` semantics are
+  unchanged from pre-Wave-2 releases.
+* **config:** `AUDIT_CALLER_HEADERS` default drops `x-session-id` (a
+  quasi-credential that should not persist in the audit log); default is
+  now `x-forwarded-user` only.
+* **scanners:** AgentAlignment `llm_error` reasons record the exception
+  type name only — SDK exception text (which can embed request content or
+  endpoint details) no longer reaches the audit log.
+* **redaction:** offload the redaction regex sweep to a worker thread
+  (`asyncio.to_thread`) and cap redactable payload size via the new
+  `REDACTION_MAX_BYTES` env var (default 256KiB); over-cap payloads skip
+  redaction, pass through unchanged, and are flagged
+  `redaction_skipped=size` in the audit span. Scanner BLOCKs still apply
+  via the head+tail scan windows, so blocking capability is unaffected.
+
+### Upgrade Notes
+
+* **metrics:** with redaction enabled, the `mcp.guardrails.decisions`
+  counter's `outcome` label gains a `"mutated"` value. Dashboards/alerts
+  counting successful decisions as `outcome="allow"` should be widened to
+  `allow|mutated`.
+
+## [0.3.5](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.4...v0.3.5) (2026-07-21)
+
+
+### Features
+
+* response-side PII/secret redaction (mutation pipeline) + real agentgateway interop e2e ([#62](https://github.com/soulwhisper/mcp-guardrails/issues/62)) ([3ffb64a](https://github.com/soulwhisper/mcp-guardrails/commit/3ffb64a0a865ff2a754177ada7a55d00cd993a9d))
+
+
+### Bug Fixes
+
+* harden deployment, audit redaction, and version consistency ([#58](https://github.com/soulwhisper/mcp-guardrails/issues/58)) ([4d6e56d](https://github.com/soulwhisper/mcp-guardrails/commit/4d6e56d9c9f73b7db511cf74ca3ac363b39c4263))
+* migrate ExtMcp contract to upstream agentgateway proto ([#60](https://github.com/soulwhisper/mcp-guardrails/issues/60)) ([e3ac316](https://github.com/soulwhisper/mcp-guardrails/commit/e3ac3169f22a441979e332dccff317b1b44e5b36))
+* P1 security hardening — truncation bypass + per-route trace isolation ([#61](https://github.com/soulwhisper/mcp-guardrails/issues/61)) ([6d0164c](https://github.com/soulwhisper/mcp-guardrails/commit/6d0164cff229586dc00ad8f2576ecc6b0d21ebab))
+
+
+### Continuous Integration
+
+* **github-action:** update actions/checkout digest ( 9c091bb → 3d3c42e ) ([#57](https://github.com/soulwhisper/mcp-guardrails/issues/57)) ([a0e356c](https://github.com/soulwhisper/mcp-guardrails/commit/a0e356c49cea7f369a2bf46f22eecbb65b8fc505))
+* **github-action:** update github/codeql-action digest ( 7188fc3 → e064762 ) ([#64](https://github.com/soulwhisper/mcp-guardrails/issues/64)) ([3665218](https://github.com/soulwhisper/mcp-guardrails/commit/3665218d105a53720d290300c861ff8fbcafcd63))
+* **github-action:** update github/codeql-action digest ( 99df26d → 7188fc3 ) ([#54](https://github.com/soulwhisper/mcp-guardrails/issues/54)) ([f8e3fb2](https://github.com/soulwhisper/mcp-guardrails/commit/f8e3fb27559ea441852850d40b6f64a6650e5aa1))
+
+
+### Chores
+
+* clean stale docs/configs + pin dependency upper bounds ([#63](https://github.com/soulwhisper/mcp-guardrails/issues/63)) ([519c4e6](https://github.com/soulwhisper/mcp-guardrails/commit/519c4e6e36d6a0b5eb9f4661f56e165a97eadbf0))
+* **container:** update image python ( d3400aa → cea0e60 ) ([#56](https://github.com/soulwhisper/mcp-guardrails/issues/56)) ([287d21b](https://github.com/soulwhisper/mcp-guardrails/commit/287d21b6a4c1661fb8aa68a3c2167e1030fcc186))
+
+## [0.3.4](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.3...v0.3.4) (2026-07-14)
+
+
+### Features
+
+* **deps:** update grpcio ( 1.81.1 → 1.82.1 ) ([#49](https://github.com/soulwhisper/mcp-guardrails/issues/49)) ([400c7c8](https://github.com/soulwhisper/mcp-guardrails/commit/400c7c8cd3d81773f96fe0bf5e63c611f1da0bf2))
+* **deps:** update grpcio-health-checking ( 1.81.1 → 1.82.1 ) ([#50](https://github.com/soulwhisper/mcp-guardrails/issues/50)) ([0d14af8](https://github.com/soulwhisper/mcp-guardrails/commit/0d14af8a49d13578da34b0e5f22e3940d15ea1a1))
+* **deps:** update grpcio-health-checking ( 1.81.1 → 1.82.1 ) ([#51](https://github.com/soulwhisper/mcp-guardrails/issues/51)) ([90bb5c7](https://github.com/soulwhisper/mcp-guardrails/commit/90bb5c71369bf4b6036280558258eb78dc0bba11))
+* **deps:** update grpcio-tools ( 1.81.1 → 1.82.0 ) ([#46](https://github.com/soulwhisper/mcp-guardrails/issues/46)) ([2772e20](https://github.com/soulwhisper/mcp-guardrails/commit/2772e2048c772066070fbd531812c82d225f84ab))
+
+
+### Continuous Integration
+
+* **github-action:** update github/codeql-action digest ( 54f647b → 99df26d ) ([#48](https://github.com/soulwhisper/mcp-guardrails/issues/48)) ([16c8127](https://github.com/soulwhisper/mcp-guardrails/commit/16c8127ca4326e5cbc70c7856768086ca43de023))
+
+
+### Chores
+
+* **container:** update image python ( 072ffcb → d3400aa ) ([#53](https://github.com/soulwhisper/mcp-guardrails/issues/53)) ([843b5da](https://github.com/soulwhisper/mcp-guardrails/commit/843b5da3f9244ec53c328f1684f037181b13d673))
+* **container:** update image python ( b877e50 → 072ffcb ) ([#52](https://github.com/soulwhisper/mcp-guardrails/issues/52)) ([70e3b79](https://github.com/soulwhisper/mcp-guardrails/commit/70e3b79ac1888c04e87b1469e004e4b27678b6fe))
+
+## [0.3.3](https://github.com/soulwhisper/mcp-guardrails/compare/v0.3.2...v0.3.3) (2026-07-04)
+
+
+### Features
+
+* **container:** update image docker/dockerfile ( 1.7 → 1.25 ) ([#38](https://github.com/soulwhisper/mcp-guardrails/issues/38)) ([ad2f0d6](https://github.com/soulwhisper/mcp-guardrails/commit/ad2f0d6bdd0ce70c71f944bbb268363468294948))
+* **github-action:** update python ([#39](https://github.com/soulwhisper/mcp-guardrails/issues/39)) ([710ec0f](https://github.com/soulwhisper/mcp-guardrails/commit/710ec0fc2af598129c9a50f87bd836c6e9068a12))
+
+
+### Bug Fixes
+
+* **ci:** make chore commits visible to release-please ([#35](https://github.com/soulwhisper/mcp-guardrails/issues/35)) ([a1d9b41](https://github.com/soulwhisper/mcp-guardrails/commit/a1d9b41c47af154ef7c555427096866f7cd6d728))
+
+
+### Continuous Integration
+
+* **github-action:** pin dependencies ([#37](https://github.com/soulwhisper/mcp-guardrails/issues/37)) ([50687f2](https://github.com/soulwhisper/mcp-guardrails/commit/50687f2ef5f2f8978345035a539ae5eca84b0e8b))
+* **github-action:** pin dependencies ([#42](https://github.com/soulwhisper/mcp-guardrails/issues/42)) ([e5edade](https://github.com/soulwhisper/mcp-guardrails/commit/e5edade6e23d131117fddce703be55fc68f9f764))
+* **github-action:** update docker/login-action digest ( c99871d → af1e73f ) ([#43](https://github.com/soulwhisper/mcp-guardrails/issues/43)) ([3eb30b8](https://github.com/soulwhisper/mcp-guardrails/commit/3eb30b83ecce276ef935818d448e1fe427253d45))
+
+
+### Chores
+
+* **ci:** optimize workflow triggers to reduce duplicate runs ([#34](https://github.com/soulwhisper/mcp-guardrails/issues/34)) ([207543c](https://github.com/soulwhisper/mcp-guardrails/commit/207543c673e69c8b4dbbae03df69df56a7560730))
+* **ci:** update github actions ([#41](https://github.com/soulwhisper/mcp-guardrails/issues/41)) ([3fee6d0](https://github.com/soulwhisper/mcp-guardrails/commit/3fee6d0efae53d7fbad2a09882220ee148addb0c))
+
 ## [0.3.2](https://github.com/soulwhisper/mcp-guardrails/compare/0.3.1...v0.3.2) (2026-07-02)
 
 

@@ -33,7 +33,7 @@ data:
   # FlowStep.args is a mapping of dotted-path -> value matcher
   #   (callable, compiled regex, or literal compared with ==).
   # ToxicFlowRule fires on an ordered *subsequence* match within the
-  # INVARIANT_WINDOW (default 64 calls). Steps need not be contiguous.
+  # INVARIANT_WINDOW (default 256 calls). Steps need not be contiguous.
   # LoopRule fires when the same (tool + args) fingerprint repeats
   # `threshold` times within the window.
   rules.policy: |
@@ -157,13 +157,26 @@ data:
     # Relevant env vars (set on the Deployment):
     #   ENABLE_REGEX_SCANNER   - toggle the regex-based secrets/PII/hidden-ascii scanner
     #   ENABLE_PROMPTGUARD   - toggle the PromptGuard-2 semantic scanner
+    #   PG_MAX_WINDOWS       - PromptGuard sliding-window cap per chunk (default 16);
+    #                          budget adapts to token length, this is the latency bound
     #   ENABLE_AGENT_ALIGNMENT - toggle the LLM-based AgentAlignment second stage
     #                            (only runs when PromptGuard returns HUMAN_REVIEW;
     #                            default off for homelab latency budget)
-    #   MAX_CONTENT_BYTES      - per-call text budget fed to each scanner
+    #   MAX_CONTENT_BYTES      - per-call head text budget fed to each scanner
     #                            (excess is truncated + flagged in the audit span)
+    #   SCAN_TAIL_BYTES        - extra tail window scanned on over-budget payloads
+    #                            (default 8192; 0 disables; closes truncation bypass)
+    #   ENABLE_REDACTION       - structural secret/PII redaction on allowed payloads,
+    #                            forwarded via the proto `mutated` oneof (default on)
+    #   REDACT_REQUEST_PARAMS  - also redact params.arguments on the request side
+    #                            (default off; secrets in requests should BLOCK)
+    #   REDACTION_MAX_BYTES    - payload byte cap for the redaction sweep
+    #                            (default 262144; over-cap payloads skip redaction,
+    #                            flagged redaction_skipped=size in audit; scanner
+    #                            BLOCKs still apply via the head+tail scan windows)
     #   SCANNER_TIMEOUT_MS     - per-engine-call deadline; exceeded -> failure_mode
     #   INVARIANT_WINDOW       - sliding-window size for ToxicFlowRule / LoopRule
+    #   INVARIANT_MAX_TRACES   - max distinct per-route trace windows (default 1024)
     #   FAILURE_MODE           - failClosed (default) | failOpen
     #   HUMAN_REVIEW_MODE      - pass (default) | deny
     #
@@ -177,6 +190,20 @@ data:
     #                                   (default: mcp-guardrails)
     #   AUDIT_LOG_PATH               - JSONL audit sink path
     #                                   (default: stdout; set to /dev/null to silence)
+    #   AUDIT_CALLER_HEADERS         - comma-separated whitelist of request
+    #                                   headers copied to the audit `caller`
+    #                                   field (default: x-forwarded-user only;
+    #                                   x-session-id is a quasi-credential and
+    #                                   must be opted in explicitly)
+    #   GUARDRAIL_VERSION            - override for the audit `sidecar_version`
+    #                                   field (default: package version)
+    #
+    # Health degradation (A-P0-4): the gRPC health service flips to
+    # NOT_SERVING when the sliding-window scanner error/timeout rate exceeds
+    # the threshold (and recovers automatically):
+    #   UNHEALTHY_SCANNER_ERROR_RATE   - rate threshold (default: 0.5)
+    #   UNHEALTHY_SCANNER_WINDOW       - sliding window size (default: 100)
+    #   UNHEALTHY_SCANNER_MIN_SAMPLES  - min samples before verdict (default: 20)
     #
     # The rule pack above is the ONLY file-driven config; everything else is
     # knobs on the container env.

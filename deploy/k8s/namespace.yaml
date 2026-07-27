@@ -4,12 +4,12 @@
 # All ExtMcp guardrail resources live in `agent-system` to keep them isolated
 # from the agentgateway control plane and the user workloads that gateway
 # fronts. agentgateway itself can run in a different namespace and reach this
-# Service cross-namespace via `extmcp-guardrails.agent-system.svc:4445`.
+# Service cross-namespace via `mcp-guardrails.agent-system.svc:4445`.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: agent-system
   labels:
-    app.kubernetes.io/name: extmcp-guardrails
+    app.kubernetes.io/name: mcp-guardrails
     app.kubernetes.io/part-of: agentgateway
     app.kubernetes.io/managed-by: kustomize

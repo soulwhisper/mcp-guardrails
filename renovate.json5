@@ -1,4 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["github>soulwhisper/renovate-config"],
+  "packageRules": [
+    {
+      // grpcio-tools X.Y requires grpcio>=X.Y, so the grpc stack must be
+      // updated atomically — separate PRs per package cannot resolve (#81-83).
+      "groupName": "grpc stack",
+      "matchPackageNames": ["grpcio", "grpcio-tools", "grpcio-health-checking", "grpcio-status"]
+    }
+  ]
 }

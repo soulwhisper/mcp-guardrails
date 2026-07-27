@@ -26,7 +26,7 @@ In scope:
   exchange through to the upstream or to the agent).
 - Bypass of any `BLOCK` outcome (regex scanner, ONNX PromptGuard scanner,
   Invariant rule).
-- Malformed-payload handling that does not map to `INVALID_ARGUMENT`.
+- Malformed-payload handling that does not map to `INVALID`.
 - Wire-contract drift between `proto/ext_mcp.proto` and the agentgateway
   ExtMcp contract that breaks fail-closed behaviour.
 - Container escape / privilege escalation from the sidecar Pod.

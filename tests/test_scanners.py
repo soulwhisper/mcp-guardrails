@@ -367,6 +367,10 @@ def test_onnx_load_prefers_local_dir(tmp_path, monkeypatch):
     from guardrails.scanners import OnnxPromptGuardScanner
 
     (tmp_path / "model.onnx").write_bytes(b"\x00not-a-real-onnx")
+    # _load validates id2label (fail-closed) — provide a sane config.json.
+    (tmp_path / "config.json").write_text(
+        '{"id2label": {"0": "BENIGN", "1": "MALICIOUS"}, "max_position_embeddings": 512}'
+    )
     calls: dict[str, object] = {}
 
     class FakeSess:

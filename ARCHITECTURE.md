@@ -28,7 +28,7 @@ ExtMcp Guardrail is a policy sidecar that sits between agentgateway and the
 upstream MCP servers an agent's LLM can reach. agentgateway invokes the
 sidecar twice per MCP exchange — once on the request path (before forwarding
 to the upstream), once on the response path (before returning to the agent).
-Each call returns one of three states: **allowed** (forward unchanged),
+Each call returns one of three states: **pass** (forward unchanged),
 **mutated** (replace the payload), or **error** (deny).
 
 The sidecar composes two complementary policy layers:
@@ -67,27 +67,28 @@ service ExtMcp {
 
 ```proto
 message McpRequest {
-  string method = 1;                  // MCP JSON-RPC method, e.g. "tools/call"
-  repeated string service_names = 2;  // resolved MCP service identifiers
-  bytes mcp_request = 3;              // raw JSON-RPC params, UTF-8 bytes
-  repeated HeaderValue headers = 4;   // empty for stdio upstreams
-  MetadataContext metadata_context = 5;
+  repeated string service_names = 1;  // resolved MCP service identifiers
+  string method = 2;                  // MCP JSON-RPC method, e.g. "tools/call"
+  google.protobuf.Struct metadata_context = 3;
+  optional bytes mcp_request = 4;     // raw JSON-RPC params, UTF-8 bytes
+  repeated McpHeader headers = 5;     // empty for stdio upstreams
 }
 ```
 
 `mcp_request` is the raw JSON-RPC `params` object, serialised as bytes. For
 `tools/call` this looks like `{"name": "...", "arguments": {...}}`. The
-servicer deserialises it with `json.loads` and a malformed payload maps to
-`AuthorizationError{INVALID_ARGUMENT}` (fail-closed on parse failure).
+servicer treats an absent `mcp_request` as an empty params object and maps a
+malformed payload to `AuthorizationError{INVALID}` (fail-closed on parse
+failure).
 
 ### McpResponse
 
 ```proto
 message McpResponse {
-  string method = 1;
-  repeated string service_names = 2;
-  bytes mcp_response = 3;              // raw JSON-RPC result, UTF-8 bytes
-  MetadataContext metadata_context = 4;
+  repeated string service_names = 1;
+  string method = 2;
+  google.protobuf.Struct metadata_context = 3;
+  bytes mcp_response = 4;              // raw JSON-RPC result, UTF-8 bytes
 }
 ```
 
@@ -96,40 +97,43 @@ looks like `{"content": [{"type": "text", "text": "..."}], "isError": bool}`.
 
 ### The result oneof
 
-Both `McpRequestResult` and `McpResponseResult` use the same `oneof result`:
+Both `McpRequestResult` and `McpResponseResult` use the same upstream
+`oneof result` shape:
 
 ```proto
 message McpRequestResult {
   oneof result {
-    Pass allowed = 1;            // forward unchanged
-    Mutated mutated = 2;         // replace the payload with the supplied bytes
-    AuthorizationError error = 3;  // deny; agentgateway surfaces JSON-RPC -32001
+    Pass pass = 1;                    // forward unchanged
+    bytes mutated = 2;                // replace payload with raw JSON bytes
+    AuthorizationError error = 3;     // deny / invalid / resource exhausted
   }
+  HeaderMutation header_mutation = 4;
+  google.protobuf.Struct metadata = 5;
 }
+
+// McpResponseResult has the same pass/mutated/error oneof, without the
+// request-side header_mutation/metadata extension fields.
 ```
 
-### Field-naming note: `allowed` vs `pass`
+The sidecar emits `pass`, `mutated`, and `error`, and populates
+`McpRequestResult.metadata` on every request-side verdict with
+`guardrail.scan_score` (max scanner score), `guardrail.rules_hit`
+(invariant rules that fired), `guardrail.redactions` (substitution count),
+`guardrail.exchange_id` and `guardrail.outcome` (`allow` / `mutated` /
+`deny`). `McpResponseResult` has no `metadata` field in the proto, so
+metadata is request-side only. `header_mutation` is deliberately not
+emitted: a caller-visible `x-guardrail-ref` header adds nothing over the
+wire `ref` already present in the deny reason (documented in
+`guardrails/servicer.py::_result_metadata`).
 
-The "forward unchanged" oneof member is named **`allowed`** rather than
-`pass`. This is a Python-side cosmetic choice with **zero wire-compat
-impact**: only protobuf field numbers participate in the wire format, so
-the field numbered `1` in this oneof is wire-identical whether the source
-proto spells it `pass` (as agentgateway's upstream proto does) or `allowed`
-(as we do). The rename exists because the generated Python stub exposes the
-oneof member as a kwarg on the message constructor:
+### Upstream contract note
 
-```python
-# upstream proto field name -> Python syntax error
-pb.McpRequestResult(pass=pb.Pass())        # SyntaxError: 'pass' is a keyword
-
-# our proto field name -> fine
-pb.McpRequestResult(allowed=pb.Pass())     # OK
-```
-
-The `Pass` message type itself is unchanged. When vendoring against a
-pinned agentgateway release, you can regenerate from the upstream proto via
-`make proto` and overwrite the committed stubs — the wire format stays the
-same; only the Python-side kwarg name changes.
+`proto/ext_mcp.proto` is vendored from `agentgateway/agentgateway` at commit
+`1e0c75efc930187fb6048ac5c05fe7b62b787352`
+(`crates/protos/proto/ext_mcp.proto`). The "forward unchanged" oneof member
+is named `pass`; the Python servicer sets it via `getattr(result, "pass")`
+because `pass` is a Python keyword. Only protobuf field numbers and types
+participate in the wire format.
 
 ### AuthorizationError codes
 
@@ -137,40 +141,39 @@ same; only the Python-side kwarg name changes.
 message AuthorizationError {
   enum Code {
     UNKNOWN = 0;
-    PERMISSION_DENIED = 1;   // call not permitted by policy
-    INVALID_ARGUMENT = 2;    // payload malformed / not deserialisable
-    UNAUTHENTICATED = 3;     // reserved for future authn use
+    PERMISSION_DENIED = 1;    // call not permitted by policy
+    RESOURCE_EXHAUSTED = 2;   // rate/size/resource exhaustion
+    INVALID = 3;              // payload malformed / not deserialisable
   }
   Code code = 1;
-  string message = 2;
+  string reason = 2;
+  optional bytes mcp_error = 3;
 }
 ```
 
-The servicer emits `PERMISSION_DENIED` for any aggregator deny, and
-`INVALID_ARGUMENT` for any JSON parse failure on the incoming
-`mcp_request` / `mcp_response` bytes. agentgateway maps both to JSON-RPC
-`-32001` on the agent-facing side.
+The servicer emits `PERMISSION_DENIED` for aggregator denies and `INVALID`
+for JSON parse failures on the incoming `mcp_request` / `mcp_response`
+bytes. On policy denies (`PERMISSION_DENIED`), `mcp_error` carries a
+structured JSON-RPC 2.0 error body: `code: -32001`, `message` equal to the
+generalised wire `reason` (same correlation `ref`), and `data` with a
+generalised policy `category` + `remedy` hint — pattern names, rule
+internals and match detail never leave the audit log.
 
-### HeaderValue and MetadataContext
+### McpHeader and metadata context
 
 ```proto
-message HeaderValue {
+message McpHeader {
   string key = 1;
-  string value = 2;
-}
-
-message MetadataContext {
-  string upstream_transport = 1;  // "stdio" | "sse" | "streamable_http"
-  string route_name = 2;
-  map<string, string> entries = 3;
+  bytes value = 2;
 }
 ```
 
-`headers` is empty when `metadata_context.upstream_transport == "stdio"` —
+`headers` is empty when `metadata_context["upstream_transport"] == "stdio"` —
 stdio MCP servers do not have HTTP headers. The servicer pulls
-`upstream_transport` and `route_name` out of the metadata context and
-threads them through to the engine for audit logging; it does **not** rely
-on headers for any authn/authz decision.
+`upstream_transport` and `route_name` out of the
+`google.protobuf.Struct metadata_context` and threads them through to the
+engine for audit logging; it does **not** rely on headers for any
+authn/authz decision.
 
 ## Request lifecycle (CheckRequest)
 
@@ -180,16 +183,16 @@ scan + invariant trace). The call graph, step by step:
 1. **`ExtMcpServicer.CheckRequest(request, context)`**
    ([`guardrails/servicer.py`](guardrails/servicer.py))
    - `_safe_json_loads(request.mcp_request)` — if parse fails, return
-     `McpRequestResult{error=INVALID_ARGUMENT}` immediately.
+     `McpRequestResult{error=INVALID}` immediately.
    - `_extract_metadata(request)` — pull `upstream_transport` and
-     `route_name` out of the `MetadataContext`.
+     `route_name` out of the `google.protobuf.Struct metadata_context`.
    - For `tools/call`: extract `tool_name = params["name"]`.
    - Extract request headers into a plain dict.
 2. **`GuardrailEngine.check_request(...)`**
    ([`guardrails/engine.py`](guardrails/engine.py))
    - Build an `McpCallContext` carrying method, service_names, tool_name,
      params, headers, transport, route.
-   - `text, truncated = truncate(extract_text(params), max_content_bytes)` —
+   - `texts, truncated = scan_windows(extract_text(params), max_content_bytes, scan_tail_bytes)` —
      `extract_text` flattens the params dict to a scan string with
      `ensure_ascii=False` (critical: hidden Unicode in argument values
      survives to the regex scanner). `truncate` cuts on a UTF-8 boundary
@@ -197,12 +200,26 @@ scan + invariant trace). The call graph, step by step:
      flag that is folded back into the context for audit.
    - Open an OTel span `guardrail.check_request` with `method`, `tool`,
      `transport` attributes.
-3. **Content scanners** — `_run_scanners(text, role="tool",
-self._c.request_scanners)`:
+3. **Tool ACL** (before any scanner) — for `tools/call` with a non-empty
+   tool name, `_tool_acl_violation(tool, ALLOW_TOOLS, DENY_TOOLS)` denies
+   immediately (`tool_acl` scanner result): DENY list wins, and a non-empty
+   ALLOW list acts as a whitelist (`prefix/*` wildcards supported). An ACL
+   deny short-circuits the content scanners.
+4. **Content scanners** — `_run_scanners(text, role="tool",
+self._c.request_scanners, context=ctx)` (the `McpCallContext` is threaded
+into every scanner's `context` kwarg):
    - `RegexScanner` (zero-dep, always on unless `ENABLE_REGEX_SCANNER=0`)
      — first-match-wins over `default_patterns()`: hidden ASCII, private
      keys, AWS / GitHub / GitLab / Slack tokens, high-entropy blobs,
-     credit cards, emails.
+     markdown-image exfil URLs (review grade), credit cards, emails.
+     Two-pass matching: pass 1 evaluates the raw text in pattern order;
+     only on a full miss, pass 2 re-evaluates every pattern against a
+     detection-only **normalized view** (NFKC fold + Unicode Cf strip +
+     Cyrillic/Greek homoglyph map), catching confusable / full-width /
+     zero-width-split evasions. The view is computed at most once per
+     scan call and never mutates the payload; view hits are marked
+     `[normalized-view match]` and fingerprint the original chunk
+     (`orig_sha256` / `orig_hmac`).
    - `OnnxPromptGuardScanner` (lazy import; falls back to regex-only if
      `onnxruntime` / `transformers` is absent) —  PromptGuard-2 for the
      `TOOL` role.
@@ -210,24 +227,30 @@ self._c.request_scanners)`:
      deadline set to `SCANNER_TIMEOUT_MS / 1000`. Timeouts and exceptions
      are translated per `FAILURE_MODE` (see
      [Failure and timeout handling](#failure-and-timeout-handling)).
-4. **Invariant trace** — under `self._trace_lock` (serialises concurrent
+5. **Invariant trace** — under `self._trace_lock` (serialises concurrent
    requests so traces cannot interleave half-calls):
-   - `self._c.invariant.record(tool_name, params.get("arguments", {}))` —
-     appends a `TraceEntry(tool, args)` to the bounded `deque(maxlen=64)`.
-   - `self._c.invariant.evaluate_or_allow()` — runs every rule in priority
+   - `self._c.invariant.record(tool_name, params.get("arguments", {}), key=trace_key)` —
+     appends a `TraceEntry(tool, args)` to the bounded `deque(maxlen=256)`,
+     only for `tools/call` with a non-empty tool name; `trace_key` is the
+     route name (or `route|header=value` when
+     `INVARIANT_TRACE_KEY_HEADERS` matches).
+   - `self._c.invariant.evaluate_or_allow(key=...)` — runs every rule in priority
      order against the resulting trace; first-match wins and returns a
      `BLOCK` `ScanResult`, otherwise `ALLOW`.
-5. **`DecisionAggregator.aggregate(results)`** — combines every
+6. **`DecisionAggregator.aggregate(results)`** — combines every
    `ScanResult` into a single `Decision` (see
-   [The DecisionAggregator](#the-decisionaggregator)).
-6. **Observability** — set span outcome (`deny` / `mutated` / `allow`),
+   [The DecisionAggregator](#the-decisionaggregator)). Request-side
+   redaction of `params.arguments` exists (`REDACT_REQUEST_PARAMS=1`) but is
+   **off by default** — a secret in tool-call params is BLOCKed by the
+   `RegexScanner`, not rewritten.
+7. **Observability** — set span outcome (`deny` / `mutated` / `allow`),
    `record_decision(phase="request", method, tool_name, ctx, decision)`
    emits the JSONL audit line and bumps the
    `mcp.guardrails.decisions{phase="request",outcome,method}` counter.
-7. **`ExtMcpServicer` maps the `Decision` to the proto oneof**:
+8. **`ExtMcpServicer` maps the `Decision` to the proto oneof**:
    - `decision.deny` -> `McpRequestResult{error=PERMISSION_DENIED}`.
-   - `decision.is_mutated` -> `McpRequestResult{mutated=Mutated{...}}`.
-   - otherwise -> `McpRequestResult{allowed=Pass()}`.
+   - `decision.is_mutated` -> `McpRequestResult{mutated=<raw json bytes>}`.
+   - otherwise -> `McpRequestResult{pass=Pass()}`.
 
 ## Response lifecycle (CheckResponse)
 
@@ -242,11 +265,11 @@ The call graph:
 
 1. **`ExtMcpServicer.CheckResponse(request, context)`** — same shape as
    `CheckRequest` but deserialises `request.mcp_response`. Malformed ->
-   `McpResponseResult{error=INVALID_ARGUMENT}`.
+   `McpResponseResult{error=INVALID}`.
 2. **`GuardrailEngine.check_response(...)`**:
    - Build `McpCallContext` (no `tool_name` on the response side; the
      method + result are what we have).
-   - `text, truncated = truncate(extract_text(result), max_content_bytes)` —
+   - `texts, truncated = scan_windows(extract_text(result), max_content_bytes, scan_tail_bytes)` —
      `extract_text` for a `tools/call` result pulls `content[].text` out of
      the result envelope; for a `tools/list` result it concatenates every
      tool's `description` + JSON-dumped `inputSchema` (to catch description
@@ -266,15 +289,51 @@ self._c.response_scanners)`:
    - At least one first-stage scanner returned `ScanOutcome.HUMAN_REVIEW`.
      When the gate fires, `_run_scanners(text, role="assistant",
 self._c.second_stage_scanners)` runs and the results are appended to the
-     aggregator input. The span gets `second_stage=True`.
+     aggregator input. The span gets `second_stage=True`. Before the LLM
+     call, the engine attaches a **trace summary** to the scanner context
+     (the last 5 tool-call names from the route's Invariant trace —
+     metadata only, never args) and the `AgentAlignmentScanner`
+     **pre-redacts** the flagged chunk with the standard
+     `RedactionScanner` patterns, so review-grade secrets/PII never leave
+     for the external LLM in cleartext.
      This is the cost-control knob from the original design: AgentAlignment
      is LLM-based (~300-800ms per call). Running it on every response would
      dominate sidecar latency and homelab cost; gating it on first-stage
      suspicion bounds the alignment cost to suspicious responses only.
+     The first-stage grey zone that feeds the gate is tunable via
+     `PG_REVIEW_THRESHOLD` (default 0.5): PromptGuard scores in
+     `[PG_REVIEW_THRESHOLD, LF_PROMPTGUARD_BLOCK_THRESHOLD)` flag
+     `HUMAN_REVIEW` instead of ALLOW.
 5. **No Invariant on the response side** — toxic-flow is a request-time
    property. The trace records `(tool, args)` on the request; the response
    carries no tool identity to record.
-6. **Aggregate, observe, map to oneof** — same as the request path, but
+6. **Redaction (mutation stage)** — `GuardrailEngine._redact(...)` runs the
+   `RedactionScanner` transformer ([`guardrails/redaction.py`](guardrails/redaction.py))
+   over the result **whenever the aggregate decision is not a deny** (a
+   `BLOCK` always wins). `HUMAN_REVIEW` payloads are redacted too when
+   `REDACT_ON_REVIEW=1` (default): the review verdict is preserved — the
+   aggregator's `human_review` flag and the audit outcome are untouched —
+   and the mutated payload rides alongside via the `mutated` oneof, so
+   review-grade PII is masked instead of passing through verbatim.
+   `REDACT_ON_REVIEW=0` restores the legacy behaviour (review payloads
+   pass+warn unmutated). The transformer recursively
+   walks the result JSON and rewrites string values, replacing secret/PII
+   matches (emails, credit cards, cloud/chat/LLM tokens, PEM private-key
+   blocks) with `[REDACTED:<TYPE>]` placeholders. Because it walks the
+   structure rather than the flattened scan text, the mutated payload is
+   always valid JSON with the same shape as the original. On any
+   substitution the engine attaches it as `Decision.mutated`, adds a
+   `redaction:N substitution(s)` marker to the reason, and sets the
+   `redactions=N` span attribute; the servicer maps it to
+   `McpResponseResult{mutated=<raw json bytes>}`. No substitutions -> plain
+   `pass`. Disabled with `ENABLE_REDACTION=0`. The regex sweep runs via
+   `asyncio.to_thread` (a multi-MB payload must not stall the event loop),
+   and payloads larger than `REDACTION_MAX_BYTES` (default 256KiB) skip
+   redaction entirely — they pass through unchanged with
+   `redaction_skipped=size` in the audit span. Skipping is safe: block-grade
+   secrets in an over-cap payload are still denied by the RegexScanner on
+   the head+tail scan windows before redaction would run.
+7. **Aggregate, observe, map to oneof** — same as the request path, but
    `phase="response"` in the audit record and counter.
 
 ## The DecisionAggregator
@@ -295,7 +354,9 @@ Two invariants hold by construction:
 1. **`BLOCK` always wins.** No `HUMAN_REVIEW_MODE` setting can downgrade a
    `BLOCK` to a pass. This is the load-bearing security property.
 2. **Mutation passthrough.** If the engine supplies a `mutated` payload
-   (e.g. a future PII-redaction pass) and no scanner blocks, the aggregator
+   (as the implemented redaction stage does — see
+   [Response lifecycle (CheckResponse)](#response-lifecycle-checkresponse))
+   and no scanner blocks, the aggregator
    forwards the mutation unchanged. The mutation is the engine's
    responsibility; the aggregator never synthesises one.
 
@@ -313,11 +374,35 @@ required.
 
 ### Sliding window
 
-The trace is a `collections.deque(maxlen=window)` (default `window=64`).
-`record(tool, args)` appends a `TraceEntry(tool, args)`. When the deque is
-full, the oldest entry is evicted automatically — this caps memory and
-rule-evaluation cost. The window should be large enough to span a typical
-agent tool-use chain (the design default of 64 covers most homelab flows).
+Traces are **isolated per route**: the engine keys each trace by the request's
+route name (falling back to the first service name), and the InvariantEngine
+keeps one `collections.deque(maxlen=window)` (default `window=256`) per key in
+an LRU map bounded by `INVARIANT_MAX_TRACES` (default 1024, least-recently-used
+tenant evicted). The trace key is the route name by default; when
+`INVARIANT_TRACE_KEY_HEADERS` is configured and the header is present, the key
+becomes `route|header=value` for per-session isolation (missing header ->
+route dimension). Only `tools/call` requests with a non-empty tool name are
+recorded. This prevents cross-tenant contamination: interleaved calls
+from different agents can neither assemble a cross-tenant toxic flow nor trip
+a loop rule against each other's history, and a key-flooding client cannot
+grow memory without bound.
+
+`record(tool, args, key=...)` appends a `TraceEntry(tool, args, ts)` to the
+key's deque (`ts` is a `time.monotonic()` stamp consumed by the
+time-windowed rules; hand-constructed entries default to `0.0`, which
+windowed rules treat as "now"). When the deque is full, the oldest entry is
+evicted automatically — this caps memory and rule-evaluation cost (bound:
+window x `INVARIANT_ARGS_MAX_BYTES` x `INVARIANT_MAX_TRACES`). The window
+should be large enough to span a typical agent tool-use chain; the default
+of 256 covers long multi-step plans.
+
+**Sticky partial-match progress (S-H4).** When a `ToxicFlowRule` matches a
+PREFIX of its steps (e.g. step 0 of 2), the progress is parked in a sticky
+map keyed `(trace_key, rule_name)` with a TTL (`INVARIANT_STICKY_TTL_S`,
+default 600s) and the same LRU bound as the trace map. Later evaluations
+resume matching from the parked step, so a flow whose early steps slide out
+of the window still completes. Progress that is not extended ages out; a
+full match clears the entry.
 
 ### Ordered subsequence matching (`ToxicFlowRule`)
 
@@ -336,6 +421,44 @@ rule:     [inbox_read, email_send(to=external)]
 The matcher is greedy left-to-right: for each trace entry, if it matches
 the current step, advance the step index. The rule fires when the step
 index reaches `len(steps)`. First-match wins across rules in priority order.
+
+**Negate guards.** A `FlowStep(negate=True)` is a negative guard, not a
+positive step: it never advances the sequence, but while it is *armed* —
+between the previously matched positive step and the next positive step —
+any trace entry matching it **voids** the progress made so far. Matching
+then restarts from step 0 with the remaining trace (a later clean sequence
+in the same window can still fire), and any parked sticky progress for the
+rule is dropped by the engine (a voided flow cannot resume from the negated
+prefix). Guards can carry arg matchers, so "void only if the approval names
+the same thread" is expressible. Canonical use: `inbox_read ->
+email_approve(negate) -> email_send(external)` — read-then-send fires,
+read-then-approve-then-send does not.
+
+### RateLimitRule sliding time-window rate limit
+
+A `RateLimitRule(tool, window_s, max_calls)` fires when any single tool
+whose name matches `tool` is called more than `max_calls` times within the
+trailing `window_s` seconds of the trace (by `TraceEntry.ts`). Counting is
+grouped per concrete tool name, so the `"*"` wildcard gives every tool its
+own budget rather than pooling all calls into one. Where `LoopRule` catches
+identical-args retry loops, `RateLimitRule` catches volumetric abuse with
+*varying* args (enumeration, spray). The window is recomputed from entry
+timestamps on every evaluation — entries that age out stop counting
+immediately, and legacy entries with `ts == 0.0` count as "now".
+
+### AggregateRule sliding time-window budget
+
+An `AggregateRule(field, max_total, tool, window_s, cast)` fires when the
+sum of `cast(args[field])` (dotted path; `cast` defaults to `float`) over
+matching calls within the trailing `window_s` exceeds `max_total` —
+cumulative budgets a per-call rule cannot express (total bytes read,
+recipients contacted). Entries with a missing/uncastable field contribute
+0. Like `RateLimitRule`, the window is **recomputed from entry timestamps
+on every evaluation** rather than kept in a persistent accumulator: this
+was chosen over a TTL-reset ledger because the semantics ("sum over the
+last N seconds") are trivially explainable, decrementing as entries slide
+out is exact, and there is no accumulator state to drift, reset, or lose
+across a hot rule reload.
 
 ### LoopRule fingerprint repetition
 
@@ -409,21 +532,45 @@ stays `NOT_SERVING`, the readiness probe never passes, and the Pod is
 removed from the Service endpoints. No traffic reaches a half-initialised
 sidecar.
 
+The same health signal doubles as a **runtime degradation** verdict
+(A-P0-4): a background watchdog re-evaluates `engine.healthy` every 2s.
+The engine keeps a sliding window of the last
+`UNHEALTHY_SCANNER_WINDOW` (default 100) scanner invocations; once at
+least `UNHEALTHY_SCANNER_MIN_SAMPLES` (default 20) invocations are
+recorded and the error/timeout fraction exceeds
+`UNHEALTHY_SCANNER_ERROR_RATE` (default 0.5), health flips to
+`NOT_SERVING` — and flips back automatically as the failures age out of
+the window. The rate is tracked under `failOpen` too, so a degraded
+scanner is visible to the orchestrator even when exchanges are still
+being allowed.
+
 ### Malformed JSON
 
 The servicer's `_safe_json_loads` catches `json.JSONDecodeError` and
-`UnicodeDecodeError` and maps both to `AuthorizationError{INVALID_ARGUMENT}`.
+`UnicodeDecodeError` and maps both to `AuthorizationError{INVALID}`.
 This is fail-closed on parse failure: a malformed payload cannot reach the
 engine.
 
 ### Large result truncation
 
 Tool output can be multi-MB; scanning it whole blows the inference latency
-budget and risks OOM. `truncate(text, MAX_CONTENT_BYTES)` cuts on a UTF-8
-boundary (default 32 KiB) and returns a `truncated` flag that is folded
-into the audit record (`truncated: true` in the JSONL line) and the OTel
-span attribute. 32 KiB covers the attacker-relevant head of any payload —
-an injection lives at the top of the response, not buried 10 MB in.
+budget and risks OOM. `scan_windows(text, MAX_CONTENT_BYTES, SCAN_TAIL_BYTES)`
+cuts a UTF-8-safe head window (default 32 KiB) and — for over-budget payloads —
+a mid window (centred on the unscanned remainder) plus a tail window (default
+8 KiB each). All chunks are scanned; the `truncated` flag is folded into the
+audit record (`truncated: true` in the JSONL line) and the OTel span attribute,
+alongside `scanned_bytes` / `total_bytes` coverage counters. The tail window
+closes the **truncation bypass** (padding that pushes the injection beyond the
+32 KiB head) and the mid window closes the **mid-payload blind spot** (padding
+that pushes it past the head but short of the tail). Set `SCAN_TAIL_BYTES=0`
+to revert to head-only scanning.
+
+Payloads beyond the `SCAN_MAX_PAYLOAD_BYTES` hard cap (default 1 MiB) are
+still scanned via the three windows, but the engine additionally attaches a
+`payload_size` `HUMAN_REVIEW` result whose reason carries the scanned/total
+byte counts — `HUMAN_REVIEW_MODE` then resolves pass+warn vs deny, so under
+fail-closed review handling a giant, mostly-unscanned payload cannot pass
+silently.
 
 ## Hot-reload
 
@@ -438,7 +585,8 @@ atomically:
 - Rule objects themselves are immutable (dataclasses with frozen-ish
   semantics via `__post_init__` normalisation), so once a snapshot is
   taken for evaluation the rule list cannot be mutated mid-evaluation.
-- The `InvariantEngine._trace` deque is guarded separately by an
+- The `InvariantEngine._traces` per-route trace map (LRU-bounded by
+  `INVARIANT_MAX_TRACES`) is guarded separately by an
   `asyncio.Lock` in the engine, so the trace append/evaluate pair is
   atomic with respect to other concurrent requests.
 
@@ -456,7 +604,11 @@ kubectl exec -n agent-system deploy/mcp-guardrails -- kill -HUP 1
 
 If the new rule pack fails to load (syntax error, missing `RULES`
 attribute), the handler logs a warning and the old rules stay active — a
-broken reload cannot leave the sidecar rule-less.
+broken reload cannot leave the sidecar rule-less. Both outcomes are also
+recorded durably: every reload attempt emits a
+`{"event": "rules_reload", "ok": …, "rules_version": …, "error": …}` audit
+line and bumps the `mcp.guardrails.rules_reload{result=success|error}`
+counter (A-P1-3).
 
 ## Observability
 
@@ -471,12 +623,22 @@ line per decision. Defaults to stdout when `AUDIT_LOG_PATH` is unset or
 ```json
 {
   "ts": 1730000000,
+  "ts_ms": 1730000000123.456,
   "phase": "request",
   "method": "tools/call",
   "tool": "email_send",
   "outcome": "deny",
-  "reason": "regex:hidden_ascii:block:hidden/control unicode detected (match='\u202e')",
+  "reason": "regex:hidden_ascii:block:hidden/control unicode detected (match_len=1 match_sha256=a1b2c3d4e5f6)",
+  "ref": "f9c27670",
+  "exchange_id": "gw-req-42",
+  "caller": "alice",
+  "payload_sha256": "0a1b2c3d4e5f",
+  "rules_version": 3,
+  "sidecar_version": "0.3.5",
+  "duration_ms": 4.21,
   "truncated": false,
+  "scanned_bytes": 512,
+  "total_bytes": 512,
   "upstream_transport": "streamable_http",
   "route": "filesystem-mcp",
   "scanners": [
@@ -491,10 +653,83 @@ line per decision. Defaults to stdout when `AUDIT_LOG_PATH` is unset or
 }
 ```
 
+Field notes (Wave-2 audit expansion):
+
+- `ts` is epoch **seconds** as an int; millisecond precision is available
+  via the sibling `ts_ms` field (epoch milliseconds, float). Both are
+  sampled from the same `time.time()` call.
+- `ref` and `exchange_id` are two **distinct** ids. `ref` is always an
+  engine-minted random uuid8: the JSON-RPC payload `id` is
+  attacker-controlled and is never trusted, so the wire deny reason
+  (`denied by content policy (ref …)`) can never be pre-computed or
+  spoofed by a caller. `exchange_id` is the cross-line correlation id,
+  resolved by the servicer only from trusted, dataplane-injected channels:
+  an agentgateway `metadata_context` key (`exchange_id` / `request_id` /
+  `x_request_id` / `trace_id`), else the `x-request-id` header, else a
+  fresh uuid8 fallback. Every accepted candidate is sanitised before use
+  (whitespace stripped, CR/LF and all other C0/C1 control characters
+  removed to prevent audit-log line injection, length capped at 64
+  chars). When the dataplane supplies a stable id, the request- and
+  response-side lines of one MCP exchange grep together on `exchange_id`.
+- `caller` is copied only from the `AUDIT_CALLER_HEADERS` whitelist
+  (default `x-forwarded-user` only — `x-session-id` is a quasi-credential
+  and must be opted in explicitly); other headers never reach the
+  audit log. The response side has no headers on the wire, so `caller` is
+  empty there — correlate via `exchange_id` instead.
+- `payload_sha256` is the 12-hex-char SHA-256 prefix of the scanned text
+  (correlation without storing payload content); `rules_version` is the
+  monotonic rule-pack version; `sidecar_version` the build version
+  (`GUARDRAIL_VERSION` override, else the package version); `duration_ms`
+  the decision latency.
+- Scanner reasons never embed raw matches or LLM output: regex matches use
+  the `match_len` / `match_sha256|match_hmac` fingerprint, and
+  AgentAlignment verdicts record only a length fingerprint
+  (`match_len=N`) — raw LLM observations are never persisted.
+
 The audit log is the durable, GitOps-friendly record that survives even
 when OTel collection is down. In K8s, point `AUDIT_LOG_PATH` at a mounted
 volume (or leave it on stdout and let your container log collector pick it
-up).
+up). Retention, access-control and integrity guidance lives in
+[`docs/compliance.md`](docs/compliance.md) (WORM / object-lock reference
+architecture, remaining known limitations).
+
+**Hash chain (A-P0-3, `AUDIT_HASH_CHAIN=1` default).** `AuditSink` adds
+two fields per line before serialisation: `prev_hash` — the 16-hex
+SHA-256 prefix of the previous line's full raw JSON (the all-zero genesis
+constant for the first line of a stream) — and `line_hash` — the prefix
+of this line's JSON minus the `line_hash` field. Editing, dropping or
+reordering any line breaks the chain at the next line; appends never
+invalidate earlier lines. Verify offline with
+`guardrail_ctl audit verify <file>` (first broken line number, non-zero
+exit on a break). The chain state is a per-process in-memory cursor, so
+the format assumes ONE writer per stream: multiple replicas appending to
+a single shared file interleave `prev_hash` links and fail verification —
+run a single replica, per-replica files, or ship stdout through the log
+collector. Disable with `AUDIT_HASH_CHAIN=0` (plain lines, no chain
+fields).
+
+### HUMAN_REVIEW webhook (optional, fire-and-forget)
+
+When `REVIEW_WEBHOOK_URL` is set, any decision carrying the
+`human_review` flag additionally POSTs a metadata-only JSON body
+(`outcome` / `reason` / `ref` / `exchange_id` / `ts`) to that URL
+([`guardrails/notify.py`](guardrails/notify.py)). Delivery is a background
+`asyncio` task with a 2s timeout over zero-dependency `urllib` — a slow or
+failing endpoint only logs a warning and can never block or alter the
+decision path, and there are no retries (the audit log stays the
+authoritative record; the webhook is a notification convenience, not a
+control).
+
+### Graceful shutdown ordering (A-P2-4)
+
+On SIGTERM/SIGINT the entrypoint runs an ordered drain
+(`server.graceful_shutdown`): first the gRPC health service flips to
+`NOT_SERVING` (both the overall and the `ExtMcp` service entries) and the
+health watchdog is cancelled so it cannot flip back mid-drain; then the
+sidecar waits `SHUTDOWN_DRAIN_S` seconds (default 5.0) for the readiness
+transition to propagate through kubelet → endpoints → dataplane; only then
+`server.stop(grace)` drains in-flight RPCs. New exchanges stop arriving
+early in the window while in-flight ones complete inside the gRPC grace.
 
 ### OTel spans and metrics (optional)
 
@@ -507,9 +742,23 @@ importable, `Observability._init_otel` wires up:
   `method`, `tool`, `transport`, `outcome`, `reason`, `duration_ms`, and
   (on the response side) `second_stage` attributes.
 - A `MeterProvider` with a `PeriodicExportingMetricReader` (15s export
-  interval) over `OTLPMetricExporter`. One counter is registered:
-  `mcp.guardrails.decisions{unit=1}` with attributes
-  `{phase, outcome, method}`.
+  interval) over `OTLPMetricExporter`. Instruments registered (all labels
+  are low-cardinality by construction — see the cardinality rule below):
+
+  | Instrument | Type | Labels |
+  |---|---|---|
+  | `mcp.guardrails.decisions` | counter | `phase`, `outcome`, `method` |
+  | `mcp.guardrails.decision_duration_ms` | histogram (ms) | `phase`, `outcome` |
+  | `mcp.guardrails.scanner_results` | counter | `scanner`, `outcome` (incl. `error` / `timeout`) |
+  | `mcp.guardrails.redactions` | counter | — |
+  | `mcp.guardrails.invariant_hits` | counter | `rule` (rule-pack names only) |
+  | `mcp.guardrails.rules_reload` | counter | `result` (`success` / `error`) |
+
+  **Cardinality rule:** metric labels are restricted to bounded enums —
+  phase/outcome/method, configured scanner names, loaded rule-pack rule
+  names, reload result. Per-exchange values (`ref` / `exchange_id`, tool
+  name, caller, payload hashes) must NEVER become metric labels; they
+  belong in the audit log only.
 
 If the SDK is absent or the endpoint is unreachable, the sidecar degrades
 to audit-only operation (a warning is logged at startup). The audit log is
@@ -574,12 +823,12 @@ each row.
 | Failure mode           | failClosed by default                     | Write-capable agents (file write, email send, k8s apply) are far more dangerous unguarded than blocked. Loud `-32001` beats silent exfiltration.                                        |
 | Replicas               | 2 (with PDB minAvailable=1)               | Survives a single Pod restart / node drain. 1 replica is a single point of failure; 3+ is overkill for a homelab. HPA scales 2-4 on CPU 70%.                                            |
 | Resource limits        | 500m/2Gi request, 2/4Gi limit             | Covers onnxruntime CPU + PromptGuard-2 weights (~350MB) with headroom. AgentAlignment (when enabled) calls an external LLM API — no extra local model memory needed.                     |
-| Trace window           | 64 calls                                  | Covers a typical homelab agent tool-use chain (most plans fit in <32 calls). Bump for long multi-step plans; cost is O(window \* rules) per evaluation.                                 |
+| Trace window           | 256 calls                                 | Default 256 covers long multi-step plans (a typical homelab chain still fits in <32 calls); cost is O(window \* rules) per evaluation, so only tune down if memory-bound.               |
 | Observability          | JSONL audit (always) + OTel (opt-in)      | Audit log survives OTel collector outages and is GitOps-friendly. OTel adds spans + a counter when collection is up; the floor is the audit log, the ceiling is OTel.                   |
 | Scanner stack          | Regex (always) + PromptGuard ONNX (opt-in) | Regex catches hidden ASCII / PII / secrets with zero deps. PromptGuard ONNX adds semantic injection detection via `onnxruntime` (~15MB); no torch needed. Both on by default; degrades gracefully to regex-only. |
 | Content budget         | 32 KiB per scan                           | Tool output can be multi-MB; scanning it whole blows latency and risks OOM. 32 KiB covers the attacker-relevant head of any payload (injections live at the top).                       |
 | Scanner timeout        | 500 ms                                    | Strictly less than the agentgateway processor timeout (recommended 800-1000ms). Sidecar decides first; gateway timeout is the backstop.                                                 |
-| Proto field naming     | `allowed` (not `pass`)                    | Wire-compatible with agentgateway via field numbers. Renamed to avoid Python `pass`-keyword kwarg collision in the generated stubs. Pure cosmetic.                                      |
+| Proto contract         | Vendored from agentgateway main           | `proto/ext_mcp.proto` matches upstream `agentgateway.dev.ext_mcp`. The Python servicer handles the `pass` keyword collision via `getattr(result, "pass")`.                    |
 | Hot-reload mechanism   | SIGHUP -> RulePack.reload()               | Operators swap rules without dropping the gRPC server. Lock-guarded swap; in-flight evaluations see the old rule tuple to completion.                                                   |
 | stdio upstream headers | Treat as untrusted / empty                | agentgateway forwards an empty header set for stdio upstreams. Do not rely on headers for authn/authz when `upstream_transport == "stdio"`.                                             |
 
@@ -606,15 +855,15 @@ sequenceDiagram
     Sidecar->>INV: record(tool, args) + evaluate()
     PG-->>Sidecar: ScanDecision
     INV-->>Sidecar: ScanResult
-    Sidecar-->>GW: McpRequestResult{allowed|mutated|error}
-    alt allowed / mutated
+    Sidecar-->>GW: McpRequestResult{pass|mutated|error}
+    alt pass / mutated
         GW->>MCP: forward JSON-RPC
         MCP-->>GW: result
         GW->>Sidecar: CheckResponse(McpResponse)
         Sidecar->>PG: scan(result, role=ASSISTANT)
         PG-->>Sidecar: ScanDecision
-        Sidecar-->>GW: McpResponseResult{allowed|mutated|error}
-        alt allowed / mutated
+        Sidecar-->>GW: McpResponseResult{pass|mutated|error}
+        alt pass / mutated
             GW-->>Agent: result
         else error
             GW-->>Agent: JSON-RPC -32001
@@ -640,7 +889,7 @@ flowchart TD
     end
 
     subgraph Engine
-        ENG --> EXT[extract_text + truncate]
+        ENG --> EXT[extract_text + scan_windows (head/mid/tail)]
         EXT --> RX[RegexScanner<br/>hidden-ascii / PII / secrets]
         EXT --> LF[OnnxPromptGuardScanner<br/>PromptGuard-2]
         EXT --> INV[InvariantEngine<br/>trace record + evaluate]

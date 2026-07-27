@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a defect in extmcp-guardrails (false allow, false deny, crash, performance, etc.)
+description: Report a defect in mcp-guardrails (false allow, false deny, crash, performance, etc.)
 title: "[bug]: "
 labels: ["bug", "triage"]
 body:
@@ -43,7 +43,7 @@ body:
     id: version
     attributes:
       label: Guardrail version / image tag
-      placeholder: "0.1.0  or  ghcr.io/soulwhisper/extmcp-guardrails:0.1.0"
+      placeholder: "0.1.0  or  ghcr.io/soulwhisper/mcp-guardrails:0.1.0"
     validations:
       required: true
 

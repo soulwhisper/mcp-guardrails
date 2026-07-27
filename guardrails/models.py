@@ -83,6 +83,14 @@ class Decision:
     mutated: Any | None = None
     human_review: bool = False
     scanners: tuple[ScanResult, ...] = field(default_factory=tuple)
+    # Short correlation id minted by the engine per exchange. Recorded in the
+    # audit decision line AND reused by the servicer's generalised deny reason,
+    # so a tenant-reported ``ref`` always greps to the full internal record.
+    ref: str = ""
+    # Number of redaction substitutions applied to the forwarded payload
+    # (0 when redaction did not run or matched nothing). Surfaced by the
+    # servicer in the ``guardrail.redactions`` result metadata (F-P1-2).
+    redactions: int = 0
 
     @property
     def is_mutated(self) -> bool:
@@ -107,3 +115,23 @@ class McpCallContext:
     upstream_transport: str = ""
     route_name: str = ""
     truncated: bool = False
+    # Scan coverage (S-H2): how many UTF-8 bytes of the extracted text the
+    # scanners actually saw vs the payload's total size. Surfaced in the
+    # audit record so operators can spot under-scanned giant payloads.
+    scanned_bytes: int = 0
+    total_bytes: int = 0
+    # A-P0-1: audit-only correlation id for the MCP exchange, extracted by
+    # the servicer from trusted agentgateway-injected channels
+    # (metadata_context / x-request-id header, uuid8 fallback) — never from
+    # the attacker-controlled payload. Independent of ``Decision.ref``,
+    # which is always an engine-minted random uuid8 (PR-#65 semantics).
+    exchange_id: str = ""
+    # A-P1-1: whitelisted caller identity header (see
+    # ``GuardrailConfig.audit_caller_headers``). Request side only — the
+    # CheckResponse proto carries no headers.
+    caller: str = ""
+    # Trace summary for second-stage scanners (AgentAlignment): the engine
+    # fills this with the most recent tool-call names from the Invariant
+    # trace snapshot before invoking the second stage, so the LLM judge
+    # sees the agent's recent trajectory, not just the flagged chunk.
+    trace_summary: str = ""

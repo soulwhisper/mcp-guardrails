@@ -1,137 +1,72 @@
-// ext_mcp.proto
-//
-// Reconstruction of the agentgateway ExtMcp gRPC contract.
-//
-// ExtMcp is an Envoy ext_authz-style authorization server that operates at the
-// MCP (Model Context Protocol) method-call boundary. agentgateway invokes it
-// twice per MCP exchange — once before forwarding the agent's request to the
-// upstream MCP server (CheckRequest), and once before returning the upstream
-// response to the agent (CheckResponse). Each call returns one of three
-// states:
-//
-//   * allowed  (Pass)            — forward unchanged
-//   * mutated                   — replace the payload with the supplied bytes
-//   * error (AuthorizationError) — deny; agentgateway surfaces JSON-RPC -32001
-//
-// Field NAMES here are illustrative; only field NUMBERS participate in the
-// wire format, so this proto is wire-compatible with the upstream
-// agentgateway proto regardless of cosmetic naming differences. We name the
-// Pass oneof member `allowed` rather than `pass` so the generated Python
-// module never needs a reserved-word kwarg workaround.
-//
-// Source of truth: agentgateway crates/protos/proto/ext_mcp.proto
-// (https://github.com/agentgateway/agentgateway). When vendoring against a
-// pinned agentgateway release, prefer regenerating from the upstream proto
-// via `make proto` and overwriting the committed stubs.
-
 syntax = "proto3";
 
-package agentgateway.ext_mcp.v1alpha1;
+package agentgateway.dev.ext_mcp;
 
-option go_package = "agentgateway.dev/ext_mcp/v1alpha1;extmcpv1alpha1";
+option go_package = "github.com/agentgateway/agentgateway/go/api;api";
 
-// ExtMcp is implemented by the guardrail sidecar. Both RPCs MUST be
-// non-blocking and SHOULD complete well under the gateway-side processor
-// timeout (recommended sidecar deadline 500ms, gateway 800-1000ms).
+import "google/protobuf/struct.proto";
+
+// ExtMcp is the wire protocol for an MCP-aware external policy server.
+// Modeled on Envoy ext_authz, but at the MCP method layer.
+// Covers both gating and mutation.
 service ExtMcp {
-  // CheckRequest inspects an outbound MCP request (the agent -> upstream
-  // direction). The sidecar may pass, mutate the params, or deny.
-  rpc CheckRequest(McpRequest) returns (McpRequestResult) {}
-
-  // CheckResponse inspects an inbound MCP response (upstream -> agent). This
-  // is the primary defence against indirect prompt injection carried in tool
-  // output, tool descriptions, prompt bodies and resource contents.
-  rpc CheckResponse(McpResponse) returns (McpResponseResult) {}
+  rpc CheckRequest(McpRequest) returns (McpRequestResult);
+  rpc CheckResponse(McpResponse) returns (McpResponseResult);
 }
 
-// HeaderValue mirrors Envoy's config.route.v3.HeaderValueMatcher semantics
-// for the request headers agentgateway forwards. For stdio upstreams the
-// header set is empty — servicers MUST NOT rely on headers for authn/authz
-// when the upstream transport is stdio.
-message HeaderValue {
-  string key = 1;
-  string value = 2;
-}
-
-// MetadataContext carries the gateway-side per-request metadata (tenant,
-// route, listener, upstream transport kind). Opaque to the sidecar beyond
-// the explicitly-typed fields; servicers treat it as supplemental context.
-message MetadataContext {
-  // Transport of the upstream MCP server: "stdio" | "sse" | "streamable_http".
-  string upstream_transport = 1;
-  // Logical listener/route name that produced this call.
-  string route_name = 2;
-  // Free-form metadata bag forwarded by the gateway.
-  map<string, string> entries = 3;
-}
-
-// McpRequest is the argument to CheckRequest.
 message McpRequest {
-  // MCP JSON-RPC method, e.g. "tools/call", "tools/list", "prompts/get",
-  // "resources/read".
-  string method = 1;
-  // Dotted MCP service identifiers the gateway resolved for this call.
-  repeated string service_names = 2;
-  // Raw JSON-RPC `params` object, serialised as UTF-8 bytes. May be empty for
-  // methods that carry no params (e.g. tools/list).
-  bytes mcp_request = 3;
-  // Request headers (empty for stdio upstreams).
-  repeated HeaderValue headers = 4;
-  // Gateway-side metadata context.
-  MetadataContext metadata_context = 5;
+  repeated string service_names = 1;
+  string method = 2;
+  google.protobuf.Struct metadata_context = 3;
+  optional bytes mcp_request = 4;
+  repeated McpHeader headers = 5;
 }
 
-// McpResponse is the argument to CheckResponse.
 message McpResponse {
-  // MCP JSON-RPC method that produced this response.
-  string method = 1;
-  repeated string service_names = 2;
-  // Raw JSON-RPC `result` object, serialised as UTF-8 bytes. May be empty.
-  bytes mcp_response = 3;
-  // Gateway-side metadata context.
-  MetadataContext metadata_context = 4;
+  repeated string service_names = 1;
+  string method = 2;
+  google.protobuf.Struct metadata_context = 3;
+  bytes mcp_response = 4;
 }
 
-// Pass signals "forward unchanged".
+message McpRequestResult {
+  oneof result {
+    Pass pass = 1;
+    bytes mutated = 2;
+    AuthorizationError error = 3;
+  }
+  HeaderMutation header_mutation = 4;
+  google.protobuf.Struct metadata = 5;
+}
+
+message McpResponseResult {
+  oneof result {
+    Pass pass = 1;
+    bytes mutated = 2;
+    AuthorizationError error = 3;
+  }
+}
+
+message HeaderMutation {
+  repeated McpHeader set = 1;
+  repeated string remove = 2;
+}
+
+message McpHeader {
+  string key = 1;
+  bytes value = 2;
+}
+
 message Pass {}
 
-// Mutated signals "replace the payload with the following bytes". For a
-// request, the bytes replace the JSON-RPC params; for a response, they
-// replace the JSON-RPC result.
-message Mutated {
-  bytes mutated = 1;
-}
-
-// AuthorizationError denies the exchange. agentgateway maps this to a
-// JSON-RPC error with code -32001.
 message AuthorizationError {
   enum Code {
     UNKNOWN = 0;
-    // The call is not permitted by policy (e.g. toxic flow, blocked content).
     PERMISSION_DENIED = 1;
-    // The payload is malformed / not deserialisable.
-    INVALID_ARGUMENT = 2;
-    // Authentication missing/invalid (rare for MCP; reserved for future).
-    UNAUTHENTICATED = 3;
+    RESOURCE_EXHAUSTED = 2;
+    INVALID = 3;
   }
   Code code = 1;
-  string message = 2;
-}
-
-// McpRequestResult is the return value of CheckRequest.
-message McpRequestResult {
-  oneof result {
-    Pass allowed = 1;
-    Mutated mutated = 2;
-    AuthorizationError error = 3;
-  }
-}
-
-// McpResponseResult is the return value of CheckResponse.
-message McpResponseResult {
-  oneof result {
-    Pass allowed = 1;
-    Mutated mutated = 2;
-    AuthorizationError error = 3;
-  }
+  string reason = 2;
+  optional bytes mcp_error = 3;
 }

@@ -32,7 +32,7 @@ git clone https://github.com/soulwhisper/mcp-guardrails.git
 cd mcp-guardrails
 make dev          # pip install -e ".[dev]" — pytest, ruff, grpcio-tools
 make proto        # regenerate stubs (no-op if proto/ext_mcp.proto is unchanged)
-make test         # 72 unit tests, ~0.3s
+make test         # 305+ unit tests, ~2s
 make lint         # ruff check
 ```
 
@@ -66,8 +66,8 @@ landing the regenerated stubs.
 If you only rename a field (without touching field numbers), the generated
 stubs will diff but the wire format is unchanged — still commit the regen.
 Field **numbers** are the wire-compat surface; field **names** are cosmetic
-(this is why the proto's oneof member is named `allowed` rather than `pass` —
-see the field-naming note in [`README.md`](README.md)).
+(the local proto is vendored from upstream `agentgateway/agentgateway`; see
+the upstream contract note in [`README.md`](README.md)).
 
 ## Lint and test
 
@@ -86,7 +86,7 @@ and `filterwarnings = ["error", ...]`. New warnings will fail the suite —
 fix the warning rather than suppressing it. The exception is grpc
 deprecation warnings, which are ignored.
 
-The 72 unit tests cover:
+The 305+ unit tests cover:
 
 - `tests/test_aggregator.py` — fail-closed table, HUMAN_REVIEW resolution,
   mutation passthrough.
@@ -94,10 +94,32 @@ The 72 unit tests cover:
   fingerprinting, dotted-path resolution, hot-reload.
 - `tests/test_scanners.py` — regex patterns, truncation, `extract_text`
   hidden-Unicode preservation (the `ensure_ascii=False` regression).
+- `tests/test_hardening_p1.py` — P1 hardening regressions: head+tail
+  `scan_windows` truncation-bypass fix, per-route invariant trace isolation
+  with a bounded LRU.
 - `tests/test_engine.py` — timeout / exception handling per failure mode,
   second-stage gating on HUMAN_REVIEW, invariant trace serialisation.
+- `tests/test_redaction.py` — redaction / mutation pipeline
+  (RedactionScanner + engine wiring, size-cap skip).
+- `tests/test_scanner_redaction.py` — secret redaction inside scanner
+  reasons (no secret material leaks into reasons / audit).
+- `tests/test_otel.py` — Observability: child spans, audit sink, duration
+  tracking.
 - `tests/test_servicer.py` — in-process gRPC round-trip + wire mapping
-  (allowed / mutated / error oneof, INVALID_ARGUMENT on malformed JSON).
+  (pass / mutated / error oneof, INVALID on malformed JSON).
+- `tests/test_server_module.py` — import-time smoke for the `server`
+  module (coverage + trivial import regressions).
+- `tests/test_wave3_rules.py` — Wave-3 rule layer: `RateLimitRule` /
+  `AggregateRule` sliding time-window semantics (per-tool counting, exact
+  window slide-out) and `FlowStep(negate=True)` void semantics incl.
+  sticky-progress interaction.
+- `tests/test_wave3_scanners.py` — PromptGuard grey-zone dual threshold
+  (`PG_REVIEW_THRESHOLD`), AgentAlignment pre-egress redaction + trace
+  summary, engine second-stage context wiring.
+- `tests/test_redteam.py` — red-team capability baseline: base64 injection,
+  zero-width/confusables, markdown-image exfil, `### SYSTEM` case variants,
+  head/mid/tail padding bypasses, window-flush sequences. Current gaps are
+  `xfail(strict=False)` with the residual documented.
 
 ## Adding a scanner
 
@@ -186,7 +208,7 @@ Rule packs are hot-reloadable at runtime via `SIGHUP` — see
 Before opening a PR:
 
 - [ ] `make lint` clean.
-- [ ] `make test` green (72+ tests).
+- [ ] `make test` green (305+ tests).
 - [ ] `python3 tests/e2e_smoke.py` green if you touched the servicer, engine,
       config, or server entrypoint.
 - [ ] `make proto` re-run and stubs committed if you touched

@@ -1,0 +1,7 @@
+# pip-audit accepted-risk whitelist, one vulnerability ID per line.
+# `make audit` passes each entry as `--ignore-vuln <ID>`.
+#
+# Only add an ID here with a written justification (why the CVE does not
+# apply to this deployment shape) and a review date, e.g.:
+#
+# GHSA-xxxx-yyyy-zzzz  # 2026-08-01: DoS in code path we never invoke; revisit at next dep bump

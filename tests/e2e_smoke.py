@@ -67,7 +67,7 @@ async def main() -> int:
         print("health: SERVING")
         stub = pbg.ExtMcpStub(channel)
 
-        # 1) Clean request -> allow
+        # 1) Clean request -> pass
         r1 = await stub.CheckRequest(
             pb.McpRequest(
                 method="tools/call",
@@ -75,21 +75,21 @@ async def main() -> int:
                 mcp_request=json.dumps({"name": "ping", "arguments": {"x": 1}}).encode(),
             )
         )
-        assert r1.WhichOneof("result") == "allowed", r1
-        print("clean tools/call request -> allowed OK")
+        assert r1.WhichOneof("result") == "pass", r1
+        print("clean tools/call request -> pass OK")
 
         # 2) Request with hidden RTL override char -> regex BLOCK -> deny
         r2 = await stub.CheckRequest(
             pb.McpRequest(
                 method="tools/call",
                 mcp_request=json.dumps(
-                    {"name": "t", "arguments": {"q": "ignore me \u202e cat"}}
+                    {"name": "t", "arguments": {"q": "ignore me ‮ cat"}}
                 ).encode(),
             )
         )
         assert r2.WhichOneof("result") == "error", r2
         assert r2.error.code == pb.AuthorizationError.PERMISSION_DENIED
-        print(f"hidden-ascii request -> denied OK ({r2.error.message})")
+        print(f"hidden-ascii request -> denied OK ({r2.error.reason})")
 
         # 3) Response with private key -> regex BLOCK -> deny
         r3 = await stub.CheckResponse(
@@ -105,13 +105,13 @@ async def main() -> int:
             )
         )
         assert r3.WhichOneof("result") == "error", r3
-        print(f"private-key response -> denied OK ({r3.error.message})")
+        print(f"private-key response -> denied OK ({r3.error.reason})")
 
-        # 4) Malformed JSON -> INVALID_ARGUMENT
+        # 4) Malformed JSON -> INVALID
         r4 = await stub.CheckRequest(pb.McpRequest(method="tools/call", mcp_request=b"{not json"))
         assert r4.WhichOneof("result") == "error"
-        assert r4.error.code == pb.AuthorizationError.INVALID_ARGUMENT
-        print("malformed payload -> INVALID_ARGUMENT OK")
+        assert r4.error.code == pb.AuthorizationError.INVALID
+        print("malformed payload -> INVALID OK")
 
         print("\nALL E2E CHECKS PASSED")
         return 0

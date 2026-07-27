@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose a new scanner, rule, invariant, or behavioural change for extmcp-guardrails.
+description: Propose a new scanner, rule, invariant, or behavioural change for mcp-guardrails.
 title: "[feat]: "
 labels: ["enhancement", "triage"]
 body:
