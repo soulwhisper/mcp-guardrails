@@ -2,8 +2,8 @@
 # e2e_agentgateway.sh — live interoperability test: mcp-guardrails sidecar
 # with a real agentgateway binary (standalone config, mcpGuardrails processor).
 #
-# Verified against agentgateway v1.3.1 (standalone YAML, binds/mcpGuardrails
-# schema). The script boots:
+# Verified against agentgateway v1.4.0 (standalone YAML, binds/mcpGuardrails
+# schema). Also backward-compatible with v1.3.1. The script boots:
 #
 #   client(curl) -> agentgateway :3000 (mcpGuardrails, failClosed)
 #                -> ExtMcp sidecar gRPC :9001 (this repo, regex-only mode)
