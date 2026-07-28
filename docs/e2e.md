@@ -1,7 +1,7 @@
 # End-to-end test (real agentgateway)
 
 `scripts/e2e_agentgateway.sh` stands up the full production topology against
-a **real agentgateway binary** (verified with v1.3.1, standalone YAML):
+a **real agentgateway binary** (verified with v1.4.0; backward-compatible with v1.3.1):
 
 ```text
 client(curl) -> agentgateway :3000 (mcpGuardrails processor, failClosed)

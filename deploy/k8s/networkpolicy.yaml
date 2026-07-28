@@ -1,0 +1,131 @@
+# NetworkPolicy — restricts ingress to the ExtMcp guardrail sidecar.
+#
+# The guardrail's gRPC port (9001, exposed via Service :4445) is a security
+# boundary: any Pod in the cluster that can reach it can inject trace entries,
+# exhaust scanner resources, or probe the ONNX model. This policy enforces
+# least-privilege ingress:
+#
+#   1. Default deny all ingress to the guardrail Pods.
+#   2. Allow agentgateway data-plane Pods to reach the gRPC port (via the
+#      Service), so CheckRequest/CheckResponse calls work.
+#   3. Allow the K8s API server (metrics scraping via Prometheus, if enabled)
+#      to reach the optional metrics port (9090).
+#   4. Allow DNS (UDP 53) for forward-proxy / OTLP exporter host resolution.
+#
+# *** ADJUST THE agentgateway NAMESPACE BELOW ***
+# The agentgateway data-plane may run in `agentgateway-system`,
+# `gateway-system`, or a custom namespace. Replace the `namespaceSelector`
+# value in the ingress-from-agentgateway rule to match your deployment.
+# If agentgateway runs in the SAME namespace (`agent-system`), the
+# ingress-from-same-namespace rule already covers it — you can delete the
+# cross-namespace rule.
+#
+# Apply:
+#   kubectl apply -f deploy/k8s/networkpolicy.yaml
+# Or add to kustomization.yaml resources list.
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-guardrails-deny-default
+  namespace: agent-system
+  labels:
+    app.kubernetes.io/name: mcp-guardrails
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: agentgateway
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app: mcp-guardrails
+  policyTypes:
+    - Ingress
+  # No ingress rules = deny all incoming traffic.
+  # Allow rules are defined in a separate policy below so they are additive
+  # (NetworkPolicy rules are unioned across policies matching the same Pods).
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-guardrails-allow-grpc
+  namespace: agent-system
+  labels:
+    app.kubernetes.io/name: mcp-guardrails
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: agentgateway
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app: mcp-guardrails
+  policyTypes:
+    - Ingress
+  ingress:
+    # Rule 1: Allow gRPC from agentgateway data-plane Pods in the agentgateway
+    # namespace. Replace `agentgateway-system` with your agentgateway namespace.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentgateway-system
+          podSelector:
+            matchLabels:
+              app: agentgateway
+      ports:
+        - protocol: TCP
+          port: 9001
+        - protocol: TCP
+          port: 4445
+
+    # Rule 2: Allow gRPC from within the same namespace (covers the case where
+    # agentgateway and the guardrail share the `agent-system` namespace, and
+    # enables the e2e smoke test Pod to reach the sidecar).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agent-system
+      ports:
+        - protocol: TCP
+          port: 9001
+        - protocol: TCP
+          port: 4445
+
+    # Rule 3: Allow metrics scraping from Prometheus (optional — only
+    # needed if OTel Prometheus exporter or a metrics endpoint is enabled).
+    # Uncomment and adjust the namespace when metrics are in use.
+    # - from:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           kubernetes.io/metadata.name: monitoring
+    #   ports:
+    #     - protocol: TCP
+    #       port: 9090
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-guardrails-allow-dns
+  namespace: agent-system
+  labels:
+    app.kubernetes.io/name: mcp-guardrails
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: agentgateway
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app: mcp-guardrails
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS queries to CoreDNS / kube-dns.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53

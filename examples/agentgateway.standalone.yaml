@@ -1,7 +1,8 @@
 # yaml-language-server: $schema=https://agentgateway.dev/schema/config
-# agentgateway v1.3.1 standalone config — verified live against this repo's
+# agentgateway v1.4.0 standalone config — verified live against this repo's
 # ExtMcp guardrail sidecar (see scripts/e2e_agentgateway.sh).
-#
+# Also compatible with v1.3.1 (the `binds` model is retained in v1.4.0;
+# v1.4.0 also offers the new `gateways` model as an alternative).
 # Topology:
 #   client -> :3000 (CORS + mcpGuardrails processor, failClosed)
 #          -> ExtMcp sidecar gRPC localhost:9001 (h2c, plaintext)
@@ -37,9 +38,8 @@ binds:
             failureMode: failClosed
             # Inline backend policy for the callout: deadline for the ExtMcp
             # gRPC request. On expiry, failureMode (failClosed) engages.
-            # NOTE: not in the published docs; derived from
-            # crates/agentgateway/src/mcp/guardrails/mod.rs Remote.policies ->
-            # SimpleLocalBackendPolicies.http.requestTimeout (v1.3.1 source).
+            # (source: crates/agentgateway/src/mcp/guardrails/mod.rs
+            #  Remote.policies -> SimpleLocalBackendPolicies.http.requestTimeout)
             policies:
               http:
                 requestTimeout: 5s

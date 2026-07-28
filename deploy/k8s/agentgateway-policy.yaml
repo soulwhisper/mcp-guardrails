@@ -80,6 +80,12 @@ spec:
             # If the guardrail is unreachable or returns an error, block the
             # MCP call. See file header for rationale.
             failureMode: FailClosed
+            # agentgateway v1.4.0 applies a default callout timeout; set an
+            # explicit 5s to match the sidecar's worst-case scanner budget
+            # (PromptGuard sliding-window ONNX inference across multiple
+            # 512-token windows). Shorter than 5s risks scanner timeouts on
+            # long payloads under load.
+            requestTimeout: 5s
             methods:
               # Full = Request + Response. See header: this is the
               # single most important phase choice in the policy.
