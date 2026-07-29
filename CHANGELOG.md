@@ -5,6 +5,29 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.5.0...v0.6.0) (2026-07-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **github-action:** Update astral-sh/setup-uv action ( v8.3.2 → v9.0.0 ) ([#89](https://github.com/soulwhisper/mcp-guardrails/issues/89))
+
+### Documentation
+
+* **plans:** add MCP 2026-07-28 spec eval and migration plan ([#93](https://github.com/soulwhisper/mcp-guardrails/issues/93)) ([6758e15](https://github.com/soulwhisper/mcp-guardrails/commit/6758e15ff0f454eda5b107c60a8d3a5c8745a943))
+
+
+### Continuous Integration
+
+* **github-action:** Update astral-sh/setup-uv action ( v8.3.2 → v9.0.0 ) ([#89](https://github.com/soulwhisper/mcp-guardrails/issues/89)) ([228e06d](https://github.com/soulwhisper/mcp-guardrails/commit/228e06df22964eeba286ed35e26e84653fe8d523))
+* **github-action:** update docker/login-action digest ( 371161b → dbcb813 ) ([#94](https://github.com/soulwhisper/mcp-guardrails/issues/94)) ([370594a](https://github.com/soulwhisper/mcp-guardrails/commit/370594af1598861c6e26912a2247e34365206a88))
+* **github-action:** update docker/login-action digest ( abd2ef4 → 371161b ) ([#92](https://github.com/soulwhisper/mcp-guardrails/issues/92)) ([6fc576b](https://github.com/soulwhisper/mcp-guardrails/commit/6fc576b1303e5daaf9bd1d73b7fc7143246d07e3))
+
+
+### Chores
+
+* CI/dep updates, agentgateway v1.4.0 refs, NetworkPolicy + requestTimeout ([#91](https://github.com/soulwhisper/mcp-guardrails/issues/91)) ([205b5a5](https://github.com/soulwhisper/mcp-guardrails/commit/205b5a571362da6aa4becc4ba0e526f6898c7efe))
+
 ## [0.5.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.4.0...v0.5.0) (2026-07-24)
 
 
