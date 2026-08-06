@@ -5,6 +5,34 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.6.0...v0.7.0) (2026-08-06)
+
+
+### Features
+
+* **container:** update image docker/dockerfile ( 1.25 → 1.26 ) ([#97](https://github.com/soulwhisper/mcp-guardrails/issues/97)) ([2ec2157](https://github.com/soulwhisper/mcp-guardrails/commit/2ec2157bbb2af2d6f25260eb04897f9fa30c990e))
+
+
+### Documentation
+
+* **plans:** add production-readiness re-evaluation (2026-08-05) ([#104](https://github.com/soulwhisper/mcp-guardrails/issues/104)) ([92f266a](https://github.com/soulwhisper/mcp-guardrails/commit/92f266ab5a8d35ace102592aad1e6c1f8b2a62b2))
+
+
+### Continuous Integration
+
+* **github-action:** update aquasecurity/trivy-action digest ( c07df6f → 2736533 ) ([#98](https://github.com/soulwhisper/mcp-guardrails/issues/98)) ([37f8446](https://github.com/soulwhisper/mcp-guardrails/commit/37f8446b0d814276cafb590647f89f70aa6aea97))
+* **github-action:** update github/codeql-action digest ( d1ba80a → 5595cca ) ([#100](https://github.com/soulwhisper/mcp-guardrails/issues/100)) ([8f47b7f](https://github.com/soulwhisper/mcp-guardrails/commit/8f47b7fc3af36e6ee67ee1624b1184e1e02523b1))
+* **github-action:** update github/codeql-action digest ( e4fba86 → f205ea1 ) ([#95](https://github.com/soulwhisper/mcp-guardrails/issues/95)) ([04426be](https://github.com/soulwhisper/mcp-guardrails/commit/04426be135ecd34104555708a01f49032728477f))
+* **github-action:** update github/codeql-action digest ( f205ea1 → d1ba80a ) ([#99](https://github.com/soulwhisper/mcp-guardrails/issues/99)) ([a369236](https://github.com/soulwhisper/mcp-guardrails/commit/a369236f23e3066e168f711f6487206d7ccea950))
+
+
+### Chores
+
+* **container:** update image python ( 7bec7dd → e11c17f ) ([#103](https://github.com/soulwhisper/mcp-guardrails/issues/103)) ([060a000](https://github.com/soulwhisper/mcp-guardrails/commit/060a000ba99e6db8ed16a14868d32e4d20f46b9e))
+* **container:** update image python ( b0c4ec8 → 7bec7dd ) ([#102](https://github.com/soulwhisper/mcp-guardrails/issues/102)) ([3fd3d75](https://github.com/soulwhisper/mcp-guardrails/commit/3fd3d75d1aa1b38c19c85b2384b15b7d478b2ef8))
+* **container:** update image python ( cea0e60 → b0c4ec8 ) ([#101](https://github.com/soulwhisper/mcp-guardrails/issues/101)) ([5b6f348](https://github.com/soulwhisper/mcp-guardrails/commit/5b6f348429426d406a8336b6864d92a0f4019f5a))
+* **container:** update image python ( e11c17f → a7fb1e6 ) ([#105](https://github.com/soulwhisper/mcp-guardrails/issues/105)) ([d4bab6b](https://github.com/soulwhisper/mcp-guardrails/commit/d4bab6b7117ec1f1e6c9fd0edb7fa83377956d11))
+
 ## [0.6.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.5.0...v0.6.0) (2026-07-29)
 
 
