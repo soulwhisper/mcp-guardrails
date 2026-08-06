@@ -7,6 +7,14 @@
       // updated atomically — separate PRs per package cannot resolve (#81-83).
       "groupName": "grpc stack",
       "matchPackageNames": ["grpcio", "grpcio-tools", "grpcio-health-checking", "grpcio-status"]
+    },
+    {
+      // Base-image bumps (python digests, dockerfile syntax) are build
+      // plumbing, not code changes — CI green is the whole verification.
+      // Commit as `ci` so release-please keeps them out of the changelog
+      // and never cuts a release for them (ci section is hidden).
+      "matchManagers": ["dockerfile"],
+      "semanticCommitType": "ci"
     }
   ]
 }

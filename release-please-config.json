@@ -28,7 +28,8 @@
         },
         {
           "type": "ci",
-          "section": "Continuous Integration"
+          "section": "Continuous Integration",
+          "hidden": true
         },
         {
           "type": "chore",
