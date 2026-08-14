@@ -119,7 +119,7 @@ jobs:
       - name: Trivy scan of the published image
         if: github.ref_type == 'tag'
         continue-on-error: true
-        uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # master
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
         with:
           image-ref: ghcr.io/soulwhisper/mcp-guardrails:latest
           format: table
