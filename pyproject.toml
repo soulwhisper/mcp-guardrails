@@ -48,7 +48,7 @@ onnx = [
 # AgentAlignment LLM — opt-in second-stage deep inspection. Calls an
 # OpenAI-compatible LLM API when PromptGuard flags HUMAN_REVIEW.
 alignment = [
-    "openai>=2.46,<3",
+    "openai>=3,<4",
 ]
 dev = [
     "pytest>=8",
