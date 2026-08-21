@@ -5,6 +5,28 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.7.0...v1.0.0) (2026-08-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* **github-action:** Update astral-sh/setup-uv action ( v9.0.0 → v10.0.0 ) ([#109](https://github.com/soulwhisper/mcp-guardrails/issues/109))
+* **deps:** Update openai ( 2.54.0 → 3.0.0 ) ([#110](https://github.com/soulwhisper/mcp-guardrails/issues/110))
+
+### Features
+
+* **deps:** Update openai ( 2.54.0 → 3.0.0 ) ([#110](https://github.com/soulwhisper/mcp-guardrails/issues/110)) ([a9bc3c8](https://github.com/soulwhisper/mcp-guardrails/commit/a9bc3c824168120e0f931458e61f6ab5d78c3c70))
+
+
+### Continuous Integration
+
+* **github-action:** Update astral-sh/setup-uv action ( v9.0.0 → v10.0.0 ) ([#109](https://github.com/soulwhisper/mcp-guardrails/issues/109)) ([b4ff081](https://github.com/soulwhisper/mcp-guardrails/commit/b4ff08111d9388bdc5f1891e2fca2bb28ab8a28b))
+
+
+### Chores
+
+* release 1.0.0 ([4e57ea7](https://github.com/soulwhisper/mcp-guardrails/commit/4e57ea7ac3e8de0443852b981366c516ee1ee017))
+
 ## [0.7.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.6.0...v0.7.0) (2026-08-06)
 
 
