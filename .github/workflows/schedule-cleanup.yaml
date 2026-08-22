@@ -15,14 +15,14 @@ jobs:
       contents: read
     steps:
       - name: Generate Token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@v3
         id: app-token
         with:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Cleanup workflow stale runs
-        uses: Mattraks/delete-workflow-runs@0cf693bc9909e5e867ee8f27b813224ba862939c # v2
+        uses: Mattraks/delete-workflow-runs@v2
         with:
           token: "${{ steps.app-token.outputs.token }}"
           repository: "${{ github.repository }}"
@@ -31,7 +31,7 @@ jobs:
           delete_run_by_conclusion_pattern: "cancelled,skipped"
 
       - name: Cleanup workflow success runs
-        uses: Mattraks/delete-workflow-runs@0cf693bc9909e5e867ee8f27b813224ba862939c # v2
+        uses: Mattraks/delete-workflow-runs@v2
         with:
           token: "${{ steps.app-token.outputs.token }}"
           repository: "${{ github.repository }}"
@@ -40,7 +40,7 @@ jobs:
           delete_run_by_conclusion_pattern: "success"
 
       - name: Cleanup workflow failure runs
-        uses: Mattraks/delete-workflow-runs@0cf693bc9909e5e867ee8f27b813224ba862939c # v2
+        uses: Mattraks/delete-workflow-runs@v2
         with:
           token: "${{ steps.app-token.outputs.token }}"
           repository: "${{ github.repository }}"
@@ -54,4 +54,4 @@ jobs:
     permissions:
       actions: write
     steps:
-      - uses: liskin/gh-workflow-keepalive@f72ff1a1336129f29bf0166c0fd0ca6cf1bcb38c # v1
+      - uses: liskin/gh-workflow-keepalive@v1
