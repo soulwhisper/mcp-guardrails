@@ -5,6 +5,18 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1](https://github.com/soulwhisper/mcp-guardrails/compare/v1.0.0...v1.0.1) (2026-09-03)
+
+
+### Bug Fixes
+
+* **ci:** pin setup-uv to full version v10.0.1 (no bare major tag) ([#117](https://github.com/soulwhisper/mcp-guardrails/issues/117)) ([b7a8935](https://github.com/soulwhisper/mcp-guardrails/commit/b7a893568ac3a0c3e0047fca7f11ef873d881c4b))
+
+
+### Documentation
+
+* add interactive architecture diagram ([#120](https://github.com/soulwhisper/mcp-guardrails/issues/120)) ([5768d12](https://github.com/soulwhisper/mcp-guardrails/commit/5768d12e3bff566a2bef15a4b18ddb85c682cd8f))
+
 ## [1.0.0](https://github.com/soulwhisper/mcp-guardrails/compare/v0.7.0...v1.0.0) (2026-08-21)
 
 
