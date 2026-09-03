@@ -1,0 +1,485 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "MCP Guardrails \u2014 ExtMcp Sidecar Architecture",
+    "output": "docs/_assets/architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/soulwhisper/mcp-guardrails",
+      "revision": "c776c923e431097b85a834b58e5f0e4a15e545c0"
+    },
+    "views": [
+      {
+        "id": "double-gate",
+        "label": "The double gate",
+        "focus": [
+          "agent",
+          "gateway",
+          "servicer",
+          "engine",
+          "upstream"
+        ],
+        "note": "agentgateway calls CheckRequest before forwarding upstream and CheckResponse before returning to the agent."
+      },
+      {
+        "id": "first-stage",
+        "label": "First-stage scanners",
+        "focus": [
+          "engine",
+          "regex",
+          "promptguard",
+          "invariant",
+          "aggregator"
+        ],
+        "note": "Regex, PromptGuard-2 ONNX and the Invariant rule engine feed one fail-closed decision."
+      },
+      {
+        "id": "evidence",
+        "label": "Decisions and evidence",
+        "focus": [
+          "aggregator",
+          "redaction",
+          "alignment",
+          "audit",
+          "servicer"
+        ],
+        "note": "Allowed payloads may be redacted; every decision lands in a tamper-evident audit record."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "agent",
+      "type": "external",
+      "label": "MCP Agent",
+      "sublabel": "LLM client",
+      "pos": [
+        16,
+        330
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "gateway",
+      "type": "security",
+      "label": "agentgateway",
+      "sublabel": "ExtMcp processor, failClosed",
+      "pos": [
+        186,
+        330
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "control plane"
+    },
+    {
+      "id": "upstream",
+      "type": "external",
+      "label": "Upstream MCP server",
+      "sublabel": "tools + resources",
+      "pos": [
+        196,
+        130
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "servicer",
+      "type": "backend",
+      "label": "ExtMcp servicer",
+      "sublabel": "gRPC h2c :9001",
+      "pos": [
+        386,
+        330
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "guardrails/servicer.py",
+          "label": "wire boundary"
+        },
+        {
+          "path": "proto/ext_mcp.proto",
+          "label": "vendored contract"
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "type": "backend",
+      "label": "GuardrailEngine",
+      "sublabel": "extract + scan windows",
+      "pos": [
+        576,
+        330
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "guardrails/engine.py",
+          "label": "decision pipeline"
+        },
+        {
+          "path": "guardrails/config.py",
+          "label": "env-driven config"
+        }
+      ]
+    },
+    {
+      "id": "regex",
+      "type": "security",
+      "label": "RegexScanner",
+      "sublabel": "Unicode / PII / secrets",
+      "pos": [
+        746,
+        140
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "guardrails/scanners.py",
+          "line": 427,
+          "label": "17 patterns"
+        }
+      ]
+    },
+    {
+      "id": "promptguard",
+      "type": "security",
+      "label": "PromptGuard-2 ONNX",
+      "sublabel": "injection classifier",
+      "pos": [
+        746,
+        250
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "guardrails/scanners.py",
+          "line": 711,
+          "label": "ONNX scanner"
+        },
+        {
+          "path": "Dockerfile",
+          "label": "pre-baked model"
+        }
+      ]
+    },
+    {
+      "id": "invariant",
+      "type": "security",
+      "label": "Invariant Engine",
+      "sublabel": "toxic flow / loop / rate",
+      "pos": [
+        746,
+        360
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "guardrails/invariant.py",
+          "line": 494,
+          "label": "rule engine"
+        },
+        {
+          "path": "guardrails/rules/default.py",
+          "label": "default rules"
+        }
+      ]
+    },
+    {
+      "id": "aggregator",
+      "type": "backend",
+      "label": "DecisionAggregator",
+      "sublabel": "fail-closed verdict",
+      "pos": [
+        926,
+        230
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "guardrails/aggregator.py",
+          "label": "verdict merge"
+        }
+      ]
+    },
+    {
+      "id": "redaction",
+      "type": "backend",
+      "label": "Redaction",
+      "sublabel": "secret / PII masking",
+      "pos": [
+        926,
+        380
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "guardrails/redaction.py",
+          "line": 148,
+          "label": "mutated oneof"
+        }
+      ]
+    },
+    {
+      "id": "alignment",
+      "type": "external",
+      "label": "AgentAlignment LLM",
+      "sublabel": "opt-in second stage",
+      "pos": [
+        1106,
+        140
+      ],
+      "size": [
+        140,
+        60
+      ],
+      "sources": [
+        {
+          "path": "guardrails/scanners.py",
+          "line": 535,
+          "label": "review gate"
+        }
+      ]
+    },
+    {
+      "id": "audit",
+      "type": "database",
+      "label": "Audit & Telemetry",
+      "sublabel": "JSONL hash chain + OTLP",
+      "pos": [
+        1106,
+        380
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "guardrails/otel.py",
+          "label": "spans + audit log"
+        },
+        {
+          "path": "guardrails/notify.py",
+          "label": "review webhook"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "mcp-guardrails sidecar (plaintext h2c :9001)",
+      "wraps": [
+        "servicer",
+        "engine",
+        "regex",
+        "promptguard",
+        "invariant",
+        "aggregator",
+        "redaction"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "security-group",
+      "label": "first-stage scanners",
+      "wraps": [
+        "regex",
+        "promptguard",
+        "invariant"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "from": "agent",
+      "to": "gateway",
+      "label": "tools/call (JSON-RPC)",
+      "variant": "emphasis",
+      "labelAt": [
+        171,
+        404
+      ]
+    },
+    {
+      "from": "gateway",
+      "to": "servicer",
+      "label": "CheckRequest / CheckResponse",
+      "variant": "security",
+      "labelAt": [
+        371,
+        326
+      ]
+    },
+    {
+      "from": "servicer",
+      "to": "engine",
+      "label": "check_request / check_response",
+      "labelAt": [
+        556,
+        408
+      ]
+    },
+    {
+      "from": "engine",
+      "to": "regex",
+      "label": "scan windows",
+      "fromSide": "right",
+      "labelAt": [
+        736,
+        216
+      ]
+    },
+    {
+      "from": "engine",
+      "to": "promptguard",
+      "fromSide": "right"
+    },
+    {
+      "from": "engine",
+      "to": "invariant",
+      "fromSide": "right"
+    },
+    {
+      "from": "regex",
+      "to": "aggregator",
+      "label": "ScanResult",
+      "fromSide": "right",
+      "labelAt": [
+        911,
+        212
+      ]
+    },
+    {
+      "from": "promptguard",
+      "to": "aggregator",
+      "fromSide": "right"
+    },
+    {
+      "from": "invariant",
+      "to": "aggregator",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "aggregator",
+      "to": "redaction",
+      "label": "mask allowed payloads",
+      "labelAt": [
+        1001,
+        312
+      ]
+    },
+    {
+      "from": "redaction",
+      "to": "servicer",
+      "label": "pass | mutated | error",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          1001,
+          520
+        ],
+        [
+          461,
+          520
+        ]
+      ],
+      "labelAt": [
+        731,
+        512
+      ]
+    },
+    {
+      "from": "gateway",
+      "to": "upstream",
+      "label": "forward after pass",
+      "variant": "emphasis"
+    },
+    {
+      "from": "aggregator",
+      "to": "alignment",
+      "label": "HUMAN_REVIEW only",
+      "variant": "dashed",
+      "labelAt": [
+        1091,
+        214
+      ]
+    },
+    {
+      "from": "aggregator",
+      "to": "audit",
+      "label": "every decision",
+      "variant": "dashed",
+      "labelAt": [
+        1086,
+        330
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Double gate",
+      "items": [
+        "CheckRequest scans params as the TOOL role before forwarding",
+        "CheckResponse scans tool output as the ASSISTANT role",
+        "Deny surfaces to the agent as JSON-RPC error -32001"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Fail-closed by default",
+      "items": [
+        "Scanner errors and timeouts deny under failClosed mode",
+        "Unreachable sidecar makes agentgateway deny the exchange",
+        "Regex-only fallback keeps guarding when ML deps are absent"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Honest evidence",
+      "items": [
+        "One JSONL audit line per decision with a tamper-evident hash chain",
+        "OTel spans and counters when an OTLP endpoint is configured",
+        "Coverage gaps are bounded by knobs and flagged in the audit record"
+      ]
+    }
+  ]
+}

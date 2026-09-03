@@ -97,6 +97,23 @@ flowchart TD
     SVC --> GRPC
 ```
 
+### Component map
+
+The interactive diagram below maps the sidecar end to end: the double gate
+(`CheckRequest` / `CheckResponse`) through agentgateway's ExtMcp contract, the
+first-stage scanners (Regex, PromptGuard-2 ONNX, Invariant rules) merging into
+the fail-closed `DecisionAggregator`, and the evidence path (redaction,
+opt-in AgentAlignment review, tamper-evident audit + OTel).
+
+<iframe src="_assets/architecture.html" style="width: 100%; height: 720px; border: none; border-radius: 8px;" title="mcp-guardrails architecture diagram"></iframe>
+
+[Open the interactive diagram full-page](_assets/architecture.html){ .md-button } [Static preview](_assets/architecture.png){ .md-button }
+
+It is generated with [Archify](https://github.com/tt-a1i/archify) from a typed
+specification pinned to a repository revision
+(`docs/_assets/architecture.json`), so every node carries verifiable source
+evidence.
+
 ## Relationship to agentgateway
 
 agentgateway invokes the sidecar twice per MCP exchange through the `ExtMcp`
