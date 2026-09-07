@@ -116,6 +116,20 @@ Two sidecar subsystems are per-process by default:
   `fieldRef` in `deployment.yaml`) inside the hashed payload, so exported
   per-replica chains stay attributable — see [Compliance §2](compliance.md).
 
+### Configuration checklist
+
+A complete multi-replica setup combines:
+
+| Concern | Setting | Notes |
+| Shared trace state | `INVARIANT_STATE_BACKEND=redis`, `REDIS_URL=redis://<host>:6379/0` | Point at your own Redis (none is shipped in `deploy/k8s` — treat it as infrastructure, like the gateway). The client is baked into the image; the sidecar fails closed at startup if unreachable. Optional — sticky routing alone is sufficient for single-tenant fleets. |
+| Replica count | `deploy/k8s/deployment.yaml` `replicas` + `hpa.yaml` | HPA and PDB are already shipped; keep `minAvailable` aligned with replica floor. |
+| Trace-key isolation | `INVARIANT_TRACE_KEY_HEADERS=x-session-id` (+ gateway injects the header) | Per-session traces; applies in both memory and redis modes. |
+| Sticky routing | agentgateway session affinity (e.g. CEL-derived key, v1.5.0+) | Mitigation for memory mode; unnecessary for correctness in redis mode, still useful for cache locality. |
+| Audit attribution | `AUDIT_REPLICA_ID` (default `$POD_NAME`, already wired via `fieldRef`) | Per-replica hash chains; export each replica's chain separately, never share one `AUDIT_LOG_PATH` file. |
+| Metrics scraping | `PROMETHEUS_LISTEN_ADDR=:9464` + Prometheus scrape config per pod | Pull endpoint coexists with OTLP push; scrape per replica, label by `POD_NAME`. |
+| Telemetry TLS | `OTEL_EXPORTER_OTLP_INSECURE=false` (or an `https://` OTLP endpoint) | Required once the collector crosses a network boundary. |
+| Safe rollouts | preStop 10s + `terminationGracePeriodSeconds: 30` (already in `deployment.yaml`) | See [Rollout and drain](#rollout-and-drain) above. |
+
 ## Network isolation
 
 The sidecar authenticates nothing on `:9001`. Restrict access to agentgateway

@@ -28,11 +28,17 @@ priority order. A hit produces a `BLOCK` result named `invariant:<rule>`.
   so loop detection is unaffected.
 
 !!! warning "Multi-replica deployments"
-    Trace windows live in sidecar memory. A toxic flow whose calls land on
-    **different replicas** cannot be detected. For multi-replica deployments,
-    have agentgateway inject a session header, set
+    Trace windows are per-replica by default (`INVARIANT_STATE_BACKEND=memory`).
+    A toxic flow whose calls land on **different replicas** cannot be detected
+    in this mode — have agentgateway inject a session header, set
     `INVARIANT_TRACE_KEY_HEADERS` accordingly, and configure sticky/session-
     affinity routing on the agentgateway side (the deployer's responsibility).
+    The stronger option is `INVARIANT_STATE_BACKEND=redis` with `REDIS_URL`
+    pointing at a shared Redis: loop/rate/aggregate rules then evaluate the
+    fleet-wide trace regardless of routing (appends are linearised by Redis;
+    detection may lag one call under concurrent replicas). Sticky ToxicFlow
+    prefix-progress remains per-replica in both modes. See
+    [Deployment — Multi-replica guidance](../deployment.md#multi-replica-guidance).
 
 ## Rule types
 

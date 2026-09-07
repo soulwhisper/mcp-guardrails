@@ -177,6 +177,12 @@ data:
     #   SCANNER_TIMEOUT_MS     - per-engine-call deadline; exceeded -> failure_mode
     #   INVARIANT_WINDOW       - sliding-window size for ToxicFlowRule / LoopRule
     #   INVARIANT_MAX_TRACES   - max distinct per-route trace windows (default 1024)
+    #   INVARIANT_STATE_BACKEND - memory (default, per-replica traces) | redis
+    #                            (fleet-wide shared trace state; see
+    #                            docs/deployment.md "Multi-replica guidance")
+    #   REDIS_URL              - Redis URL for the redis backend
+    #                            (default redis://localhost:6379/0; sidecar
+    #                            fails closed at startup when unreachable)
     #   FAILURE_MODE           - failClosed (default) | failOpen
     #   HUMAN_REVIEW_MODE      - pass (default) | deny
     #
@@ -186,6 +192,13 @@ data:
     #                                   When set, exports spans and the
     #                                   `mcp.guardrails.decisions` counter.
     #                                   When unset, degrades to audit-log-only.
+    #   OTEL_EXPORTER_OTLP_INSECURE  - OTLP channel TLS override (true/false;
+    #                                   unset derives from the endpoint scheme)
+    #   PROMETHEUS_LISTEN_ADDR       - Prometheus /metrics pull bind address
+    #                                   (e.g. :9464; unset disables the endpoint)
+    #   AUDIT_REPLICA_ID             - replica identity stamped as `replica` in
+    #                                   every hash-chained audit line (default:
+    #                                   $POD_NAME, already set via fieldRef)
     #   OTEL_SERVICE_NAME            - service.name resource attribute
     #                                   (default: mcp-guardrails)
     #   AUDIT_LOG_PATH               - JSONL audit sink path

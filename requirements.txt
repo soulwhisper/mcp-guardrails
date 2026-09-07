@@ -50,3 +50,8 @@ opentelemetry-exporter-otlp>=1.28.0
 # Optional at runtime like the rest of the OTel stack: absent package degrades
 # to OTLP-only with a warning.
 opentelemetry-exporter-prometheus>=0.49b0
+
+# --- Redis (optional at runtime; only used when INVARIANT_STATE_BACKEND=redis).
+#     Baked into the image so the backend is env-selectable without a rebuild;
+#     imported lazily — absent from the hot path on the default memory backend. ---
+redis>=5,<8
