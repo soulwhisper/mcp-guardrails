@@ -1,9 +1,22 @@
 # Metrics
 
 When `OTEL_EXPORTER_OTLP_ENDPOINT` is set (and the OTel SDK is importable),
-the sidecar exports traces and metrics over OTLP/gRPC (insecure) with a 15s
-metric export interval; otherwise it degrades to audit-log-only. Instruments
-are defined in `guardrails/otel.py`.
+the sidecar exports traces and metrics over OTLP/gRPC with a 15s metric
+export interval; otherwise it degrades to audit-log-only. The channel TLS
+mode comes from `OTEL_EXPORTER_OTLP_INSECURE`, defaulting to the endpoint
+scheme (`https://` → secure, `http://` or no scheme → insecure) — cluster
+telemetry crossing the network should use TLS. Note the SDK's
+`BatchSpanProcessor` swallows export failures: a dead collector only
+surfaces as an SDK log line, so alert on the [audit stream](auditing.md),
+not on spans arriving.
+
+Setting `PROMETHEUS_LISTEN_ADDR` (e.g. `:9464`) additionally serves a
+Prometheus `/metrics` pull endpoint (requires the
+`opentelemetry-exporter-prometheus` package; a missing package or failed
+bind logs a warning and OTLP is unaffected). Pull and push readers coexist
+on the same `MeterProvider`.
+
+Instruments are defined in `guardrails/otel.py`.
 
 ## Instruments
 

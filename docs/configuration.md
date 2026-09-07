@@ -43,6 +43,8 @@ env-var table by project contract.
 | Invariant | `INVARIANT_ARGS_MAX_BYTES` | `4096` | Per-entry args cap in the trace window; oversized args keep structure with long strings truncated. Loop fingerprints use the full args. |
 | Invariant | `INVARIANT_TRACE_KEY_HEADERS` | _(unset)_ | Comma-separated request headers (case-insensitive) whose value extends the trace key (`route\|header:value`) for per-session isolation. |
 | Invariant | `INVARIANT_STICKY_TTL_S` | `600` | TTL (seconds) for sticky partial-match progress; ToxicFlowRule prefix matches survive sliding out of the window this long. |
+| Invariant | `INVARIANT_STATE_BACKEND` | `memory` | Trace-state backend. `memory` = per-replica in-process window (a load balancer splits traces ~1/N across replicas). `redis` = shared state via `REDIS_URL` so loop/rate/aggregate rules see the full fleet-wide trace; fails closed at startup when Redis is unreachable. Requires the `redis` extra. |
+| Invariant | `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL for `INVARIANT_STATE_BACKEND=redis`. Trace keys live under `mcpg:trace:*` with TTL; sticky ToxicFlow prefix-progress remains per-replica. |
 | Invariant | `INVARIANT_RULES_PATH` | _(unset)_ | Filesystem path to a rule pack (`.py` / `.policy`). Hot-reloadable via `SIGHUP`. Takes precedence over `INVARIANT_RULES_MODULE`. |
 | Invariant | `INVARIANT_RULES_MODULE` | `guardrails.rules.default` | Dotted Python module path to a rule pack (used when `INVARIANT_RULES_PATH` is unset). |
 | Timing | `SCANNER_TIMEOUT_MS` | `500` | Per-scanner deadline in milliseconds. Exceeded → treated per `FAILURE_MODE`. Keep sidecar < gateway so the sidecar decides first. |
@@ -52,10 +54,13 @@ env-var table by project contract.
 | Networking | `GRPC_MAX_CONCURRENT_RPCS` | `128` | Max in-flight RPCs (DoS bound); excess calls queue at the HTTP/2 layer. |
 | Networking | `SHUTDOWN_DRAIN_S` | `5.0` | On SIGTERM/SIGINT the health service flips `NOT_SERVING` first, then waits this long for readiness propagation before draining. `0` skips the wait. |
 | Observability | `OTEL_EXPORTER_OTLP_ENDPOINT` | _(unset)_ | OTLP/gRPC endpoint (e.g. `http://otel-collector.observability.svc:4317`). Unset or SDK absent → audit-only. |
+| Observability | `OTEL_EXPORTER_OTLP_INSECURE` | _(derived)_ | OTLP channel TLS (`true`/`false`). Unset derives from the endpoint scheme (`https://` → secure, `http://` or no scheme → insecure). Set explicitly when the collector terminates TLS behind a bare host:port — cluster telemetry crossing the network should use TLS. |
+| Observability | `PROMETHEUS_LISTEN_ADDR` | _(unset)_ | Prometheus `/metrics` pull endpoint bind address (e.g. `:9464` for all interfaces). Coexists with OTLP push; requires the `opentelemetry-exporter-prometheus` package, degrades to OTLP-only without it. |
 | Observability | `OTEL_SERVICE_NAME` | `mcp-guardrails` | Service name on OTel spans/metrics. |
 | Observability | `AUDIT_LOG_PATH` | _(unset)_ | Append-only JSONL audit path. `-` or unset → stdout. Always on. |
 | Observability | `AUDIT_HMAC_KEY` | _(unset)_ | When set, high-entropy match fingerprints use keyed HMAC-SHA256 instead of plain SHA-256 (recommended). |
-| Observability | `AUDIT_HASH_CHAIN` | `1` | Tamper-evident audit hash chain (`prev_hash` / `line_hash` per line; verify with `guardrail_ctl audit verify`). Single-writer assumption — one replica, per-replica files, or stdout shipping. |
+| Observability | `AUDIT_HASH_CHAIN` | `1` | Tamper-evident audit hash chain (`prev_hash` / `line_hash` per line; verify with `guardrail_ctl audit verify`). Single-writer assumption — per-replica files or stdout shipping; `AUDIT_REPLICA_ID` attributes each chain. |
+| Observability | `AUDIT_REPLICA_ID` | `$POD_NAME` else hostname | Identity stamped as `replica` on every audit line (inside the hash chain, so it cannot be stripped without breaking verification). With N replicas each ships its own chain — this field attributes each chain to its source replica. |
 | Observability | `AUDIT_CALLER_HEADERS` | `x-forwarded-user` | Comma-separated whitelist of request headers copied into the audit `caller` field. `x-session-id` is deliberately excluded by default (quasi-credential). |
 | Observability | `GUARDRAIL_VERSION` | _(package version)_ | Override for the `sidecar_version` stamped on every audit line. |
 | Observability | `REVIEW_WEBHOOK_URL` | _(unset)_ | Every `human_review` decision POSTs a metadata-only JSON body to this URL. Fire-and-forget; failures only log. |

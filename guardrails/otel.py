@@ -5,7 +5,9 @@ installed (the unit tests never need it). When ``OTEL_EXPORTER_OTLP_ENDPOINT``
 is set and the SDK is importable, every guardrail decision becomes a span
 carrying the method, tool, scanner outcomes and final decision; a counter
 records allow/deny/mutate tallies. Otherwise the helpers degrade to the
-audit-log-only path.
+audit-log-only path. ``PROMETHEUS_LISTEN_ADDR`` additionally exposes a
+Prometheus ``/metrics`` pull endpoint when the prometheus exporter package
+is installed.
 
 The audit log is always on (defaults to stdout when no path is configured) and
 emits one JSON line per decision — this is the durable, GitOps-friendly record
@@ -17,6 +19,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import socket
 import sys
 import threading
 import time
@@ -57,21 +61,35 @@ class AuditSink:
     negligible against the decision path — which is why the chain defaults
     ON.
 
+    Multi-replica attribution (R-4): with ``replica=<id>`` every emitted
+    line gains a ``replica`` field INSIDE the hashed payload, so a fleet
+    exporting N per-replica chains can attribute each chain to its source
+    replica and stripping the field breaks the chain like any other edit.
+
     Multi-process caveat: the chain assumes a single writer per stream.
     Multiple replicas appending to one shared FILE would interleave
-    ``prev_hash`` links and fail verification — run a single replica, write
-    per-replica files, or ship stdout to the log collector (the chained
-    lines then arrive serialised per source stream).
+    ``prev_hash`` links and fail verification — write per-replica files or
+    ship stdout to the log collector (the chained lines then arrive
+    serialised per source stream, each tagged with its ``replica`` id).
     """
 
-    def __init__(self, path: str | None = None, *, hash_chain: bool = True):
+    def __init__(
+        self,
+        path: str | None = None,
+        *,
+        hash_chain: bool = True,
+        replica: str | None = None,
+    ):
         # None / "-" / "" -> stdout.
         self._path = path if path and path != "-" else None
         self._hash_chain = hash_chain
+        self._replica = replica
         self._prev_line: str | None = None
         self._chain_lock = threading.Lock()
 
     def emit(self, record: dict[str, Any]) -> None:
+        if self._replica is not None:
+            record = {**record, "replica": self._replica}
         if self._hash_chain:
             with self._chain_lock:
                 prev = (
@@ -96,63 +114,160 @@ class AuditSink:
 
 
 class Observability:
-    """Holds OTel handles (if available) + the audit sink."""
+    """Holds OTel handles (if available) + the audit sink.
+
+    Telemetry backends (all optional, all lazy-imported):
+
+    * OTLP/gRPC push (``otel_endpoint``) — traces + metrics. ``otel_insecure``
+      picks the channel TLS mode: explicit value wins; ``None`` derives from
+      the endpoint scheme (``https://`` → secure, ``http://`` or no scheme →
+      insecure, per OTLP conventions). Note export failures are swallowed by
+      the SDK's ``BatchSpanProcessor`` — a dead collector only surfaces as an
+      SDK log line, so alert on the audit stream, not on spans arriving.
+    * Prometheus pull (``prometheus_addr``, e.g. ``:9464``) — a
+      ``PrometheusMetricReader`` plus the ``prometheus_client`` HTTP server.
+      Coexists with the OTLP reader (pull alongside push); a missing
+      ``opentelemetry-exporter-prometheus`` package or a failed bind logs a
+      warning and telemetry continues without it.
+
+    ``replica_id`` (R-4) defaults to ``$POD_NAME`` else the hostname and is
+    stamped on every audit line by the sink.
+    """
 
     def __init__(
         self,
         *,
         service_name: str = "mcp-guardrails",
         otel_endpoint: str | None = None,
+        otel_insecure: bool | None = None,
+        prometheus_addr: str | None = None,
         audit_path: str | None = None,
         audit_hash_chain: bool = True,
+        replica_id: str | None = None,
     ):
         self.service_name = service_name
         self.otel_endpoint = otel_endpoint
-        self.audit = AuditSink(audit_path, hash_chain=audit_hash_chain)
+        self.replica_id = replica_id or os.environ.get("POD_NAME") or socket.gethostname()
+        self.audit = AuditSink(audit_path, hash_chain=audit_hash_chain, replica=self.replica_id)
         self._tracer = None
         self._meter = None
         self._counters: dict[str, Any] = {}
         self._histograms: dict[str, Any] = {}
         self._otel_ok = False
-        if otel_endpoint:
-            self._init_otel(service_name, otel_endpoint)
+        if otel_endpoint or prometheus_addr:
+            self._init_otel(service_name, otel_endpoint, otel_insecure, prometheus_addr)
 
-    def _init_otel(self, service_name: str, endpoint: str) -> None:
+    @staticmethod
+    def _resolve_insecure(endpoint: str, explicit: bool | None) -> bool:
+        """OTLP channel TLS mode (T3-1): explicit wins; otherwise derive from
+        the endpoint scheme (``https://`` → secure, anything else → insecure)."""
+        if explicit is not None:
+            return explicit
+        return not endpoint.startswith("https://")
+
+    def _init_prometheus(self, addr: str) -> Any | None:
+        """Start the Prometheus ``/metrics`` pull endpoint; return the reader.
+
+        Graceful degradation (T3-3): a missing exporter package, an
+        unparseable address or a failed bind logs a warning and returns
+        ``None`` — the OTLP path is unaffected.
+        """
+        host, sep, port_s = addr.rpartition(":")
+        if not sep or not port_s.isdigit():
+            logger.warning(
+                "prometheus listen address %r is not host:port — /metrics disabled", addr
+            )
+            return None
+        try:
+            from opentelemetry.exporter.prometheus import PrometheusMetricReader
+            from prometheus_client import start_http_server
+        except ImportError:
+            logger.warning(
+                "prometheus /metrics requested on %s but "
+                "opentelemetry-exporter-prometheus is not installed — continuing without it",
+                addr,
+            )
+            return None
+        try:
+            # ":9464" (empty host) means all interfaces; getaddrinfo('')
+            # fails on some platforms, so normalize to the wildcard.
+            start_http_server(port=int(port_s), addr=host or "0.0.0.0")
+        except OSError as exc:
+            logger.warning("prometheus /metrics bind failed on %s: %s", addr, exc)
+            return None
+        logger.info("prometheus /metrics listening on %s", addr)
+        return PrometheusMetricReader()
+
+    def _init_otlp(
+        self, service_name: str, endpoint: str, otel_insecure: bool | None, resource: Any
+    ) -> list[Any]:
+        """OTLP/gRPC push backend (traces + 15s periodic metrics).
+
+        Returns the metric readers to attach; a missing exporter package or
+        other init failure logs a warning and returns ``[]`` so the
+        Prometheus backend can still come up on its own.
+        """
         try:  # pragma: no cover - exercised only with otel installed + endpoint
-            from opentelemetry import metrics, trace
+            from opentelemetry import trace
             from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
                 OTLPMetricExporter,
             )
             from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
                 OTLPSpanExporter,
             )
-            from opentelemetry.sdk.metrics import MeterProvider
             from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-            from opentelemetry.sdk.resources import Resource
             from opentelemetry.sdk.trace import TracerProvider
             from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-            resource = Resource.create({"service.name": service_name})
+            insecure = self._resolve_insecure(endpoint, otel_insecure)
             tp = TracerProvider(resource=resource)
             tp.add_span_processor(
-                BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
+                BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=insecure))
             )
             trace.set_tracer_provider(tp)
             self._tracer = trace.get_tracer(service_name)
+            logger.info("OTel OTLP telemetry enabled, endpoint=%s, insecure=%s", endpoint, insecure)
+            return [
+                PeriodicExportingMetricReader(
+                    OTLPMetricExporter(endpoint=endpoint, insecure=insecure),
+                    export_interval_millis=15000,
+                )
+            ]
+        except Exception as exc:  # pragma: no cover
+            logger.warning("OTel OTLP init failed: %s", exc)
+            return []
 
-            reader = PeriodicExportingMetricReader(
-                OTLPMetricExporter(endpoint=endpoint, insecure=True),
-                export_interval_millis=15000,
-            )
-            mp = MeterProvider(resource=resource, metric_readers=[reader])
-            metrics.set_meter_provider(mp)
-            self._meter = metrics.get_meter(service_name)
-            self._init_instruments()
-            self._otel_ok = True
-            logger.info("OTel telemetry enabled, endpoint=%s", endpoint)
+    def _init_otel(
+        self,
+        service_name: str,
+        endpoint: str | None,
+        otel_insecure: bool | None,
+        prometheus_addr: str | None,
+    ) -> None:
+        try:  # pragma: no cover - exercised only with otel installed
+            from opentelemetry import metrics
+            from opentelemetry.sdk.metrics import MeterProvider
+            from opentelemetry.sdk.resources import Resource
         except Exception as exc:  # pragma: no cover
             logger.warning("OTel init failed (falling back to audit-only): %s", exc)
             self._otel_ok = False
+            return
+        # pragma: no cover - exercised only with otel installed + endpoint
+        resource = Resource.create({"service.name": service_name})
+        readers: list[Any] = []
+        if endpoint:
+            readers.extend(self._init_otlp(service_name, endpoint, otel_insecure, resource))
+        if prometheus_addr:
+            prom_reader = self._init_prometheus(prometheus_addr)
+            if prom_reader is not None:
+                readers.append(prom_reader)
+        if not readers:
+            return
+        mp = MeterProvider(resource=resource, metric_readers=readers)
+        metrics.set_meter_provider(mp)
+        self._meter = metrics.get_meter(service_name)
+        self._init_instruments()
+        self._otel_ok = True
 
     def _init_instruments(self) -> None:
         """Create the OTel instruments on ``self._meter``.

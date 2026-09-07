@@ -2,7 +2,8 @@
 # e2e_agentgateway.sh — live interoperability test: mcp-guardrails sidecar
 # with a real agentgateway binary (standalone config, mcpGuardrails processor).
 #
-# Verified against agentgateway v1.4.0 (standalone YAML, binds/mcpGuardrails
+# Verified against agentgateway v1.4.1 (the version pinned in CI by
+# .github/workflows/e2e-agentgateway.yml; standalone YAML, binds/mcpGuardrails
 # schema). Also backward-compatible with v1.3.1. The script boots:
 #
 #   client(curl) -> agentgateway :3000 (mcpGuardrails, failClosed)
@@ -21,8 +22,9 @@
 #   - python3 with -r requirements.txt installed (protobuf, grpcio, ...).
 #     The ONNX model is NOT needed: the sidecar runs with
 #     ENABLE_PROMPTGUARD=0 (regex/redaction/invariant only, zero ML deps).
-#   - a python interpreter with the `mcp` package for the stdio upstream
-#     (set UPSTREAM_PYTHON; defaults to python3).
+#   - a python interpreter with the `mcp` package (v1, FastMCP API — pin
+#     "mcp<2") for the stdio upstream (set UPSTREAM_PYTHON; defaults to
+#     python3).
 #   - an agentgateway binary: set AGENTGATEWAY_BIN or put `agentgateway`
 #     on PATH. If absent, the script prints a skip notice and exits 0 so
 #     CI can treat this as an optional integration job.

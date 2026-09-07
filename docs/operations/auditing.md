@@ -26,6 +26,12 @@ record that survives even when OTel collection is down. Implemented by
 | `route` / `upstream_transport` | Route name; transport (`stdio` upstreams get an empty header set — do not rely on headers for authn there). |
 | `scanners` | Per-scanner breakdown: name, outcome, reason, score. |
 
+
+Every line also carries `replica` — the emitting replica's identity
+(`AUDIT_REPLICA_ID`, defaulting to `$POD_NAME` else the hostname). A fleet
+of N replicas produces N independent chains; `replica` attributes each chain
+to its source.
+
 Scanner reasons never embed raw matches or LLM output — matches use
 `match_len` / `match_sha256` / `match_hmac` fingerprints, AgentAlignment
 verdicts record a length fingerprint only (see
@@ -48,9 +54,10 @@ line — negligible, hence on by default.
 
 !!! warning "Single-writer assumption"
     The chain cursor is per-process. Multiple replicas appending to ONE
-    shared file interleave links and fail verification — run one replica,
-    per-replica files, or ship stdout to a log collector. A restart begins a
-    new chain at genesis, so a truncated file head followed by a fresh
+    shared file interleave links and fail verification — write per-replica
+    files or ship stdout to a log collector; each chain is then attributable
+    via its `replica` field. A restart begins a new chain at genesis, so a
+    truncated file head followed by a fresh
     process is not distinguishable from a restart; alert on ingestion-side
     gaps. The chain is tamper-evident, not signed — an attacker who controls
     the live writer can forge a consistent chain, so WORM storage remains the

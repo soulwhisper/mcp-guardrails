@@ -74,6 +74,44 @@ The fail-closed posture is deliberate: an agent that can call real tools is
 far more dangerous when a guardrail outage is silent than when it is loud.
 `-32001` is loud.
 
+## Rule packs are code, not config
+
+The Invariant rule pack (`INVARIANT_RULES_PATH`, mounted from the
+`guardrail-rules` ConfigMap in the reference manifests) is **hot-loaded
+Python**: on load and on every `SIGHUP` reload the sidecar reads the file
+fresh and runs it through `compile()` + `exec()`
+(`guardrails/rules/__init__.py`), then validates the exposed `RULES` list.
+There is no sandbox — the exec runs with the sidecar process's full
+privileges, network position and env vars.
+
+The consequence is an explicit trust boundary: **anyone who can write the
+rules file (or the ConfigMap behind it) can execute arbitrary code inside
+the sidecar** — including exfiltrating `LF_ALIGNMENT_API_KEY` /
+`AUDIT_HMAC_KEY`, rewriting verdicts, or forging a consistent audit chain
+from that point on. Treat rule packs with exactly the controls you apply to
+application code:
+
+- **RBAC on the ConfigMap.** Restrict `update`/`patch` on `guardrail-rules`
+  to the same role that may merge to the policy repo; a namespace-scoped
+  deployer role must not implicitly carry rule-pack write.
+- **Review as code.** Four-eyes Git PR on rule-pack changes, gated
+  pipeline for the ConfigMap/manifests (see [Compliance §3](compliance.md)).
+- **Read-only everywhere.** The ConfigMap volume is mounted `readOnly`,
+  and the container runs with `readOnlyRootFilesystem: true` — keep both.
+  Neither stops a malicious rule pack (the exec happens on load), but they
+  stop persistence/payload staging on disk.
+- **Image-baked rules for strict environments.** Where ConfigMap write
+  access cannot be locked down tightly enough, bake the rule pack into the
+  image at build time and leave `INVARIANT_RULES_PATH` unset (the built-in
+  default) or point it at an in-image path. That moves the trust boundary
+  to the image supply chain, which is already signed/verified.
+
+Planned direction (roadmap, **not implemented**): signed remote rule-pack
+distribution with staged rollout — packs fetched from a versioned artifact
+store, signature-verified at load, and rolled out canary-first. Until that
+lands, the file-path exec loader above is the only mechanism and the
+boundary above applies.
+
 ## Known limitations
 
 - **Method coverage.** The sidecar only sees the MCP methods agentgateway

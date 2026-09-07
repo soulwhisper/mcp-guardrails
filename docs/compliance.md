@@ -11,7 +11,7 @@ internal policy, …) before relying on it.
 | Data element | Where it lives | Classification | Notes |
 | --- | --- | --- | --- |
 | **Payload content** (MCP `params` / `result` bodies) | Process memory only, for the duration of one exchange | **Confidential** — may carry user data, secrets, PII | Never written to disk or logs by the sidecar. Scanners see the extracted text; redaction rewrites secrets/PII in ALLOW-grade payloads before forwarding. Over-budget payloads are scanned via head/mid/tail windows — the middle of a giant payload is *not* inspected (bounded by `SCAN_MAX_PAYLOAD_BYTES`, which escalates to `HUMAN_REVIEW`). |
-| **Audit log (JSONL)** | stdout or `AUDIT_LOG_PATH` | **Internal / restricted** | One JSON line per decision. Metadata-only by design: timestamps, phase, method, tool name, outcome, generalised reason, `ref` / `exchange_id`, `caller`, `payload_sha256` (12-hex prefix), rules/sidecar versions, scan coverage, per-scanner breakdown. Scanner reasons never embed raw matches — high-entropy matches record a SHA-256/HMAC digest, low-entropy ones (email, credit card) record `match_len` only, so the log is not an offline enumeration oracle. |
+| **Audit log (JSONL)** | stdout or `AUDIT_LOG_PATH` | **Internal / restricted** | One JSON line per decision. Metadata-only by design: timestamps, phase, method, tool name, outcome, generalised reason, `ref` / `exchange_id`, `caller`, `payload_sha256` (12-hex prefix), `replica` (see §5), rules/sidecar versions, scan coverage, per-scanner breakdown. Scanner reasons never embed raw matches — high-entropy matches record a SHA-256/HMAC digest, low-entropy ones (email, credit card) record `match_len` only, so the log is not an offline enumeration oracle. |
 | **Fingerprints / digests** (`payload_sha256`, `match_hmac`) | Audit log | **Internal** | A 12-hex SHA-256 prefix lets an operator prove two lines saw the same payload without storing it. Set `AUDIT_HMAC_KEY` so digests are keyed — an unkeyed SHA-256 of a low-entropy match is brute-forceable. |
 | **`caller` field** | Audit log | **Personal data (quasi-PII)** | Populated only from the `AUDIT_CALLER_HEADERS` whitelist (default `x-forwarded-user`). `x-session-id` is deliberately excluded by default — a session id is a quasi-credential. Anything you add to this whitelist lands in a durable log: treat it as personal data for retention/access purposes. |
 | **`ref` / `exchange_id`** | Audit log + wire | **Internal** | `ref` is an engine-minted random uuid8 (unguessable); `exchange_id` comes from trusted dataplane channels only, is sanitised (control chars stripped, 64-char cap), and never derives from the attacker-controlled payload. |
@@ -49,6 +49,16 @@ reference architecture:
    writer from the start can forge a consistent chain), so still land the
    archive on WORM storage and record the store's object version IDs /
    retention markers in your change log.
+   **Multi-instance attribution (R-4).** The chain cursor is per-process,
+   so each replica maintains its own independent chain. Every chained line
+   carries a `replica` field **inside the hashed payload** (from
+   `AUDIT_REPLICA_ID`, default `$POD_NAME`, falling back to the
+   hostname), so after export each per-replica chain is attributable to
+   the replica that produced it — verify chains per replica value rather
+   than across a merged stream. WORM export is what makes this
+   attribution meaningful: an object-lock bucket pins each replica's
+   chain at ingestion time, so no later compromise of a single replica
+   can rewrite its own history or another replica's.
 5. **Clock.** Audit `ts`/`ts_ms` come from the sidecar's system clock. Run
    NTP on the nodes; without it, cross-log correlation drifts.
 
@@ -102,10 +112,12 @@ then resolved locally per `HUMAN_REVIEW_MODE`. The default
   compromises the LIVE writer can simply emit a fresh consistent chain,
   so this is tamper-evidence for the archive, not non-repudiation (WORM
   storage remains the primary integrity control); (b) the chain cursor is
-  per-process — multiple replicas appending to ONE shared file interleave
-  links and fail verification (single replica, per-replica files, or
-  stdout shipping); (c) a restart begins a new chain at the genesis
-  `prev_hash`, so a truncation of the file head followed by a fresh
+  per-process — each replica maintains an independent chain, and multiple
+  replicas appending to ONE shared file would still interleave links and
+  fail verification (single replica, per-replica files, or stdout
+  shipping). The `replica` field (§2 item 4) keeps those per-replica
+  chains attributable after export; (c) a restart begins a new chain at
+  the genesis `prev_hash`, so a truncation of the file head followed by a fresh
   process is not distinguishable from a restart — alert on ingestion-side
   gaps instead.
 - **Best-effort local write.** If `AUDIT_LOG_PATH` is set and the write

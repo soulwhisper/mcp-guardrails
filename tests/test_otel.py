@@ -325,3 +325,123 @@ def test_observability_without_otel_endpoint():
 def test_observability_service_name_default():
     obs = Observability()
     assert obs.service_name == "mcp-guardrails"
+
+
+# ---------------------------------------------------------------------------
+# T3-1 — OTLP TLS knob resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_insecure_explicit_wins():
+    """An explicit otel_insecure value overrides the endpoint scheme."""
+    assert Observability._resolve_insecure("https://collector:4317", True) is True
+    assert Observability._resolve_insecure("http://collector:4317", False) is False
+
+
+def test_resolve_insecure_derived_from_scheme():
+    """None derives from the scheme: https -> secure, http/bare -> insecure."""
+    assert Observability._resolve_insecure("https://collector:4317", None) is False
+    assert Observability._resolve_insecure("http://collector:4317", None) is True
+    assert Observability._resolve_insecure("collector:4317", None) is True
+
+
+# ---------------------------------------------------------------------------
+# T3-3 — Prometheus /metrics graceful degradation
+# ---------------------------------------------------------------------------
+
+
+def test_prometheus_missing_package_degrades(monkeypatch, caplog):
+    """Without opentelemetry-exporter-prometheus the reader is skipped with a
+    warning — the Observability object stays usable (audit-only)."""
+    import builtins
+    import logging
+
+    real_import = builtins.__import__
+
+    def _blocking_import(name, *args, **kwargs):
+        if name == "prometheus_client" or name.startswith("opentelemetry.exporter.prometheus"):
+            raise ImportError("blocked by test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _blocking_import)
+    obs = Observability()
+    with caplog.at_level(logging.WARNING, logger="mcp.guardrails"):
+        assert obs._init_prometheus("127.0.0.1:0") is None
+    assert "opentelemetry-exporter-prometheus" in caplog.text
+
+
+def test_prometheus_unparseable_addr_degrades(caplog):
+    """A listen address that is not host:port is rejected with a warning."""
+    import logging
+
+    obs = Observability()
+    with caplog.at_level(logging.WARNING, logger="mcp.guardrails"):
+        assert obs._init_prometheus("not-an-address") is None
+    assert "not host:port" in caplog.text
+
+
+def test_prometheus_empty_host_addr_binds(caplog):
+    """Regression: the documented ":PORT" form (empty host = all interfaces)
+    must bind. ``getaddrinfo('')`` fails with EAI_NONAME on some platforms, so
+    the host is normalized to ``0.0.0.0`` before ``start_http_server`` —
+    pre-fix this returned ``None`` with a bind-failed warning."""
+    import logging
+
+    pytest.importorskip("opentelemetry.exporter.prometheus")
+    pytest.importorskip("prometheus_client")
+
+    obs = Observability()
+    with caplog.at_level(logging.INFO, logger="mcp.guardrails"):
+        reader = obs._init_prometheus(":0")  # ephemeral port, loopback-only bind
+    assert reader is not None
+    assert "listening on" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# R-4 — per-replica audit identity
+# ---------------------------------------------------------------------------
+
+
+def test_replica_id_default_resolution(monkeypatch):
+    """replica_id falls back to $POD_NAME, then the hostname."""
+    import socket
+
+    monkeypatch.delenv("POD_NAME", raising=False)
+    assert Observability().replica_id == socket.gethostname()
+    monkeypatch.setenv("POD_NAME", "guardrails-7b9f-x1")
+    assert Observability().replica_id == "guardrails-7b9f-x1"
+    assert Observability(replica_id="explicit").replica_id == "explicit"
+
+
+def test_audit_lines_carry_replica_and_chain_verifies(tmp_path: Path):
+    """Every chained audit line carries the replica id and the chain still
+    verifies; stripping the field breaks verification (it is hashed in)."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import guardrail_ctl
+
+    path = tmp_path / "audit.jsonl"
+    obs = Observability(audit_path=str(path), replica_id="replica-a")
+    obs.audit.emit({"event": "one"})
+    obs.audit.emit({"event": "two", "n": 2})
+
+    raw_lines = path.read_text().strip().splitlines()
+    assert len(raw_lines) == 2
+    for raw in raw_lines:
+        assert json.loads(raw)["replica"] == "replica-a"
+    assert guardrail_ctl.main(["audit", "verify", str(path)]) == 0
+
+    # Removing ``replica`` from a line invalidates its line_hash -> chain breaks.
+    tampered = json.loads(raw_lines[1])
+    del tampered["replica"]
+    raw_lines[1] = json.dumps(tampered, sort_keys=True)
+    path.write_text("\n".join(raw_lines) + "\n")
+    assert guardrail_ctl.main(["audit", "verify", str(path)]) == 1
+
+
+def test_audit_sink_without_replica_omits_field(tmp_path: Path):
+    """A sink constructed without a replica emits no replica field."""
+    path = tmp_path / "audit.jsonl"
+    AuditSink(str(path)).emit({"event": "plain"})
+    assert "replica" not in json.loads(path.read_text().strip())

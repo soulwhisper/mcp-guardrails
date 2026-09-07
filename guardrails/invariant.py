@@ -23,12 +23,13 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Union
 
 from .models import ScanResult
+from .trace_store import MemoryTraceStore, TraceStore
 
 # A step matcher for a tool name: exact string, regex (compiled or str), or
 # callable accepting the tool name and returning bool.
@@ -508,6 +509,14 @@ class InvariantEngine:
     cross-tenant toxic flow or trip a loop rule. The number of distinct keys
     is bounded by ``max_traces`` with LRU eviction, so a key-flooding client
     cannot grow memory without limit.
+
+    Trace state lives behind a pluggable :class:`TraceStore`
+    (:mod:`guardrails.trace_store`, R-1): the default in-memory store keeps
+    the historical single-replica behaviour, while the Redis backend shares
+    the sliding windows across every replica behind a load balancer so
+    multi-replica deployments do not dilute detection by ~1/N. Rule
+    evaluation semantics are identical either way; see the trace_store
+    module docstring for the shared-backend consistency model.
     """
 
     def __init__(
@@ -517,19 +526,32 @@ class InvariantEngine:
         max_traces: int = 1024,
         args_max_bytes: int = 4 * 1024,
         sticky_ttl_s: float = 600.0,
+        store: TraceStore | None = None,
     ):
         self._rules: list[Rule] = list(rules)
-        self._traces: OrderedDict[str, deque[TraceEntry]] = OrderedDict()
         self._window = window
         self._max_traces = max(1, max_traces)
         self._args_max_bytes = args_max_bytes
         self._sticky_ttl_s = max(0.0, sticky_ttl_s)
+        # Trace state backend (R-1). ``None`` keeps the historical in-process
+        # behaviour; pass a RedisTraceStore (see guardrails.trace_store) to
+        # share the sliding windows across replicas. When a store is supplied
+        # it owns the window/max_traces bounds — the engine's own values only
+        # size the default store and the sticky map.
+        self._store: TraceStore = (
+            store
+            if store is not None
+            else MemoryTraceStore(window=window, max_traces=self._max_traces)
+        )
         # S-H4 sticky partial-match progress: ``(trace_key, rule_name)`` ->
         # ``(steps_matched, last_updated_epoch)``. When a ToxicFlowRule matches
         # a PREFIX of its steps the progress is parked here (TTL-bounded) so
         # the flow survives its early steps sliding out of the rolling window.
-        # Bounded LRU like ``_traces`` (same ``max_traces`` cap), so a
-        # key-flooding client cannot grow it without limit.
+        # Bounded LRU (same ``max_traces`` cap), so a key-flooding client
+        # cannot grow it without limit. Sticky progress stays per-replica even
+        # with a shared store: it only matters once early flow steps have slid
+        # out of the window, and re-deriving it from the shared trace needs no
+        # extra state (see guardrails.trace_store's consistency model).
         self._sticky: OrderedDict[tuple[str, str], tuple[int, float]] = OrderedDict()
 
     @property
@@ -544,19 +566,6 @@ class InvariantEngine:
     def max_traces(self) -> int:
         return self._max_traces
 
-    def _get_trace(self, key: str) -> deque[TraceEntry]:
-        """Return the deque for ``key``, creating / LRU-refreshing it."""
-        trace = self._traces.get(key)
-        if trace is None:
-            if len(self._traces) >= self._max_traces:
-                # Evict the least-recently-used tenant trace.
-                self._traces.popitem(last=False)
-            trace = deque(maxlen=self._window)
-            self._traces[key] = trace
-        else:
-            self._traces.move_to_end(key)
-        return trace
-
     def set_rules(self, rules: Iterable[Rule]) -> None:
         """Atomically swap the active rule list.
 
@@ -569,11 +578,10 @@ class InvariantEngine:
 
     def reset(self, key: str | None = None) -> None:
         """Clear one tenant's trace (and sticky progress), or all when None."""
+        self._store.reset(key)
         if key is None:
-            self._traces.clear()
             self._sticky.clear()
         else:
-            self._traces.pop(key, None)
             for skey in [k for k in self._sticky if k[0] == key]:
                 self._sticky.pop(skey, None)
 
@@ -626,7 +634,7 @@ class InvariantEngine:
         full_args = dict(args or {})
         fp = f"{tool}:{json.dumps(full_args, sort_keys=True, default=str)}"
         stored = _truncate_args(full_args, self._args_max_bytes)
-        self._get_trace(key).append(TraceEntry(tool=tool, args=stored, fp=fp, ts=time.monotonic()))
+        self._store.append(key, TraceEntry(tool=tool, args=stored, fp=fp, ts=time.monotonic()))
 
     def evaluate(self, *, key: str = "") -> ScanResult | None:
         """Run all rules against the current trace for ``key``.
@@ -635,8 +643,7 @@ class InvariantEngine:
         if no rule fires. First-match wins; rule order in the config therefore
         expresses priority.
         """
-        trace = self._traces.get(key)
-        snapshot = list(trace) if trace is not None else []
+        snapshot = self._store.read(key)
         now = time.monotonic()
         for rule in self._rules:
             if isinstance(rule, ToxicFlowRule):
@@ -674,5 +681,4 @@ class InvariantEngine:
 
     def snapshot(self, *, key: str = "") -> tuple[TraceEntry, ...]:
         """Return an immutable copy of a trace (for tests/audit)."""
-        trace = self._traces.get(key)
-        return tuple(trace) if trace is not None else ()
+        return tuple(self._store.read(key))

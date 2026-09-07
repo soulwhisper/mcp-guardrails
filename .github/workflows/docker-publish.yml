@@ -17,6 +17,14 @@
 # The image is ghcr.io/soulwhisper/mcp-guardrails. Build args pass through
 # PY_VERSION (defaults to 3.11-slim in the Dockerfile).
 #
+# Supply chain: buildx publishes SLSA provenance and an SBOM attestation
+# alongside the image (`provenance: true`, `sbom: true` on the build step),
+# and the pushed manifest is signed keylessly with cosign (Sigstore OIDC,
+# `id-token: write`) by digest. Verify with:
+#   cosign verify ghcr.io/soulwhisper/mcp-guardrails@<digest> \
+#     --certificate-identity-regexp 'https://github.com/soulwhisper/mcp-guardrails' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+#
 # GitHub Releases are created manually via the GitHub UI (tag → Draft a new
 # release); this workflow only builds/pushes the container image.
 name: Docker publish
@@ -32,6 +40,7 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write # keyless cosign signing (Sigstore OIDC)
 
 concurrency:
   # buildx only updates the image manifest atomically at the very end of the
@@ -85,12 +94,12 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          provenance: true
+          sbom: true
           labels: ${{ steps.meta.outputs.labels }}
           secrets: |
             "HF_TOKEN=${{ secrets.HF_TOKEN }}"
           cache-from: type=gha
-          provenance: false
 
       - name: Generate image digest summary
         run: |
@@ -102,28 +111,34 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      # Keyless signing of the pushed manifest by digest. Runs on every
+      # publish (tag push and workflow_dispatch both push the image).
+      - name: Sign image (cosign keyless, by digest)
+        run: cosign sign --yes ghcr.io/soulwhisper/mcp-guardrails@${{ steps.build.outputs.digest }}
+
       # ---------------------------------------------------------------------
-      # Advisory security scan of the published image — runs only on tag pushes
-      # (actual releases). workflow_dispatch builds are ad-hoc and don't need
-      # the scan.
+      # Blocking security scan of the published image — runs only on tag
+      # pushes (actual releases). workflow_dispatch builds are ad-hoc and
+      # don't need the gate.
       #
-      # continue-on-error: true means a trivy finding does NOT block the
-      # release — it surfaces as a warning in the run log for the maintainer
-      # to triage. Promote this to a blocking gate (exit-code: 1) once the
-      # baseline is established.
+      # exit-code: "1" makes any CRITICAL or HIGH finding fail the release
+      # workflow. The image is already pushed (and signed) by this point, so
+      # a failure signals the maintainer to triage and either patch or yank
+      # the tag; ignore-unfixed drops findings with no available fix.
       #
-      # trivy-action does not maintain stable major-version tags beyond @master;
-      # pin to a commit SHA in production. For now @master is acceptable because
-      # this step is advisory only.
+      # trivy-action does not maintain floating major-version tags; pin to a
+      # full release tag (currently the latest, v0.36.0).
       # ---------------------------------------------------------------------
       - name: Trivy scan of the published image
         if: github.ref_type == 'tag'
-        continue-on-error: true
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/soulwhisper/mcp-guardrails:latest
           format: table
-          exit-code: "0" # 0 = print findings but never fail (advisory)
+          exit-code: "1" # fail the release on CRITICAL/HIGH findings
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH

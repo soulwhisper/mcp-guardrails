@@ -8,6 +8,9 @@ name: CodeQL
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  schedule:
+    # Weekly rescan for newly disclosed dependency CVEs, Monday 06:00 UTC.
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read

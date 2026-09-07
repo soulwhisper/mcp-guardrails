@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -12,10 +13,12 @@ from guardrails.invariant import (
     FlowStep,
     InvariantEngine,
     LoopRule,
+    RateLimitRule,
     ToxicFlowRule,
     TraceEntry,
 )
 from guardrails.rules import RulePack, load_rules
+from guardrails.trace_store import MemoryTraceStore, RedisTraceStore, make_trace_store
 
 # ---------------------------------------------------------------------------
 # FlowStep matching
@@ -308,3 +311,160 @@ def test_set_rules_accepts_iterable():
     gen = (ToxicFlowRule(name=f"r{i}", steps=[FlowStep(tool="t")]) for i in range(3))
     engine.set_rules(gen)
     assert len(engine.rules) == 3
+
+
+# ---------------------------------------------------------------------------
+# TraceStore backends (R-1: shared invariant trace state)
+# ---------------------------------------------------------------------------
+
+
+def test_memory_store_append_read_order():
+    store = MemoryTraceStore(window=8)
+    store.append("k", TraceEntry("a"))
+    store.append("k", TraceEntry("b"))
+    assert [e.tool for e in store.read("k")] == ["a", "b"]
+    assert store.read("missing") == []
+
+
+def test_memory_store_prunes_to_window():
+    store = MemoryTraceStore(window=2)
+    for tool in ("a", "b", "c"):
+        store.append("k", TraceEntry(tool))
+    assert [e.tool for e in store.read("k")] == ["b", "c"]
+
+
+def test_memory_store_max_traces_lru_eviction():
+    store = MemoryTraceStore(window=4, max_traces=2)
+    store.append("a", TraceEntry("t"))
+    store.append("b", TraceEntry("t"))
+    store.append("c", TraceEntry("t"))  # evicts "a"
+    assert store.read("a") == []
+    assert store.read("b") and store.read("c")
+
+
+def test_memory_store_read_does_not_refresh_lru():
+    # Evaluation is read-only: it must not keep an idle tenant trace alive.
+    store = MemoryTraceStore(window=4, max_traces=2)
+    store.append("a", TraceEntry("t"))
+    store.append("b", TraceEntry("t"))
+    assert store.read("a")  # read-only, no LRU refresh
+    store.append("c", TraceEntry("t"))  # still evicts "a"
+    assert store.read("a") == []
+
+
+def test_memory_store_reset_scoped_and_all():
+    store = MemoryTraceStore(window=4)
+    store.append("a", TraceEntry("t"))
+    store.append("b", TraceEntry("t"))
+    store.reset("a")
+    assert store.read("a") == []
+    assert store.read("b")
+    store.reset()
+    assert store.read("b") == []
+
+
+def test_engine_with_explicit_memory_store_behaves_like_default():
+    rule = ToxicFlowRule(name="exfil", steps=[FlowStep(tool="a"), FlowStep(tool="b")])
+    engine = InvariantEngine([rule], window=8, store=MemoryTraceStore(window=8))
+    engine.record("a")
+    assert engine.evaluate() is None
+    engine.record("b")
+    assert engine.evaluate() is not None
+
+
+def test_make_trace_store_memory_backend():
+    store = make_trace_store("memory", window=8, max_traces=4)
+    assert isinstance(store, MemoryTraceStore)
+    assert store.window == 8 and store.max_traces == 4
+
+
+def test_make_trace_store_unknown_backend_raises():
+    with pytest.raises(ValueError):
+        make_trace_store("etcd")
+
+
+def test_make_trace_store_redis_unreachable_fails_closed():
+    # Fail-closed at startup: backend=redis with an unreachable server must
+    # raise, never fall back to silently-weakened per-replica state.
+    redis = pytest.importorskip("redis", reason="redis not installed (redis extra)")
+    with pytest.raises(redis.exceptions.ConnectionError):
+        make_trace_store("redis", "redis://127.0.0.1:1/0")
+
+
+def _fake_redis_client():
+    fakeredis = pytest.importorskip("fakeredis", reason="fakeredis not installed (dev extra)")
+    return fakeredis.FakeStrictRedis()
+
+
+def test_redis_store_append_read_roundtrip():
+    client = _fake_redis_client()
+    store = RedisTraceStore(client=client, window=8)
+    before = time.monotonic()
+    store.append("k", TraceEntry("inbox_read", {"id": 7}, fp="fp1", ts=time.monotonic()))
+    (entry,) = store.read("k")
+    assert entry.tool == "inbox_read"
+    assert entry.args == {"id": 7}
+    assert entry.fp == "fp1"
+    # ts is mapped back into this process's monotonic frame (module docstring).
+    assert 0.0 < entry.ts <= time.monotonic()
+    assert entry.ts >= before - 1.0
+
+
+def test_redis_store_prunes_to_window():
+    store = RedisTraceStore(client=_fake_redis_client(), window=2)
+    for tool in ("a", "b", "c"):
+        store.append("k", TraceEntry(tool, ts=time.monotonic()))
+    assert [e.tool for e in store.read("k")] == ["b", "c"]
+
+
+def test_redis_store_max_traces_eviction():
+    store = RedisTraceStore(client=_fake_redis_client(), window=4, max_traces=2)
+    for key in ("a", "b", "c"):
+        store.append(key, TraceEntry("t", ts=time.monotonic()))
+    assert store.read("a") == []  # least-recently-appended evicted
+    assert store.read("b") and store.read("c")
+
+
+def test_redis_store_sets_key_ttl():
+    client = _fake_redis_client()
+    store = RedisTraceStore(client=client, window=4, ttl_s=3600.0)
+    store.append("k", TraceEntry("t", ts=time.monotonic()))
+    assert 0 < client.ttl("mcpg:trace:k") <= 3600
+
+
+def test_redis_store_reset_scoped_and_all():
+    client = _fake_redis_client()
+    store = RedisTraceStore(client=client, window=4)
+    store.append("a", TraceEntry("t", ts=time.monotonic()))
+    store.append("b", TraceEntry("t", ts=time.monotonic()))
+    store.reset("a")
+    assert store.read("a") == []
+    assert store.read("b")
+    store.reset()
+    assert store.read("b") == []
+
+
+def test_redis_store_skips_undecodable_entries():
+    client = _fake_redis_client()
+    store = RedisTraceStore(client=client, window=8)
+    client.rpush("mcpg:trace:k", "not-json")
+    store.append("k", TraceEntry("t", ts=time.monotonic()))
+    assert [e.tool for e in store.read("k")] == ["t"]
+
+
+def test_engine_with_redis_store_detects_flow_and_rate():
+    flow = ToxicFlowRule(name="exfil", steps=[FlowStep(tool="a"), FlowStep(tool="b")])
+    engine = InvariantEngine([flow], window=8, store=RedisTraceStore(client=_fake_redis_client()))
+    engine.record("a")
+    assert engine.evaluate() is None
+    engine.record("b")
+    assert engine.evaluate() is not None
+
+    # Time-windowed rules see correct entry ages through the ts mapping.
+    rate = RateLimitRule(name="rl", tool="*", window_s=60.0, max_calls=2)
+    engine = InvariantEngine([rate], window=8, store=RedisTraceStore(client=_fake_redis_client()))
+    for _ in range(2):
+        engine.record("noisy")
+        assert engine.evaluate() is None
+    engine.record("noisy")
+    assert engine.evaluate() is not None

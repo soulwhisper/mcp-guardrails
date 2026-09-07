@@ -77,6 +77,17 @@ spec:
               drop:
                 - ALL
             readOnlyRootFilesystem: true
+          # preStop: delay SIGTERM so the endpoint removal triggered by pod
+          # deletion propagates (kubelet -> endpoints -> agentgateway
+          # dataplane) BEFORE the sidecar starts its own shutdown sequence.
+          # The sleep must be >= SHUTDOWN_DRAIN_S (default 5.0): 10s covers
+          # the drain window with margin for slow endpoint controllers.
+          # terminationGracePeriodSeconds below budgets preStop + drain +
+          # gRPC grace on top of it.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 10"]
           ports:
             - name: grpc-h2c
               containerPort: 9001
@@ -85,6 +96,15 @@ spec:
           # See that file for the full list — only the knobs we want to override
           # from the homelab defaults are listed here.
           env:
+            # POD_NAME feeds the audit replica attribution chain:
+            # AUDIT_REPLICA_ID defaults to $POD_NAME (else the hostname),
+            # and the value lands in every hash-chained audit line as the
+            # `replica` field (R-4). Override AUDIT_REPLICA_ID only if the
+            # pod name is not a stable identity in your deployment shape.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: FAILURE_MODE
               value: "failClosed"
             - name: HUMAN_REVIEW_MODE
@@ -246,4 +266,10 @@ spec:
             items:
               - key: rules.policy
                 path: rules.policy
-      terminationGracePeriodSeconds: 15
+      # Shutdown budget: preStop sleep (10s) + NOT_SERVING readiness-
+      # propagation wait (SHUTDOWN_DRAIN_S, default 5s) + gRPC drain grace
+      # (5s) = 20s of scripted shutdown, plus 10s headroom for in-flight
+      # exchanges to finish inside the drain grace. See docs/deployment.md
+      # for the full rollout/drain sequence; keep this comfortably above
+      # preStop + SHUTDOWN_DRAIN_S if you raise either.
+      terminationGracePeriodSeconds: 30

@@ -56,6 +56,7 @@ from .scanners import (
     extract_text,
     scan_windows,
 )
+from .trace_store import make_trace_store
 
 logger = logging.getLogger("mcp.guardrails.engine")
 
@@ -192,6 +193,15 @@ class GuardrailEngine:
             max_traces=config.invariant_max_traces,
             args_max_bytes=config.invariant_args_max_bytes,
             sticky_ttl_s=config.invariant_sticky_ttl_s,
+            # R-1: ``memory`` preserves the legacy per-replica window;
+            # ``redis`` shares trace state across replicas and raises here
+            # (fail-closed) when the server is unreachable at startup.
+            store=make_trace_store(
+                config.invariant_state_backend,
+                config.redis_url,
+                window=config.invariant_window,
+                max_traces=config.invariant_max_traces,
+            ),
         )
 
         aggregator = DecisionAggregator(human_review_mode=config.human_review_mode)
@@ -199,8 +209,11 @@ class GuardrailEngine:
         obs = Observability(
             service_name=config.otel_service_name,
             otel_endpoint=config.otel_endpoint,
+            otel_insecure=config.otel_insecure,
+            prometheus_addr=config.prometheus_addr,
             audit_path=config.audit_log_path,
             audit_hash_chain=config.audit_hash_chain,
+            replica_id=config.audit_replica_id,
         )
 
         components = EngineComponents(

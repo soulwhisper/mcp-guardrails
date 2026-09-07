@@ -1,0 +1,87 @@
+# Agentgateway interop e2e — runs the live sidecar test
+# (scripts/e2e_agentgateway.sh) against a real agentgateway binary on a
+# nightly schedule (and on manual dispatch) so contract drift with upstream
+# agentgateway (mcpGuardrails schema, wire behaviour) is caught between
+# releases, not at release time.
+#
+# The binary is pinned by version AND sha256 — bump both together:
+#   1. AGW_VERSION — the release tag
+#      (https://github.com/agentgateway/agentgateway/releases)
+#   2. AGW_SHA256  — contents of the release's agentgateway-linux-amd64.sha256
+#      asset for that tag (use the published checksum, never a mirror).
+name: E2E (agentgateway interop)
+
+on:
+  schedule:
+    # Nightly at 03:17 UTC.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per ref at a time (nightly + manual dispatch share main).
+concurrency:
+  group: e2e-agentgateway-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AGW_VERSION: "1.4.1"
+  AGW_SHA256: "20f7b298e0c36eef33e7d612b0d0b91d87d43124f59b01f6e9b730477f66d982"
+
+jobs:
+  e2e:
+    name: "agentgateway interop e2e"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install sidecar + stdio-upstream deps
+        # [dev] provides the gRPC stack for server.py; `mcp` (v1, FastMCP
+        # API) is needed only by the stdio upstream
+        # (examples/mcp_pii_upstream.py -> fastmcp). The sidecar runs
+        # regex-only (ENABLE_PROMPTGUARD=0) — no ML stack.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" "mcp<2"
+
+      - name: Download pinned agentgateway binary
+        # Fail closed: a checksum mismatch (compromised/updated asset under
+        # the same tag) aborts the job rather than running an unknown binary.
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/agentgateway" \
+            "https://github.com/agentgateway/agentgateway/releases/download/v${AGW_VERSION}/agentgateway-linux-amd64"
+          echo "$AGW_SHA256  $RUNNER_TEMP/agentgateway" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/agentgateway"
+          "$RUNNER_TEMP/agentgateway" --version
+
+      - name: Run interop e2e
+        # chmod: the script is committed non-executable (mode 644).
+        run: |
+          chmod +x scripts/e2e_agentgateway.sh
+          AGENTGATEWAY_BIN="$RUNNER_TEMP/agentgateway" ./scripts/e2e_agentgateway.sh
+
+      - name: Collect e2e logs on failure
+        if: failure()
+        # The script keeps its workdir (sidecar.log, agentgateway.log, wire
+        # bodies) under /tmp/mcp-guardrails-e2e.* for exactly this case.
+        run: |
+          tar -czf e2e-logs.tar.gz /tmp/mcp-guardrails-e2e.* 2>/dev/null \
+            || echo "no e2e workdir found"
+
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-agentgateway-logs
+          path: e2e-logs.tar.gz
+          if-no-files-found: warn

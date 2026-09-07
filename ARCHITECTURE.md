@@ -585,7 +585,8 @@ atomically:
 - Rule objects themselves are immutable (dataclasses with frozen-ish
   semantics via `__post_init__` normalisation), so once a snapshot is
   taken for evaluation the rule list cannot be mutated mid-evaluation.
-- The `InvariantEngine._traces` per-route trace map (LRU-bounded by
+- The `InvariantEngine` trace store (`MemoryTraceStore` by default;
+  `RedisTraceStore` when `INVARIANT_STATE_BACKEND=redis` — LRU-bounded by
   `INVARIANT_MAX_TRACES`) is guarded separately by an
   `asyncio.Lock` in the engine, so the trace append/evaluate pair is
   atomic with respect to other concurrent requests.

@@ -223,6 +223,15 @@ class GuardrailConfig:
     # the window. Progress older than this is dropped (a flow spread over
     # longer than the TTL is treated as abandoned).
     invariant_sticky_ttl_s: int = 600
+    # R-1: invariant trace state backend. ``memory`` (default) keeps the
+    # per-replica in-process window; ``redis`` shares trace state across
+    # replicas so a load balancer cannot split a toxic-flow trace N ways.
+    # ``redis`` requires the ``redis`` extra and fails closed at startup
+    # when the server is unreachable.
+    invariant_state_backend: str = "memory"
+    # Redis URL for ``invariant_state_backend="redis"``
+    # (REDIS_URL, default ``redis://localhost:6379/0``).
+    redis_url: str | None = None
 
     # --- Timing ---
     scanner_timeout_ms: int = 500
@@ -255,6 +264,20 @@ class GuardrailConfig:
     # replicas appending to ONE shared file interleave the chain — use one
     # replica, per-replica files, or stdout shipping.
     audit_hash_chain: bool = True
+    # T3-1: OTLP exporter TLS mode. None (env unset) derives from the
+    # endpoint scheme — ``https://`` secure, ``http://``/no-scheme insecure,
+    # per OTLP conventions. Explicit ``true``/``false`` overrides.
+    otel_insecure: bool | None = None
+    # T3-3: Prometheus pull endpoint listen address (e.g. ``:9464``).
+    # None disables the /metrics HTTP server. Requires the
+    # ``opentelemetry-exporter-prometheus`` package; degrades to OTLP-only
+    # with a warning when absent.
+    prometheus_addr: str | None = None
+    # R-4: replica identity stamped on every audit line (inside the hashed
+    # payload) so per-replica chains are attributable when a fleet exports
+    # N independent chains. None resolves to ``$POD_NAME`` else the hostname
+    # in the Observability layer.
+    audit_replica_id: str | None = None
     # Sidecar version string recorded in every audit line
     # (``sidecar_version``). Defaults to the package ``__version__``; the env
     # override exists for builds that stamp a different release identity
@@ -362,6 +385,10 @@ class GuardrailConfig:
                 if h.strip()
             ),
             invariant_sticky_ttl_s=_env_int("INVARIANT_STICKY_TTL_S", 600),
+            invariant_state_backend=os.environ.get("INVARIANT_STATE_BACKEND", "memory")
+            .strip()
+            .lower(),
+            redis_url=os.environ.get("REDIS_URL") or None,
             scanner_timeout_ms=_env_int("SCANNER_TIMEOUT_MS", 500),
             listen_addr=os.environ.get("LISTEN_ADDR", "[::]:9001"),
             server_max_workers=_env_int("SERVER_MAX_WORKERS", 8),
@@ -369,6 +396,13 @@ class GuardrailConfig:
             grpc_max_concurrent_rpcs=_env_int("GRPC_MAX_CONCURRENT_RPCS", 128),
             otel_endpoint=otel,
             otel_service_name=os.environ.get("OTEL_SERVICE_NAME", "mcp-guardrails"),
+            otel_insecure=(
+                None
+                if os.environ.get("OTEL_EXPORTER_OTLP_INSECURE") is None
+                else _env_bool("OTEL_EXPORTER_OTLP_INSECURE", False)
+            ),
+            prometheus_addr=os.environ.get("PROMETHEUS_LISTEN_ADDR") or None,
+            audit_replica_id=os.environ.get("AUDIT_REPLICA_ID") or None,
             audit_log_path=os.environ.get("AUDIT_LOG_PATH") or None,
             audit_hash_chain=_env_bool("AUDIT_HASH_CHAIN", True),
             audit_caller_headers=tuple(

@@ -1,8 +1,9 @@
 # yaml-language-server: $schema=https://agentgateway.dev/schema/config
-# agentgateway v1.4.0 standalone config — verified live against this repo's
-# ExtMcp guardrail sidecar (see scripts/e2e_agentgateway.sh).
-# Also compatible with v1.3.1 (the `binds` model is retained in v1.4.0;
-# v1.4.0 also offers the new `gateways` model as an alternative).
+# agentgateway v1.4.1 standalone config — verified live against this repo's
+# ExtMcp guardrail sidecar (see scripts/e2e_agentgateway.sh; pinned in
+# .github/workflows/e2e-agentgateway.yml).
+# Also compatible with v1.3.1 (the `binds` model is retained in v1.4.x;
+# v1.4 also offers the new `gateways` model as an alternative).
 # Topology:
 #   client -> :3000 (CORS + mcpGuardrails processor, failClosed)
 #          -> ExtMcp sidecar gRPC localhost:9001 (h2c, plaintext)

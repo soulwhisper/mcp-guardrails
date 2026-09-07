@@ -64,8 +64,16 @@ ARG LF_ONNX_FILE=model.onnx
 # weights baked into the image. To update:
 #   curl -s https://huggingface.co/api/models/$LF_ONNX_MODEL | jq -r .sha
 # and bump the default here (and LF_ONNX_REVISION for non-container runs).
-# Optional hardening: also verify a known sha256 of the .onnx after download.
+# Integrity pin (T1-3): fail the build if the downloaded .onnx does not
+# match this sha256, so a corrupted or tampered upstream blob is never baked
+# into the image. The default pins model.onnx at PG2_REVISION; to fetch the
+# hash for a different file/revision:
+#   curl -s https://huggingface.co/api/models/$LF_ONNX_MODEL/tree/$PG2_REVISION
+# (the .lfs.oid field of the target file). When overriding LF_ONNX_FILE (e.g.
+# model.quant.onnx, sha256 3ca25030566076c92c19168a64d6e203e4397cd936f55dd0345b4d3c6fbd9744),
+# override PG2_SHA256 to match; set it empty to skip verification.
 ARG PG2_REVISION=45a05fbd5337a864edc608f994911f009c37ca57
+ARG PG2_SHA256=fbe0be6a471873b6c52f7d6631c16fbddb88ba8c7ab2ba34ca48e8e77ffd9999
 # Install ONLY what the download needs (huggingface_hub + hf-xet) — NOT the
 # full runtime deps. This decouples the model-download layer from the builder
 # stage, so a requirements.txt bump does NOT invalidate the (slow, ~350MB) model
@@ -86,7 +94,7 @@ RUN --mount=type=cache,target=/hf-cache,sharing=locked \
     echo "Pre-downloading ONNX model: ${LF_ONNX_MODEL} (${LF_ONNX_FILE})"; \
     python - <<PYEOF
 from huggingface_hub import snapshot_download
-import os, shutil
+import hashlib, os, shutil
 m = "${LF_ONNX_MODEL}"
 f = "${LF_ONNX_FILE}"
 rev = "${PG2_REVISION}" or None
@@ -96,6 +104,21 @@ rev = "${PG2_REVISION}" or None
 # ephemeral cache mount). The revision is pinned (PG2_REVISION, S-M6) so the
 # baked weights are an immutable upstream commit, not a mutable ref.
 path = snapshot_download(repo_id=m, revision=rev, allow_patterns=[f, "config.json", "tokenizer*", "special_tokens_map.json", "vocab*"])
+# Integrity verify (T1-3): sha256-check the downloaded weights against the
+# pinned PG2_SHA256 before materialising them into the image; fail the build
+# on mismatch. Empty PG2_SHA256 skips verification (documented override).
+expected = "${PG2_SHA256}".strip().lower()
+if expected:
+    h = hashlib.sha256()
+    with open(os.path.join(path, f), "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    digest = h.hexdigest()
+    if digest != expected:
+        raise SystemExit(f"FAIL: sha256 mismatch for {f}: got {digest}, expected {expected}")
+    print(f"sha256 verified for {f}: {digest}")
+else:
+    print("WARNING: PG2_SHA256 empty — skipping model integrity verification")
 os.makedirs("/models/hf/pg2", exist_ok=True)
 for item in os.listdir(path):
     src = os.path.join(path, item)
