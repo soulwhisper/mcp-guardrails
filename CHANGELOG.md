@@ -5,6 +5,18 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0](https://github.com/soulwhisper/mcp-guardrails/compare/v1.1.0...v1.2.0) (2026-09-15)
+
+
+### Features
+
+* **deps:** update grpc stack ( 1.83.1 → 1.84.0 ) ([#124](https://github.com/soulwhisper/mcp-guardrails/issues/124)) ([d9e070b](https://github.com/soulwhisper/mcp-guardrails/commit/d9e070bbb5f11c9cf0dc6404363df63d095e0721))
+
+
+### Documentation
+
+* multi-replica configuration guide + bake redis client into image ([9560325](https://github.com/soulwhisper/mcp-guardrails/commit/9560325d25706892129b4af8b722010de8605b5e))
+
 ## [1.1.0](https://github.com/soulwhisper/mcp-guardrails/compare/v1.0.0...v1.1.0) (2026-09-07)
 
 
