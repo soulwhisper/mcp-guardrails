@@ -54,4 +54,4 @@ opentelemetry-exporter-prometheus>=0.49b0
 # --- Redis (optional at runtime; only used when INVARIANT_STATE_BACKEND=redis).
 #     Baked into the image so the backend is env-selectable without a rebuild;
 #     imported lazily — absent from the hot path on the default memory backend. ---
-redis>=5,<8
+redis>=8,<9

@@ -56,7 +56,7 @@ alignment = [
 # Imported lazily — the sidecar runs fine without it on the default
 # in-process backend.
 redis = [
-    "redis>=5,<8",
+    "redis>=8,<9",
 ]
 
 dev = [
