@@ -15,6 +15,15 @@
       // and never cuts a release for them (ci section is hidden).
       "matchManagers": ["dockerfile"],
       "semanticCommitType": "ci"
+    },
+    {
+      // Python 3.15 is blocked: onnxruntime ships zero cp315 wheels on PyPI
+      // (checked 2026-10-16, latest 1.31.0) — pip-audit fails with "No
+      // matching distribution" and the 3.15-slim base image could not
+      // install requirements either (#129 closed). Revisit when onnxruntime
+      // publishes cp315 wheels.
+      "matchPackageNames": ["python"],
+      "allowedVersions": "<3.15"
     }
   ]
 }
