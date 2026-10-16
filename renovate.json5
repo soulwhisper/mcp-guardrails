@@ -23,7 +23,7 @@
       // install requirements either (#129 closed). Revisit when onnxruntime
       // publishes cp315 wheels.
       "matchPackageNames": ["python"],
-      "allowedVersions": "<3.15"
+      "allowedVersions": "<3.15.0-0"  # semver: plain <3.15 still admits 3.15.0-<buildnr> prerelease tags (actions/python-versions style)
     }
   ]
 }
