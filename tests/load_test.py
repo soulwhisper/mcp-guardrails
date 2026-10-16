@@ -32,7 +32,7 @@ def _find_model_snap() -> str:
         return snap
     # Search the HF cache.
     base = os.path.expanduser(
-        "~/.cache/huggingface/hub/models--gravitee-io--Llama-Prompt-Guard-2-86M-onnx/snapshots"
+        "~/.cache/huggingface/hub/models--gravitee-io--Llama-Prompt-Guard-2-22M-onnx/snapshots"
     )
     if os.path.isdir(base):
         dirs = sorted(os.listdir(base))
@@ -41,8 +41,8 @@ def _find_model_snap() -> str:
     # Fallback for NixOS local dev.
     fallback = os.path.expanduser(
         "~/.cache/huggingface/hub/models--gravitee-io--"
-        "Llama-Prompt-Guard-2-86M-onnx/snapshots/"
-        "45a05fbd5337a864edc608f994911f009c37ca57"
+        "Llama-Prompt-Guard-2-22M-onnx/snapshots/"
+        "da68d0f6023c7aeaf6b256eec549de295d5e8740"
     )
     if os.path.isdir(fallback):
         return fallback
@@ -215,7 +215,7 @@ async def main():
 
         # 3. Summary
         print("\n── Summary ──")
-        print("  Model: gravitee-io/Llama-Prompt-Guard-2-86M-onnx (~1.1GB)")
+        print("  Model: gravitee-io/Llama-Prompt-Guard-2-22M-onnx (271MB fp32)")
         print("  Infrastructure: ONNX Runtime CPU, Python 3.13, NixOS")
         print("  Scanners: regex + onnx-promptguard + invariant")
         print("  Per-request added latency: ~35ms (p50), ~55ms (p99)")

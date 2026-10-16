@@ -57,7 +57,7 @@ async def timed(stub_call, label: str) -> tuple[float, any]:
 def _find_model_snap() -> str:
     """Auto-detect the ONNX model snapshot directory from the HF cache."""
     base = os.path.expanduser(
-        "~/.cache/huggingface/hub/models--gravitee-io--Llama-Prompt-Guard-2-86M-onnx/snapshots"
+        "~/.cache/huggingface/hub/models--gravitee-io--Llama-Prompt-Guard-2-22M-onnx/snapshots"
     )
     if os.path.isdir(base):
         dirs = sorted(os.listdir(base))
@@ -66,8 +66,8 @@ def _find_model_snap() -> str:
     # Fallback: hardcoded NixOS local-dev path.
     fallback = os.path.expanduser(
         "~/.cache/huggingface/hub/models--gravitee-io--"
-        "Llama-Prompt-Guard-2-86M-onnx/snapshots/"
-        "45a05fbd5337a864edc608f994911f009c37ca57"
+        "Llama-Prompt-Guard-2-22M-onnx/snapshots/"
+        "da68d0f6023c7aeaf6b256eec549de295d5e8740"
     )
     if os.path.isdir(fallback):
         return fallback
@@ -75,7 +75,7 @@ def _find_model_snap() -> str:
         "ONNX model not found. Set LF_ONNX_LOCAL_DIR to the model directory, "
         "or download it with: pip install huggingface-hub && "
         "python -c 'from huggingface_hub import snapshot_download; "
-        'snapshot_download("gravitee-io/Llama-Prompt-Guard-2-86M-onnx")\''
+        'snapshot_download("gravitee-io/Llama-Prompt-Guard-2-22M-onnx")\''
     )
 
 
@@ -609,7 +609,7 @@ async def main() -> int:
     global PASS, FAIL
     print("=" * 60)
     print("mcp-guardrails Field Test")
-    print("Model: gravitee-io/Llama-Prompt-Guard-2-86M-onnx (CPU)")
+    print("Model: gravitee-io/Llama-Prompt-Guard-2-22M-onnx (CPU)")
     print("Scanners: regex + onnx-promptguard")
     print("=" * 60)
 

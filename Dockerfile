@@ -5,10 +5,10 @@
 # Multi-stage build:
 #   1. base       — shared system deps (ca-certs, curl for healthcheck)
 #   2. builder    — pip install into a clean prefix (no build tools leak)
-#   3. models     — pre-download ONNX PromptGuard-2-86M so runtime never hits HF
+#   3. models     — pre-download ONNX PromptGuard-2-22M so runtime never hits HF
 #   4. runtime    — nonroot (65532), copy install + models + app, expose :9001
 #
-# The ONNX model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) is PUBLIC and
+# The ONNX model (gravitee-io/Llama-Prompt-Guard-2-22M-onnx) is PUBLIC and
 # non-gated — no token required for access. However, HF_TOKEN is recommended
 # to avoid 429 rate-limiting during the model download stage (HF applies
 # stricter limits to unauthenticated requests from shared IPs like GHA).
@@ -45,9 +45,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # This keeps runtime cold-start fast (no download on first scan) and makes
 # the image air-gappable.
 #
-# Default: model.onnx (full-precision, ~350MB, accuracy 98.01%).
-# Override with --build-arg LF_ONNX_FILE=model.quant.onnx for the quantized
-# variant (~90MB, accuracy 89.89%) if you want a smaller image.
+# Default: Llama-Prompt-Guard-2 **22M** ONNX (full-precision, 271MB,
+# accuracy 95.64% / recall 92.49% — gravitee benchmark). Chosen over the 86M
+# fp32 (98.01% / 96.25%) because the 86M needs 0.5-2.1s per scan on 2 shared
+# CPU cores — over any sane FailClosed scanner timeout — while the 22M cuts
+# compute ~75% (Meta) and lands well under 1s. The 86M quantized variant is
+# NOT an option (recall collapses to 80.18%); the 22M quant (95.79% / 92.04%,
+# 69MB) keeps accuracy and is available via --build-arg LF_ONNX_FILE=
+# model.quant.onnx (sha256 38c3f03e30a4d5d229aeb7bf638e778322f8179d0ed0d4953eb22f88d8e0cf6b).
 #
 # Build-cache: the HF download is cached in a BuildKit cache mount (/hf-cache)
 # so a rebuild (even after an upstream layer change) reuses the ~350MB download
@@ -57,7 +62,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # download — 2-5x faster for the large .onnx blob.
 FROM base AS models
 ARG SKIP_MODEL_DOWNLOAD=0
-ARG LF_ONNX_MODEL=gravitee-io/Llama-Prompt-Guard-2-86M-onnx
+ARG LF_ONNX_MODEL=gravitee-io/Llama-Prompt-Guard-2-22M-onnx
 ARG LF_ONNX_FILE=model.onnx
 # Supply-chain pin (S-M6): pin the model download to an immutable HF commit
 # so a re-tagged or compromised upstream repo cannot silently swap the
@@ -69,11 +74,11 @@ ARG LF_ONNX_FILE=model.onnx
 # into the image. The default pins model.onnx at PG2_REVISION; to fetch the
 # hash for a different file/revision:
 #   curl -s https://huggingface.co/api/models/$LF_ONNX_MODEL/tree/$PG2_REVISION
-# (the .lfs.oid field of the target file). When overriding LF_ONNX_FILE (e.g.
-# model.quant.onnx, sha256 3ca25030566076c92c19168a64d6e203e4397cd936f55dd0345b4d3c6fbd9744),
-# override PG2_SHA256 to match; set it empty to skip verification.
-ARG PG2_REVISION=45a05fbd5337a864edc608f994911f009c37ca57
-ARG PG2_SHA256=fbe0be6a471873b6c52f7d6631c16fbddb88ba8c7ab2ba34ca48e8e77ffd9999
+# (the .lfs.oid field of the target file). When overriding LF_ONNX_FILE or
+# LF_ONNX_MODEL, override PG2_SHA256 to match; set it empty to skip
+# verification.
+ARG PG2_REVISION=da68d0f6023c7aeaf6b256eec549de295d5e8740
+ARG PG2_SHA256=c6f4d2ebf59be36f3557ad484bf11a51f1b356f570958d1ec1cbbe322a8dfddf
 # Install ONLY what the download needs (huggingface_hub + hf-xet) — NOT the
 # full runtime deps. This decouples the model-download layer from the builder
 # stage, so a requirements.txt bump does NOT invalidate the (slow, ~350MB) model

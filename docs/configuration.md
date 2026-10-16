@@ -25,10 +25,10 @@ env-var table by project contract.
 | Redaction | `REDACT_ON_REVIEW` | `true` | Also redact `HUMAN_REVIEW` payloads (verdict kept, mutated payload rides along). `false` restores legacy pass-unmutated. |
 | Redaction | `REDACT_REQUEST_PARAMS` | `false` | Also redact `params.arguments` on the request side. Off by default — request-side secrets should BLOCK, not be rewritten. |
 | Redaction | `REDACTION_MAX_BYTES` | `262144` | Payload byte cap for redaction (256KiB). Over-cap → skip + `redaction_skipped=size` in the audit span. |
-| PromptGuard | `LF_ONNX_MODEL` | `gravitee-io/Llama-Prompt-Guard-2-86M-onnx` | ONNX model repo ID. Public, non-gated; weights under the Llama 4 Community License (see NOTICE). |
-| PromptGuard | `LF_ONNX_FILE` | `model.onnx` | Which `.onnx` file to load (`model.onnx` full-precision ~350MB / `model.quant.onnx` quantized ~90MB). |
+| PromptGuard | `LF_ONNX_MODEL` | `gravitee-io/Llama-Prompt-Guard-2-22M-onnx` | ONNX model repo ID. Public, non-gated; weights under the Llama 4 Community License (see NOTICE). |
+| PromptGuard | `LF_ONNX_FILE` | `model.onnx` | Which `.onnx` file to load (`model.onnx` full-precision 271MB / `model.quant.onnx` quantized 69MB). |
 | PromptGuard | `LF_ONNX_LOCAL_DIR` | _(unset)_ | Pre-baked model dir (image: `/models/hf/pg2`); loads from disk, no HF hub access at runtime (air-gappable). |
-| PromptGuard | `LF_ONNX_REVISION` | `45a05fbd…` | Supply-chain pin: HF commit sha for hub fetches (only when `LF_ONNX_LOCAL_DIR` is unset). Matches the Dockerfile `PG2_REVISION` build-arg. Override together with `LF_ONNX_MODEL`. |
+| PromptGuard | `LF_ONNX_REVISION` | `da68d0f6…` | Supply-chain pin: HF commit sha for hub fetches (only when `LF_ONNX_LOCAL_DIR` is unset). Matches the Dockerfile `PG2_REVISION` build-arg. Override together with `LF_ONNX_MODEL`. |
 | PromptGuard | `LF_PROMPTGUARD_BLOCK_THRESHOLD` | `0.9` | Block threshold (0.0–1.0). Score ≥ threshold → `BLOCK`. |
 | PromptGuard | `PG_REVIEW_THRESHOLD` | `0.5` | Grey-zone review threshold. Score in `[review, block)` → `HUMAN_REVIEW`; below → `ALLOW`. Clamped to the block threshold; `0` disables. |
 | PromptGuard | `PG_MAX_WINDOWS` | `16` | Hard cap on PromptGuard sliding-window inference per chunk; the per-chunk latency bound. Raise for long-payload coverage, lower for tighter P95. |
