@@ -196,8 +196,8 @@ License — see [`NOTICE`](NOTICE).
 - [agentgateway](https://github.com/agentgateway/agentgateway) — the
   MCP-aware gateway whose `ExtMcp` contract this sidecar implements.
 - [Prompt Guard](https://github.com/meta-llama/Prompt-Guard) (Meta) — the
-  PromptGuard-2 classifier, converted to ONNX by
-  [Gravitee.io](https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-86M-onnx).
+  PromptGuard-2 classifier (22M), converted to ONNX by
+  [Gravitee.io](https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-22M-onnx).
 - [ONNX Runtime](https://onnxruntime.ai/) — CPU inference engine for the
   PromptGuard-2 model (no torch dependency).
 - [Invariant Labs](https://invariantlabs.ai/) — the toxic-flow / agent-loop

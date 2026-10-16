@@ -34,7 +34,7 @@ Each call returns one of three states: **pass** (forward unchanged),
 The sidecar composes two complementary policy layers:
 
 - A **semantic content layer** built on ONNX
-  [PromptGuard-2](https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-86M-onnx)
+  [PromptGuard-2-22M](https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-22M-onnx)
   (prompt-injection detection via CPU inference, no torch) plus a
   zero-dependency `RegexScanner` for hidden ASCII / PII / secrets. This
   layer inspects the bytes of a single exchange.
@@ -782,10 +782,10 @@ The Dockerfile is multi-stage:
    `HF_HOME=/models/hf`.
 2. **`builder`** — `pip install --prefix=/install -r requirements.txt`
    with a BuildKit pip cache mount. Build tools do not leak into runtime.
-3. **`models`** — pre-downloads the public ONNX PromptGuard-2-86M model
-   (`gravitee-io/Llama-Prompt-Guard-2-86M-onnx`) into `/models/hf/pg2` via
+3. **`models`** — pre-downloads the public ONNX PromptGuard-2-22M model
+   (`gravitee-io/Llama-Prompt-Guard-2-22M-onnx`) into `/models/hf/pg2` via
    `huggingface_hub.snapshot_download`. The model is a flat `.onnx` file
-   (~350MB) loaded at runtime by `onnxruntime.InferenceSession` directly —
+   (271MB) loaded at runtime by `onnxruntime.InferenceSession` directly —
    no `torch`, no `optimum`. A BuildKit cache mount (`/hf-cache`) with
    `hf-xet` parallelises the download (2-5x faster).
    If the model is unavailable at build time (air-gapped build, HF outage),
@@ -819,7 +819,7 @@ each row.
 | Decision point         | Choice                                    | Rationale                                                                                                                                                                               |
 | ---------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Language / runtime     | Python 3.11 + asyncio + grpc.aio          | Matches the ONNX / transformers tokenizer ecosystem (Python-native). asyncio gives single-process concurrency without GIL pain for I/O-bound gRPC. Rust/Go would force FFI to the ML stack. |
-| Model loading          | Pre-download PromptGuard-2-86M in image   | ~350 MB weights. Lazy-fetch on first scan would add 5-10s cold-start latency per Pod and require HF egress. Pre-download makes the image air-gappable and cold-start fast.              |
+| Model loading          | Pre-download PromptGuard-2-22M in image   | 271 MB weights. Lazy-fetch on first scan would add 5-10s cold-start latency per Pod and require HF egress. Pre-download makes the image air-gappable and cold-start fast.              |
 | AgentAlignment trigger | Opt-in, gated on first-stage HUMAN_REVIEW | AgentAlignment is LLM-based (~300-800ms / call). Running it on every response would dominate sidecar P95 and homelab GPU/CPU cost. Gating bounds the cost to suspicious responses only. |
 | Failure mode           | failClosed by default                     | Write-capable agents (file write, email send, k8s apply) are far more dangerous unguarded than blocked. Loud `-32001` beats silent exfiltration.                                        |
 | Replicas               | 2 (with PDB minAvailable=1)               | Survives a single Pod restart / node drain. 1 replica is a single point of failure; 3+ is overkill for a homelab. HPA scales 2-4 on CPU 70%.                                            |

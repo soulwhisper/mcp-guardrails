@@ -9,15 +9,15 @@ PromptGuard (ONNX, always on)
 =============================
 
 The PROMPT_GUARD scanner uses the **public, non-gated** ONNX model
-``gravitee-io/Llama-Prompt-Guard-2-86M-onnx`` via ONNX Runtime (CPU). No
+``gravitee-io/Llama-Prompt-Guard-2-22M-onnx`` via ONNX Runtime (CPU). No
 HuggingFace token is required — the model repo is public and non-gated. This
-replaces the gated ``meta-llama/Llama-Prompt-Guard-2-86M`` torch model that
+replaces the gated ``meta-llama/Llama-Prompt-Guard-2-22M`` torch model that
 LlamaFirewall ships with, avoiding the 401 Unauthorized build failure.
 
   LF_ONNX_MODEL                ONNX model repo ID. Default:
-                               "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
+                               "gravitee-io/Llama-Prompt-Guard-2-22M-onnx"
   LF_ONNX_FILE                 Which .onnx file to load. Default: "model.onnx"
-                               (full-precision, ~350MB, accuracy 98.01%).
+                               (full-precision, 271MB, accuracy 95.64%).
   LF_PROMPTGUARD_BLOCK_THRESHOLD  Block threshold (0.0-1.0). Score >= threshold
                                -> BLOCK. Default: 0.9.
   PG_REVIEW_THRESHOLD          Review (grey-zone) threshold (0.0-1.0). Scores in
@@ -146,8 +146,8 @@ class GuardrailConfig:
 
     # --- PromptGuard (ONNX, always on) ---
     # The ONNX model is public + non-gated, so HF_TOKEN is NOT required.
-    # Default: model.onnx (full-precision, ~350MB, accuracy 98.01%).
-    lf_onnx_model: str = "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
+    # Default: model.onnx (full-precision, 271MB, accuracy 95.64%).
+    lf_onnx_model: str = "gravitee-io/Llama-Prompt-Guard-2-22M-onnx"
     lf_onnx_file: str = "model.onnx"
     # Local directory of a pre-baked model (Dockerfile pre-downloads to
     # /models/hf/pg2). When set, the scanner loads the tokenizer + .onnx from
@@ -347,7 +347,7 @@ class GuardrailConfig:
             redact_on_review=_env_bool("REDACT_ON_REVIEW", True),
             redaction_max_bytes=_env_int("REDACTION_MAX_BYTES", 256 * 1024),
             lf_onnx_model=os.environ.get(
-                "LF_ONNX_MODEL", "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
+                "LF_ONNX_MODEL", "gravitee-io/Llama-Prompt-Guard-2-22M-onnx"
             ),
             lf_onnx_file=os.environ.get("LF_ONNX_FILE", "model.onnx"),
             lf_onnx_local_dir=os.environ.get("LF_ONNX_LOCAL_DIR") or None,
@@ -359,7 +359,7 @@ class GuardrailConfig:
             pg_max_windows=_env_int("PG_MAX_WINDOWS", 16),
             # Default pin matches the Dockerfile PG2_REVISION build-arg.
             lf_onnx_revision=os.environ.get(
-                "LF_ONNX_REVISION", "45a05fbd5337a864edc608f994911f009c37ca57"
+                "LF_ONNX_REVISION", "da68d0f6023c7aeaf6b256eec549de295d5e8740"
             )
             or None,
             lf_alignment_model=os.environ.get(

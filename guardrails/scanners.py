@@ -709,11 +709,11 @@ class AgentAlignmentScanner:
 
 @dataclass
 class OnnxPromptGuardScanner:
-    """PromptGuard-2-86M inference via ONNX Runtime.
+    """PromptGuard-2-22M inference via ONNX Runtime.
 
     Semantic prompt-injection scanner that uses the public, non-gated ONNX
-    model ``gravitee-io/Llama-Prompt-Guard-2-86M-onnx`` instead of the gated
-    ``meta-llama/Llama-Prompt-Guard-2-86M`` torch model.
+    model ``gravitee-io/Llama-Prompt-Guard-2-22M-onnx`` instead of the gated
+    ``meta-llama/Llama-Prompt-Guard-2-22M`` torch model.
 
     Implementation note: we load the ONNX graph with **``onnxruntime`` directly**
     (``ort.InferenceSession``) and tokenise with **``transformers.AutoTokenizer``**.
@@ -725,9 +725,10 @@ class OnnxPromptGuardScanner:
     Advantages:
       * **No HF_TOKEN required** — the ONNX repo is public and non-gated.
       * **Truly torch-free** — onnxruntime (~15MB) replaces torch (~750MB);
-        the full-precision model is ~350MB.
-      * **Faster CPU inference** — ONNX Runtime is tuned for CPU; typical
-        P95 is 10-20ms vs 15-30ms for torch CPU.
+        the full-precision 22M model is 271MB.
+      * **Faster CPU inference** — the 22M (DeBERTa-xsmall) cuts compute ~75%
+        vs the 86M (Meta); the 86M fp32 measured 0.5-2.1s per scan on 2 shared
+        cores in production, over any FailClosed-safe timeout.
 
     The scanner reproduces LlamaFirewall's PromptGuard scoring exactly (same
     tokenizer, same softmax).  The ``gravitee-io`` ONNX export is a **2-class**
@@ -738,7 +739,7 @@ class OnnxPromptGuardScanner:
     remains importable without them installed (the regex-only path still works).
     """
 
-    model_id: str = "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
+    model_id: str = "gravitee-io/Llama-Prompt-Guard-2-22M-onnx"
     file_name: str = "model.onnx"
     # Pre-baked model directory (Dockerfile pre-downloads to /models/hf/pg2).
     # When set and present, the tokenizer + .onnx load from here — no HF hub
