@@ -96,6 +96,10 @@ jobs:
           push: true
           provenance: true
           sbom: true
+          # WITHOUT this the computed tags never reach buildx and the push
+          # fails with "tag is needed when pushing to registry" (the v1.1.0
+          # and v1.2.0 release builds both died here).
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           secrets: |
             "HF_TOKEN=${{ secrets.HF_TOKEN }}"
