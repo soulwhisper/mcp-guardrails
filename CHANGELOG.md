@@ -5,6 +5,23 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1](https://github.com/soulwhisper/mcp-guardrails/compare/v1.2.0...v1.2.1) (2026-10-17)
+
+
+### Features
+
+* **otel:** OTEL_METRICS_ENABLED toggle for traces-only collectors ([#141](https://github.com/soulwhisper/mcp-guardrails/issues/141)) ([e9a1685](https://github.com/soulwhisper/mcp-guardrails/commit/e9a16853fb68825486e064c3d633aac942f3d11c))
+
+
+### Performance Improvements
+
+* **promptguard:** default to the 22M QUANTIZED ONNX model ([#142](https://github.com/soulwhisper/mcp-guardrails/issues/142)) ([e18a6fb](https://github.com/soulwhisper/mcp-guardrails/commit/e18a6fbfd0b52a9612c9bc777d8d42f1c4c6eca6))
+
+
+### Chores
+
+* release 1.2.1 ([efe6859](https://github.com/soulwhisper/mcp-guardrails/commit/efe685969540b60b2ce73a96f3f4a5e3c5aca352))
+
 ## [1.2.0](https://github.com/soulwhisper/mcp-guardrails/compare/v1.1.0...v1.2.0) (2026-10-16)
 
 
