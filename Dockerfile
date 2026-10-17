@@ -29,6 +29,10 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
+# The base image's bundled setuptools lags behind CVE fixes (70.3.0 was
+# flagged CVE-2025-47273 by the release-gate trivy scan even on a current
+# 3.14-slim digest). Upgrade once here so all stages inherit it.
+RUN pip install --no-cache-dir --upgrade "setuptools>=78.1.1"
 
 # ---------- builder ----------
 FROM base AS builder

@@ -4,8 +4,15 @@
 # use lower bounds + upper major caps so the resolver can pick the newest
 # compatible release.
 #
-# The ONNX PromptGuard model (gravitee-io/Llama-Prompt-Guard-2-86M-onnx) is
+# The ONNX PromptGuard model (gravitee-io/Llama-Prompt-Guard-2-22M-onnx) is
 # public and non-gated — NO HF_TOKEN required.
+
+# --- Transitive floor pins (release-gate trivy findings, v1.2.0 build): ---
+# msgpack 1.1.2 < 1.2.1 — GHSA-6v7p-g79w-8964 (OOB read on Unpacker reuse)
+# urllib3 2.7.0 < 2.8.0 — CVE-2026-97687, CVE-2026-97689
+# Neither is imported directly; the floors keep the resolver honest.
+msgpack>=1.2.1,<2
+urllib3>=2.8,<3
 
 # --- gRPC stack (wire-compat critical; committed stubs generated with grpcio-tools 1.83.0) ---
 grpcio>=1.84,<1.85
