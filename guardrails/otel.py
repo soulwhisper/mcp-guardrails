@@ -140,6 +140,7 @@ class Observability:
         service_name: str = "mcp-guardrails",
         otel_endpoint: str | None = None,
         otel_insecure: bool | None = None,
+        otlp_metrics: bool = True,
         prometheus_addr: str | None = None,
         audit_path: str | None = None,
         audit_hash_chain: bool = True,
@@ -155,7 +156,9 @@ class Observability:
         self._histograms: dict[str, Any] = {}
         self._otel_ok = False
         if otel_endpoint or prometheus_addr:
-            self._init_otel(service_name, otel_endpoint, otel_insecure, prometheus_addr)
+            self._init_otel(
+                service_name, otel_endpoint, otel_insecure, prometheus_addr, otlp_metrics
+            )
 
     @staticmethod
     def _resolve_insecure(endpoint: str, explicit: bool | None) -> bool:
@@ -199,13 +202,21 @@ class Observability:
         return PrometheusMetricReader()
 
     def _init_otlp(
-        self, service_name: str, endpoint: str, otel_insecure: bool | None, resource: Any
+        self,
+        service_name: str,
+        endpoint: str,
+        otel_insecure: bool | None,
+        resource: Any,
+        with_metrics: bool = True,
     ) -> list[Any]:
-        """OTLP/gRPC push backend (traces + 15s periodic metrics).
+        """OTLP/gRPC push backend (traces + optional 15s periodic metrics).
 
         Returns the metric readers to attach; a missing exporter package or
         other init failure logs a warning and returns ``[]`` so the
-        Prometheus backend can still come up on its own.
+        Prometheus backend can still come up on its own. ``with_metrics=False``
+        (env OTEL_METRICS_ENABLED=0) skips the metric exporter entirely — use
+        it against traces-only collectors, which otherwise log UNIMPLEMENTED
+        every 15s.
         """
         try:  # pragma: no cover - exercised only with otel installed + endpoint
             from opentelemetry import trace
@@ -226,6 +237,13 @@ class Observability:
             )
             trace.set_tracer_provider(tp)
             self._tracer = trace.get_tracer(service_name)
+            if not with_metrics:
+                logger.info(
+                    "OTel OTLP traces only (metrics disabled), endpoint=%s, insecure=%s",
+                    endpoint,
+                    insecure,
+                )
+                return []
             logger.info("OTel OTLP telemetry enabled, endpoint=%s, insecure=%s", endpoint, insecure)
             return [
                 PeriodicExportingMetricReader(
@@ -243,6 +261,7 @@ class Observability:
         endpoint: str | None,
         otel_insecure: bool | None,
         prometheus_addr: str | None,
+        otlp_metrics: bool = True,
     ) -> None:
         try:  # pragma: no cover - exercised only with otel installed
             from opentelemetry import metrics
@@ -256,7 +275,9 @@ class Observability:
         resource = Resource.create({"service.name": service_name})
         readers: list[Any] = []
         if endpoint:
-            readers.extend(self._init_otlp(service_name, endpoint, otel_insecure, resource))
+            readers.extend(
+                self._init_otlp(service_name, endpoint, otel_insecure, resource, otlp_metrics)
+            )
         if prometheus_addr:
             prom_reader = self._init_prometheus(prometheus_addr)
             if prom_reader is not None:
