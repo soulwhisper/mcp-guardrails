@@ -740,7 +740,7 @@ class OnnxPromptGuardScanner:
     """
 
     model_id: str = "gravitee-io/Llama-Prompt-Guard-2-22M-onnx"
-    file_name: str = "model.onnx"
+    file_name: str = "model.quant.onnx"
     # Pre-baked model directory (Dockerfile pre-downloads to /models/hf/pg2).
     # When set and present, the tokenizer + .onnx load from here — no HF hub
     # access at runtime (air-gappable). None -> resolve via the HF hub cache.

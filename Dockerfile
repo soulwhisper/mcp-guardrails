@@ -49,14 +49,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # This keeps runtime cold-start fast (no download on first scan) and makes
 # the image air-gappable.
 #
-# Default: Llama-Prompt-Guard-2 **22M** ONNX (full-precision, 271MB,
-# accuracy 95.64% / recall 92.49% — gravitee benchmark). Chosen over the 86M
-# fp32 (98.01% / 96.25%) because the 86M needs 0.5-2.1s per scan on 2 shared
-# CPU cores — over any sane FailClosed scanner timeout — while the 22M cuts
-# compute ~75% (Meta) and lands well under 1s. The 86M quantized variant is
-# NOT an option (recall collapses to 80.18%); the 22M quant (95.79% / 92.04%,
-# 69MB) keeps accuracy and is available via --build-arg LF_ONNX_FILE=
-# model.quant.onnx (sha256 38c3f03e30a4d5d229aeb7bf638e778322f8179d0ed0d4953eb22f88d8e0cf6b).
+# Default: Llama-Prompt-Guard-2 **22M quant** ONNX (69MB, accuracy 95.79% /
+# recall 92.04% — gravitee benchmark, statistically identical to the 22M
+# fp32's 95.64% / 92.49%). Chosen after production measurement: even the 22M
+# fp32 needs 1.0-3.1s per scan on quota-limited shared cores; int8 inference
+# is the remaining latency lever. The 86M quant was rejected (recall 80.18%);
+# the 86M fp32 (98.01% / 96.25%) needs 0.5-2.1s on the same cores. fp32
+# fallback: --build-arg LF_ONNX_FILE=model.onnx (sha256 c6f4d2ebf59be36f3557ad484bf11a51f1b356f570958d1ec1cbbe322a8dfddf).
 #
 # Build-cache: the HF download is cached in a BuildKit cache mount (/hf-cache)
 # so a rebuild (even after an upstream layer change) reuses the ~350MB download
@@ -67,7 +66,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 FROM base AS models
 ARG SKIP_MODEL_DOWNLOAD=0
 ARG LF_ONNX_MODEL=gravitee-io/Llama-Prompt-Guard-2-22M-onnx
-ARG LF_ONNX_FILE=model.onnx
+ARG LF_ONNX_FILE=model.quant.onnx
 # Supply-chain pin (S-M6): pin the model download to an immutable HF commit
 # so a re-tagged or compromised upstream repo cannot silently swap the
 # weights baked into the image. To update:
@@ -82,7 +81,7 @@ ARG LF_ONNX_FILE=model.onnx
 # LF_ONNX_MODEL, override PG2_SHA256 to match; set it empty to skip
 # verification.
 ARG PG2_REVISION=da68d0f6023c7aeaf6b256eec549de295d5e8740
-ARG PG2_SHA256=c6f4d2ebf59be36f3557ad484bf11a51f1b356f570958d1ec1cbbe322a8dfddf
+ARG PG2_SHA256=38c3f03e30a4d5d229aeb7bf638e778322f8179d0ed0d4953eb22f88d8e0cf6b
 # Install ONLY what the download needs (huggingface_hub + hf-xet) — NOT the
 # full runtime deps. This decouples the model-download layer from the builder
 # stage, so a requirements.txt bump does NOT invalidate the (slow, ~350MB) model

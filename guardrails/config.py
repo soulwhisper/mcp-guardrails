@@ -16,7 +16,7 @@ LlamaFirewall ships with, avoiding the 401 Unauthorized build failure.
 
   LF_ONNX_MODEL                ONNX model repo ID. Default:
                                "gravitee-io/Llama-Prompt-Guard-2-22M-onnx"
-  LF_ONNX_FILE                 Which .onnx file to load. Default: "model.onnx"
+  LF_ONNX_FILE                 Which .onnx file to load. Default: "model.quant.onnx"
                                (full-precision, 271MB, accuracy 95.64%).
   LF_PROMPTGUARD_BLOCK_THRESHOLD  Block threshold (0.0-1.0). Score >= threshold
                                -> BLOCK. Default: 0.9.
@@ -146,9 +146,9 @@ class GuardrailConfig:
 
     # --- PromptGuard (ONNX, always on) ---
     # The ONNX model is public + non-gated, so HF_TOKEN is NOT required.
-    # Default: model.onnx (full-precision, 271MB, accuracy 95.64%).
+    # Default: model.quant.onnx (quantized, 69MB, accuracy 95.79%).
     lf_onnx_model: str = "gravitee-io/Llama-Prompt-Guard-2-22M-onnx"
-    lf_onnx_file: str = "model.onnx"
+    lf_onnx_file: str = "model.quant.onnx"
     # Local directory of a pre-baked model (Dockerfile pre-downloads to
     # /models/hf/pg2). When set, the scanner loads the tokenizer + .onnx from
     # this dir instead of hitting the HF hub — enables air-gapped runs and
@@ -352,7 +352,7 @@ class GuardrailConfig:
             lf_onnx_model=os.environ.get(
                 "LF_ONNX_MODEL", "gravitee-io/Llama-Prompt-Guard-2-22M-onnx"
             ),
-            lf_onnx_file=os.environ.get("LF_ONNX_FILE", "model.onnx"),
+            lf_onnx_file=os.environ.get("LF_ONNX_FILE", "model.quant.onnx"),
             lf_onnx_local_dir=os.environ.get("LF_ONNX_LOCAL_DIR") or None,
             lf_promptguard_block_threshold=_env_float("LF_PROMPTGUARD_BLOCK_THRESHOLD", 0.9),
             pg_review_threshold=min(

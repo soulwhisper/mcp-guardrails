@@ -23,9 +23,9 @@ to 80.18%.)
   Community License**; users of the Docker image must comply with it
   (including its acceptable-use policy and attribution requirements). See the
   repo `NOTICE` file.
-- **Variants** — `model.onnx` (default): full precision, ~350MB, published
-  accuracy 98.01%. `model.quant.onnx`: quantized, ~90MB, accuracy 89.89%
-  (smaller, lower recall). Select with `LF_ONNX_FILE`.
+- **Variants** — `model.quant.onnx` (default): quantized, 69MB, published
+  accuracy 95.79% (recall 92.04%). `model.onnx`: full precision, 271MB,
+  accuracy 95.64% (recall 92.49%). Select with `LF_ONNX_FILE`.
 
 ### What it detects
 
