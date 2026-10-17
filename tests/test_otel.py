@@ -321,6 +321,21 @@ def test_observability_without_otel_endpoint():
     assert obs.otel_enabled is False
     assert obs.otel_endpoint is None
 
+def test_otlp_metrics_toggle_config_env(monkeypatch):
+    """OTEL_METRICS_ENABLED=0 maps to config.otel_metrics_enabled=False."""
+    from guardrails.config import GuardrailConfig
+
+    assert GuardrailConfig.from_env().otel_metrics_enabled is True
+    monkeypatch.setenv("OTEL_METRICS_ENABLED", "0")
+    assert GuardrailConfig.from_env().otel_metrics_enabled is False
+
+
+def test_observability_otlp_metrics_flag_defaults_on():
+    # default: OTLP metrics stay on when an endpoint is configured
+    import inspect
+
+    assert inspect.signature(Observability.__init__).parameters["otlp_metrics"].default is True
+
 
 def test_observability_service_name_default():
     obs = Observability()

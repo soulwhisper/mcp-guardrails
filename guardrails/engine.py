@@ -209,7 +209,7 @@ class GuardrailEngine:
         obs = Observability(
             service_name=config.otel_service_name,
             otel_endpoint=config.otel_endpoint,
-            otel_insecure=config.otel_insecure,
+            otlp_metrics=config.otel_metrics_enabled,
             prometheus_addr=config.prometheus_addr,
             audit_path=config.audit_log_path,
             audit_hash_chain=config.audit_hash_chain,

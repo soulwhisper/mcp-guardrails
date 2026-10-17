@@ -57,6 +57,7 @@ env-var table by project contract.
 | Observability | `OTEL_EXPORTER_OTLP_INSECURE` | _(derived)_ | OTLP channel TLS (`true`/`false`). Unset derives from the endpoint scheme (`https://` → secure, `http://` or no scheme → insecure). Set explicitly when the collector terminates TLS behind a bare host:port — cluster telemetry crossing the network should use TLS. |
 | Observability | `PROMETHEUS_LISTEN_ADDR` | _(unset)_ | Prometheus `/metrics` pull endpoint bind address (e.g. `:9464` for all interfaces). Coexists with OTLP push; requires the `opentelemetry-exporter-prometheus` package, degrades to OTLP-only without it. |
 | Observability | `OTEL_SERVICE_NAME` | `mcp-guardrails` | Service name on OTel spans/metrics. |
+| Observability | `OTEL_METRICS_ENABLED` | `true` | `0` skips the OTLP metric push (traces unaffected) — for traces-only collectors, which otherwise reject the metric service with UNIMPLEMENTED every 15s. |
 | Observability | `AUDIT_LOG_PATH` | _(unset)_ | Append-only JSONL audit path. `-` or unset → stdout. Always on. |
 | Observability | `AUDIT_HMAC_KEY` | _(unset)_ | When set, high-entropy match fingerprints use keyed HMAC-SHA256 instead of plain SHA-256 (recommended). |
 | Observability | `AUDIT_HASH_CHAIN` | `1` | Tamper-evident audit hash chain (`prev_hash` / `line_hash` per line; verify with `guardrail_ctl audit verify`). Single-writer assumption — per-replica files or stdout shipping; `AUDIT_REPLICA_ID` attributes each chain. |

@@ -246,6 +246,9 @@ class GuardrailConfig:
 
     # --- Observability ---
     otel_endpoint: str | None = None
+    # OTEL_METRICS_ENABLED=0 skips the OTLP metric push (traces unaffected) —
+    # for traces-only collectors, which otherwise get UNIMPLEMENTED errors.
+    otel_metrics_enabled: bool = True
     otel_service_name: str = "mcp-guardrails"
     audit_log_path: str | None = None
     # A-P1-1: whitelist of request headers (case-insensitive, first match
@@ -395,7 +398,7 @@ class GuardrailConfig:
             grpc_max_recv_bytes=_env_int("GRPC_MAX_RECV_BYTES", 8 * 1024 * 1024),
             grpc_max_concurrent_rpcs=_env_int("GRPC_MAX_CONCURRENT_RPCS", 128),
             otel_endpoint=otel,
-            otel_service_name=os.environ.get("OTEL_SERVICE_NAME", "mcp-guardrails"),
+            otel_metrics_enabled=_env_bool("OTEL_METRICS_ENABLED", True),
             otel_insecure=(
                 None
                 if os.environ.get("OTEL_EXPORTER_OTLP_INSECURE") is None
