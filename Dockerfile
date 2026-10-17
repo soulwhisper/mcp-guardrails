@@ -152,6 +152,12 @@ RUN useradd -u 65532 -r -s /sbin/nologin nonroot
 COPY --from=builder /install /usr/local
 # Copy pre-downloaded models (may be empty if the models stage was skipped).
 COPY --from=models /models/hf /models/hf
+# The runtime never installs packages, and pip's VENDORED deps
+# (pip/_vendor: msgpack 1.1.2, urllib3 2.7.0, setuptools 70.3.0 as of pip
+# 26.2.1 — the latest) carry open HIGH CVEs that the trivy release gate
+# flags. No upstream fix exists; drop pip from the runtime image entirely.
+RUN rm -rf /usr/local/lib/python3.14/site-packages/pip \
+           /usr/local/lib/python3.14/site-packages/pip-*.dist-info
 
 WORKDIR /app
 # Application code. proto/ contains the generated stubs (committed) so we do
