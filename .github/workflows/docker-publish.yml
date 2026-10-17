@@ -136,11 +136,24 @@ jobs:
       # trivy-action does not maintain floating major-version tags; pin to a
       # full release tag (currently the latest, v0.36.0).
       # ---------------------------------------------------------------------
+      # Scan the image as a TARBALL, not by registry ref: with buildx
+      # `sbom: true`, trivy prefers the attached SBOM ("Third-party SBOM may
+      # lead to inaccurate vulnerability detection") — and with gha layer
+      # caching that SBOM described STALE layers (v1.2.0 build reported
+      # msgpack 1.1.2/urllib3 2.7.0/setuptools 70.3.0 while the image
+      # actually shipped 1.2.3/2.8.0/84.0.0 — verified by running the image).
+      # `--input` analysis reads the real layers, and by-digest pins the
+      # exact manifest we just built (no :latest tag race).
+      - name: Export image for scanning
+        if: github.ref_type == 'tag'
+        run: |
+          docker pull --platform linux/amd64 ghcr.io/soulwhisper/mcp-guardrails@${{ steps.build.outputs.digest }}
+          docker save ghcr.io/soulwhisper/mcp-guardrails@${{ steps.build.outputs.digest }} -o image.tar
       - name: Trivy scan of the published image
         if: github.ref_type == 'tag'
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ghcr.io/soulwhisper/mcp-guardrails:latest
+          input: image.tar
           format: table
           exit-code: "1" # fail the release on CRITICAL/HIGH findings
           ignore-unfixed: true
