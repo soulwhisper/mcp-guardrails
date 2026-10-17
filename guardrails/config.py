@@ -249,6 +249,7 @@ class GuardrailConfig:
     # OTEL_METRICS_ENABLED=0 skips the OTLP metric push (traces unaffected) —
     # for traces-only collectors, which otherwise get UNIMPLEMENTED errors.
     otel_metrics_enabled: bool = True
+    otel_service_name: str = "mcp-guardrails"
     audit_log_path: str | None = None
     # A-P1-1: whitelist of request headers (case-insensitive, first match
     # wins) whose value is copied into the audit line's ``caller`` field.

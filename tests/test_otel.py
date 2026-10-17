@@ -331,7 +331,6 @@ def test_otlp_metrics_toggle_config_env(monkeypatch):
 
 
 def test_observability_otlp_metrics_flag_defaults_on():
-    obs = Observability()
     # default: OTLP metrics stay on when an endpoint is configured
     import inspect
 
