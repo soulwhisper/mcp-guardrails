@@ -9,6 +9,16 @@
       "matchPackageNames": ["grpcio", "grpcio-tools", "grpcio-health-checking", "grpcio-status"]
     },
     {
+      // Wire-compat critical (proto_check.py guards the contract): majors of
+      // the protobuf/grpc stack need a human decision, never auto-merge (#121).
+      // The shared config's approveMajorUpdates already gates majors on the
+      // dashboard; this makes the intent local and explicit.
+      "matchPackageNames": ["protobuf", "grpcio", "grpcio-tools", "grpcio-health-checking", "grpcio-status"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    },
+    {
       // Base-image bumps (python digests, dockerfile syntax) are build
       // plumbing, not code changes — CI green is the whole verification.
       // Commit as `ci` so release-please keeps them out of the changelog

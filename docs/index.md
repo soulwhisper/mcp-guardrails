@@ -130,7 +130,9 @@ Both RPCs return one of three states via a protobuf `oneof`:
 - **`mutated` (`bytes`)** — replace the payload with the supplied raw JSON
   bytes (emitted by the redaction stage).
 - **`error` (`AuthorizationError`)** — deny. agentgateway surfaces this to the
-  agent as a JSON-RPC error (`-32001`).
+  agent as a JSON-RPC error (`-32001`); since agentgateway v1.6 a denied
+  `tools/call` is instead mapped to a tool-error result (`isError: true`)
+  with generalised text for 2026-07-28 clients.
 
 The vendored contract lives in `proto/ext_mcp.proto` (from
 `agentgateway/agentgateway`, `crates/protos/proto/ext_mcp.proto`).

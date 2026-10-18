@@ -1,9 +1,8 @@
 # yaml-language-server: $schema=https://agentgateway.dev/schema/config
-# agentgateway v1.4.1 standalone config — verified live against this repo's
+# agentgateway v1.6.0 standalone config — verified live against this repo's
 # ExtMcp guardrail sidecar (see scripts/e2e_agentgateway.sh; pinned in
-# .github/workflows/e2e-agentgateway.yml).
-# Also compatible with v1.3.1 (the `binds` model is retained in v1.4.x;
-# v1.4 also offers the new `gateways` model as an alternative).
+# .github/workflows/e2e-agentgateway.yml). v1.6.0 supports the sessionless
+# MCP 2026-07-28 protocol; v1.4.x remains compatible for session-based clients.
 # Topology:
 #   client -> :3000 (CORS + mcpGuardrails processor, failClosed)
 #          -> ExtMcp sidecar gRPC localhost:9001 (h2c, plaintext)
@@ -24,11 +23,12 @@ binds:
           allowOrigins:
           - "*"
           allowHeaders:
+          # MCP 2026-07-28 removed Mcp-Session-Id with the session handshake;
+          # Mcp-Method/Mcp-Name are required on Streamable HTTP POST (SEP-2243).
           - mcp-protocol-version
           - content-type
-          - mcp-session-id
-          exposeHeaders:
-          - "Mcp-Session-Id"
+          - mcp-method
+          - mcp-name
         mcpGuardrails:
           processors:
           - kind: remote

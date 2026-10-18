@@ -7,12 +7,14 @@ Tools:
 - secret_leak: returns an AWS-style access key, which the sidecar blocks
   outright (deny path on the response side).
 
-Run with a python that has the `mcp` package installed (stdio transport).
+Run with a python that has `mcp` v2 installed (`mcp>=2`, stdio transport) —
+v2 servers answer `server/discover` and serve the sessionless 2026-07-28
+flow that the e2e script exercises.
 """
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
-mcp = FastMCP("agw-e2e-upstream")
+mcp = MCPServer("agw-e2e-upstream")
 
 
 @mcp.tool()
