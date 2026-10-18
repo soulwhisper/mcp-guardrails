@@ -5,6 +5,18 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0](https://github.com/soulwhisper/mcp-guardrails/compare/v1.2.1...v1.3.0) (2026-10-18)
+
+
+### Features
+
+* **ci:** migrate e2e to sessionless MCP 2026-07-28 (M1/M2/M4) ([#143](https://github.com/soulwhisper/mcp-guardrails/issues/143)) ([c56e83f](https://github.com/soulwhisper/mcp-guardrails/commit/c56e83f550ff68b94ce77f79ecfd0ffea510924d))
+
+
+### Bug Fixes
+
+* **deploy:** pod template missing the app=mcp-guardrails selector label ([#144](https://github.com/soulwhisper/mcp-guardrails/issues/144)) ([9fe1959](https://github.com/soulwhisper/mcp-guardrails/commit/9fe1959d6bda52b3992e60c4888e5b87123e40e4))
+
 ## [1.2.1](https://github.com/soulwhisper/mcp-guardrails/compare/v1.2.0...v1.2.1) (2026-10-17)
 
 
