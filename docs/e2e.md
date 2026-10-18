@@ -26,15 +26,18 @@ client(curl) -> agentgateway :3000 (mcpGuardrails processor, failClosed)
 AGENTGATEWAY_BIN=/path/to/agentgateway ./scripts/e2e_agentgateway.sh
 ```
 
-The script drives the official Streamable-HTTP MCP handshake
-(`initialize` → `mcp-session-id` → `notifications/initialized`) and asserts:
+The script drives the sessionless MCP 2026-07-28 flow (a `server/discover`
+probe, then per-request `_meta` protocol context per SEP-2575 plus
+`Mcp-Method`/`Mcp-Name` headers per SEP-2243 — no `initialize` handshake, no
+`Mcp-Session-Id`) and asserts:
 
 | Case | Expected |
 | --- | --- |
-| `tools/call echo` (benign) | pass-through, echo returned |
+| `server/discover` | answered; advertises `2026-07-28` |
+| `tools/call echo` (benign) | pass-through, echo returned, `resultType: "complete"` |
 | `tools/call pii_leak` | response **mutated**: `jdoe@example.com` → `[REDACTED:EMAIL]` |
-| `tools/call echo` with `-----BEGIN RSA PRIVATE KEY-----` arg | deny, JSON-RPC `-32001` |
-| same tool+args ×4 | 3rd+ call denied (`invariant:denied-tool-retry-loop`) |
+| `tools/call echo` with `-----BEGIN RSA PRIVATE KEY-----` arg | deny as tool-error result (`isError: true`, generalised text; agentgateway v1.6 no longer emits JSON-RPC `-32001` for guardrail denies) |
+| same tool+args ×4 | 3rd+ call denied (`invariant:denied-tool-retry-loop`, audit-only) |
 | sidecar killed, then `tools/call` | failClosed: JSON-RPC `-32603` |
 | sidecar audit log | `outcome="mutated"` / `outcome="deny"` JSONL lines |
 

@@ -40,7 +40,7 @@ Out of scope (by design):
 | Failure | Behaviour |
 | --- | --- |
 | Scanner raises / exceeds `SCANNER_TIMEOUT_MS` | `failClosed` → `BLOCK` → aggregator denies → `error` oneof → agentgateway returns JSON-RPC `-32001`. `failOpen` → `HUMAN_REVIEW` → forwarded with audit warning. |
-| Sidecar Pod unreachable | agentgateway's mcp-guardrails processor fails closed → JSON-RPC `-32001` to the agent. |
+| Sidecar Pod unreachable | agentgateway's mcp-guardrails processor fails closed → JSON-RPC `-32603` to the agent (e2e case e). |
 | PromptGuard model load failure | Pod readiness probe stays `NOT_SERVING`; the Pod is removed from Service endpoints. No traffic reaches a half-initialised sidecar. |
 | Malformed JSON-RPC payload | Servicer returns `AuthorizationError{INVALID}` (fail-closed on parse failure). |
 | Tool output > `MAX_CONTENT_BYTES` | head (32KiB) + mid + tail (8KiB each) windows scanned; decision flagged `truncated=true`. Regions between the windows remain unscanned (bounded by `SCAN_MAX_PAYLOAD_BYTES`). |

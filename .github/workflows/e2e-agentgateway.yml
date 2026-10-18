@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  issues: write # open a tracking issue when the nightly run fails (#121)
 
 # One run per ref at a time (nightly + manual dispatch share main).
 concurrency:
@@ -26,8 +27,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AGW_VERSION: "1.4.1"
-  AGW_SHA256: "20f7b298e0c36eef33e7d612b0d0b91d87d43124f59b01f6e9b730477f66d982"
+  AGW_VERSION: "1.6.0"
+  AGW_SHA256: "496ed27e6a96b55a9ad7cabe5c2be7172511f44a3cb113e533d22bf93a7f079d"
 
 jobs:
   e2e:
@@ -46,13 +47,13 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install sidecar + stdio-upstream deps
-        # [dev] provides the gRPC stack for server.py; `mcp` (v1, FastMCP
-        # API) is needed only by the stdio upstream
-        # (examples/mcp_pii_upstream.py -> fastmcp). The sidecar runs
-        # regex-only (ENABLE_PROMPTGUARD=0) — no ML stack.
+        # [dev] provides the gRPC stack for server.py; `mcp` (v2, MCPServer
+        # API — required for the sessionless 2026-07-28 flow) is needed only
+        # by the stdio upstream (examples/mcp_pii_upstream.py). The sidecar
+        # runs regex-only (ENABLE_PROMPTGUARD=0) — no ML stack.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]" "mcp<2"
+          pip install -e ".[dev]" "mcp>=2"
 
       - name: Download pinned agentgateway binary
         # Fail closed: a checksum mismatch (compromised/updated asset under
@@ -85,3 +86,22 @@ jobs:
           name: e2e-agentgateway-logs
           path: e2e-logs.tar.gz
           if-no-files-found: warn
+
+      - name: Alarm on nightly failure
+        # An unwatched nightly is silent breakage (#121): a red run means
+        # upstream contract drift, so route it to the issue tracker. One open
+        # issue at a time — re-runs comment instead of spamming new ones.
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          OPEN=$(gh issue list --state open --label e2e-agentgateway --json number --jq '.[0].number' || true)
+          if [ -n "$OPEN" ]; then
+            gh issue comment "$OPEN" --body "Nightly failed again: $RUN_URL"
+          else
+            gh issue create --label e2e-agentgateway \
+              --title "nightly e2e-agentgateway failed ($(date -u +%F))" \
+              --body "The nightly agentgateway interop e2e failed — treat as upstream contract drift until ruled out. Run: $RUN_URL (e2e-logs artifact has the wire bodies)."
+          fi

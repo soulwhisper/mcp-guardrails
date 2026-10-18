@@ -72,7 +72,8 @@ write-capable agents:
   into a `BLOCK` outcome under `failClosed`; under `failOpen` it becomes
   `HUMAN_REVIEW` (forwarded with an audit warning).
 - If the sidecar is unreachable, agentgateway's own mcp-guardrails processor
-  fails closed and returns JSON-RPC `-32001` to the agent.
+  fails closed and returns JSON-RPC `-32603` to the agent (verified live
+  against v1.4.1 and v1.6.0 by scripts/e2e_agentgateway.sh case e).
 - A malformed JSON-RPC payload yields `AuthorizationError{INVALID}`.
 - Model-load failure keeps the Pod's readiness probe `NOT_SERVING`, so no
   traffic reaches a half-initialised sidecar.
