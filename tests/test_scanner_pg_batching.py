@@ -11,8 +11,9 @@ tests prove:
 * the batched feed keeps the pinned-graph contract — ``(batch, seq)`` int64
   ``input_ids`` / ``attention_mask`` (all ones) / ``token_type_ids`` (all
   zeros), and only the input names the graph declares are fed,
-* a 42,649-byte long response (the bad631b3 payload size) is scored in a
-  single run with malicious head / middle / tail controls still detected.
+* a 42,649-byte long response (the bad631b3 payload size) is split into four
+  balanced windows, each scored in one run, with malicious head / middle /
+  tail controls still detected.
 
 Same convention as ``tests/test_scanners.py``: fake sessions mimic
 ``onnxruntime.InferenceSession`` and every test is skipped in the ML-free CI
@@ -26,8 +27,11 @@ from __future__ import annotations
 
 import pytest
 
+from guardrails.config import GuardrailConfig
+from guardrails.engine import EngineComponents, GuardrailEngine
 from guardrails.models import ScanOutcome
-from guardrails.scanners import OnnxPromptGuardScanner
+from guardrails.otel import Observability
+from guardrails.scanners import OnnxPromptGuardScanner, scan_windows
 
 # The exact response-body size from denial ref bad631b3.
 _BAD631B3_BYTES = 42_649
@@ -215,28 +219,29 @@ def _pad_to_bytes(head: str, tail: str = "", total: int = _BAD631B3_BYTES) -> st
     return head + "a" * fill + tail
 
 
-def test_pg_long_response_bad631b3_size_single_run_benign():
-    """A 42,649-byte benign response scores in ONE batched run, capped at
-    PG_MAX_WINDOWS rows (was: up to 16 sequential runs per chunk)."""
+def test_pg_long_response_bad631b3_size_balanced_windows_benign():
+    """A 42,649-byte benign response uses four full-coverage windows, each
+    scored in one batched run capped at PG_MAX_WINDOWS rows."""
     session = _RecordingSession()
     scanner = _scanner(session)
     text = _pad_to_bytes("")
     assert len(text.encode()) == _BAD631B3_BYTES
-    score = scanner._score(text)
-    assert score < 0.1
-    assert session.calls == 1
-    assert session.feeds[0]["input_ids"].shape == (scanner.max_windows, scanner.window_tokens)
+    chunks, truncated = scan_windows(text, 32 * 1024, 11 * 1024)
+    assert truncated is True
+    assert len(chunks) == 4
+    assert "".join(chunks) == text
+    scores = [scanner._score(chunk) for chunk in chunks]
+    assert max(scores) < 0.1
+    assert session.calls == 4
+    assert all(
+        feed["input_ids"].shape[0] <= scanner.max_windows for feed in session.feeds
+    )
 
 
 @pytest.mark.parametrize("position", ["head", "middle", "tail"])
 def test_pg_long_response_bad631b3_size_marker_controls(position):
-    """42,649-byte response with the injection marker at head / middle / tail
-    — every control is still detected by the batched scan, in one run.
-
-    The ``middle`` control sits at token 6000, inside the strided-window
-    coverage (the adaptive budget caps at 16 windows, so the deep middle of a
-    42k-token payload remains the documented blind spot defended by the
-    byte-level head/mid/tail ``scan_windows`` split upstream)."""
+    """Every marker position is detected across four full-coverage windows,
+    with one batched inference per window."""
     session = _RecordingSession()
     scanner = _scanner(session)
     marker = chr(250)
@@ -247,6 +252,30 @@ def test_pg_long_response_bad631b3_size_marker_controls(position):
     else:
         text = _pad_to_bytes("", tail=marker)
     assert len(text.encode()) == _BAD631B3_BYTES
-    score = scanner._score(text)
+    chunks, truncated = scan_windows(text, 32 * 1024, 11 * 1024)
+    assert truncated is True
+    assert len(chunks) == 4
+    score = max(scanner._score(chunk) for chunk in chunks)
     assert score > 0.9, position
-    assert session.calls == 1, position
+    assert session.calls == 4, position
+
+
+@pytest.mark.asyncio
+async def test_awarm_completes_full_response_windows_before_ready():
+    """Readiness includes full-size response windows, not only model loading."""
+    session = _RecordingSession()
+    scanner = _scanner(session)
+    engine = GuardrailEngine(
+        GuardrailConfig(enable_redaction=False, scan_tail_bytes=11 * 1024),
+        EngineComponents(
+            response_scanners=[scanner],
+            observability=Observability(audit_path="/dev/null"),
+        ),
+    )
+    await engine.awarm()
+    assert engine.ready is True
+    # One empty scan plus four balanced full-response windows.
+    assert session.calls == 4 + 1
+    assert any(
+        feed["input_ids"].shape[0] == scanner.max_windows for feed in session.feeds
+    )

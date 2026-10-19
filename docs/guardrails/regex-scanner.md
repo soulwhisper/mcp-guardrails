@@ -82,8 +82,8 @@ audit logs and OTel spans). Each reason carries a non-reversible fingerprint:
 | Knob | Default | Effect |
 | --- | --- | --- |
 | `ENABLE_REGEX_SCANNER` | `true` | Master switch for the scanner. |
-| `MAX_CONTENT_BYTES` | `32768` | Head window fed to the scanner (see [Scan coverage](scan-coverage.md)). |
-| `SCAN_TAIL_BYTES` | `8192` | Mid/tail windows on over-budget payloads. |
+| `MAX_CONTENT_BYTES` | `32768` | Single-chunk budget; larger payloads use balanced windows (see [Scan coverage](scan-coverage.md)). |
+| `SCAN_TAIL_BYTES` | `11264` | Maximum size of each balanced head/mid/tail window. |
 
 Custom pattern lists can be injected by constructing `RegexScanner(patterns=[...])`
 with your own `Pattern(name, regex, outcome, reason, score)` entries —

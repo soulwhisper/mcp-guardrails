@@ -78,7 +78,7 @@ flowchart TD
     end
 
     subgraph Engine
-        ENG --> EXT["extract_text + scan_windows (head/mid/tail)"]
+        ENG --> EXT["extract_text + scan_windows (balanced head/mid/tail)"]
         EXT --> RX[RegexScanner<br/>hidden-ascii / PII / secrets]
         EXT --> PG[OnnxPromptGuardScanner<br/>PromptGuard-2]
         EXT --> INV[InvariantEngine<br/>trace record + evaluate]

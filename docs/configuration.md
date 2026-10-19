@@ -15,9 +15,9 @@ env-var table by project contract.
 | Policy | `HUMAN_REVIEW_MODE` | `pass` | How `HUMAN_REVIEW` outcomes resolve. `pass` forwards + audit warning; `deny` escalates to a hard deny. |
 | Policy | `ALLOW_TOOLS` | _(unset)_ | Comma-separated tool allowlist (`prefix/*` wildcards). Non-empty → any tool not matching is denied before scanners run. See [Tool ACL](guardrails/tool-acl.md). |
 | Policy | `DENY_TOOLS` | _(unset)_ | Comma-separated tool denylist (`prefix/*` wildcards). DENY wins over `ALLOW_TOOLS`. |
-| Scanners | `MAX_CONTENT_BYTES` | `32768` | Max bytes of the head window fed to any scanner. Beyond this the payload is truncated (UTF-8-safe) and flagged `truncated=true` in audit. |
-| Scanners | `SCAN_TAIL_BYTES` | `8192` | Extra bytes scanned from the MID and TAIL of an over-budget payload, closing the truncation bypass. `0` disables. |
-| Scanners | `SCAN_MAX_PAYLOAD_BYTES` | `1048576` | Hard payload cap (1MiB). Over-cap payloads are still scanned (head/mid/tail) AND flagged `payload_size` `HUMAN_REVIEW`; `HUMAN_REVIEW_MODE` decides pass+warn vs deny. |
+| Scanners | `MAX_CONTENT_BYTES` | `32768` | Single-chunk scan budget. Larger payloads use bounded balanced windows and are flagged `truncated=true` in audit. |
+| Scanners | `SCAN_TAIL_BYTES` | `11264` | Maximum size of each balanced head/mid/tail window (also capped by `MAX_CONTENT_BYTES`). `0` disables multi-window scanning. |
+| Scanners | `SCAN_MAX_PAYLOAD_BYTES` | `1048576` | Hard payload cap (1MiB). Over-cap payloads are still sampled across head/mid/tail AND flagged `payload_size` `HUMAN_REVIEW`; `HUMAN_REVIEW_MODE` decides pass+warn vs deny. |
 | Scanners | `ENABLE_REGEX_SCANNER` | `true` | Deterministic pattern scanner (hidden ASCII / PII / secrets). Zero ML deps. |
 | Scanners | `ENABLE_PROMPTGUARD` | `true` | ONNX PromptGuard semantic scanner. Falls back to regex-only if `onnxruntime`/`transformers` is absent. |
 | Scanners | `ENABLE_AGENT_ALIGNMENT` | `false` | LLM-based second stage; only triggered when PromptGuard flags `HUMAN_REVIEW` on a response. |

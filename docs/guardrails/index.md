@@ -8,7 +8,7 @@ pipeline per MCP exchange. This page is the map; each layer has its own page.
 ```mermaid
 flowchart TD
     REQ[CheckRequest / CheckResponse] --> EXT[extract_text<br/>flatten params/result to text]
-    EXT --> WIN["scan_windows<br/>head / mid / tail chunks<br/>(MAX_CONTENT_BYTES + SCAN_TAIL_BYTES)"]
+    EXT --> WIN["scan_windows<br/>balanced head / mid / tail chunks<br/>(MAX_CONTENT_BYTES + SCAN_TAIL_BYTES)"]
     WIN --> SIZE{"payload exceeds<br/>SCAN_MAX_PAYLOAD_BYTES?"}
     SIZE -->|yes| PS[ScanResult: payload_size<br/>HUMAN_REVIEW]
     SIZE -->|no| SC

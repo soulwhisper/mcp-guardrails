@@ -10,7 +10,7 @@ internal policy, …) before relying on it.
 
 | Data element | Where it lives | Classification | Notes |
 | --- | --- | --- | --- |
-| **Payload content** (MCP `params` / `result` bodies) | Process memory only, for the duration of one exchange | **Confidential** — may carry user data, secrets, PII | Never written to disk or logs by the sidecar. Scanners see the extracted text; redaction rewrites secrets/PII in ALLOW-grade payloads before forwarding. Over-budget payloads are scanned via head/mid/tail windows — the middle of a giant payload is *not* inspected (bounded by `SCAN_MAX_PAYLOAD_BYTES`, which escalates to `HUMAN_REVIEW`). |
+| **Payload content** (MCP `params` / `result` bodies) | Process memory only, for the duration of one exchange | **Confidential** — may carry user data, secrets, PII | Never written to disk or logs by the sidecar. Scanners see the extracted text; redaction rewrites secrets/PII in ALLOW-grade payloads before forwarding. Over-budget payloads use bounded balanced head/mid/tail windows — regions between samples of a giant payload are *not* inspected (bounded by `SCAN_MAX_PAYLOAD_BYTES`, which escalates to `HUMAN_REVIEW`). |
 | **Audit log (JSONL)** | stdout or `AUDIT_LOG_PATH` | **Internal / restricted** | One JSON line per decision. Metadata-only by design: timestamps, phase, method, tool name, outcome, generalised reason, `ref` / `exchange_id`, `caller`, `payload_sha256` (12-hex prefix), `replica` (see §5), rules/sidecar versions, scan coverage, per-scanner breakdown. Scanner reasons never embed raw matches — high-entropy matches record a SHA-256/HMAC digest, low-entropy ones (email, credit card) record `match_len` only, so the log is not an offline enumeration oracle. |
 | **Fingerprints / digests** (`payload_sha256`, `match_hmac`) | Audit log | **Internal** | A 12-hex SHA-256 prefix lets an operator prove two lines saw the same payload without storing it. Set `AUDIT_HMAC_KEY` so digests are keyed — an unkeyed SHA-256 of a low-entropy match is brute-forceable. |
 | **`caller` field** | Audit log | **Personal data (quasi-PII)** | Populated only from the `AUDIT_CALLER_HEADERS` whitelist (default `x-forwarded-user`). `x-session-id` is deliberately excluded by default — a session id is a quasi-credential. Anything you add to this whitelist lands in a durable log: treat it as personal data for retention/access purposes. |
@@ -129,8 +129,7 @@ then resolved locally per `HUMAN_REVIEW_MODE`. The default
   archive is the store's job (SSE-S3/SSE-KMS, GCS default encryption).
 - **Clock trust.** Timestamps are node-local; there is no trusted
   timestamping. WORM ingestion time (store-side) is the stronger signal.
-- **Coverage limits are explicit, not hidden.** Over-budget payloads are
-  scanned head/mid/tail only; over-`REDACTION_MAX_BYTES` payloads skip
+- **Coverage limits are explicit, not hidden.** Over-budget payloads use balanced head/mid/tail samples; over-`REDACTION_MAX_BYTES` payloads skip
   redaction (`redaction_skipped=size` in the span); giant payloads
   (> `SCAN_MAX_PAYLOAD_BYTES`) get a `payload_size` review flag. Audit
   consumers should alert on `truncated=true` and

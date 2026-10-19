@@ -43,9 +43,9 @@ Out of scope (by design):
 | Sidecar Pod unreachable | agentgateway's mcp-guardrails processor fails closed → JSON-RPC `-32603` to the agent (e2e case e). |
 | PromptGuard model load failure | Pod readiness probe stays `NOT_SERVING`; the Pod is removed from Service endpoints. No traffic reaches a half-initialised sidecar. |
 | Malformed JSON-RPC payload | Servicer returns `AuthorizationError{INVALID}` (fail-closed on parse failure). |
-| Tool output > `MAX_CONTENT_BYTES` | head (32KiB) + mid + tail (8KiB each) windows scanned; decision flagged `truncated=true`. Regions between the windows remain unscanned (bounded by `SCAN_MAX_PAYLOAD_BYTES`). |
-| PromptGuard token-window ceiling | Chunks beyond ~`PG_MAX_WINDOWS*448 + 512` tokens (≈7.7K at the default) have unscanned middle regions — an injection padded past the scored windows can be missed. Defence-in-depth: byte-level head/mid/tail split + the `payload_size` cap. |
-| Payload > `SCAN_MAX_PAYLOAD_BYTES` (1MiB) | Still scanned via the three windows, plus a `payload_size` `HUMAN_REVIEW` with scanned/total bytes — `HUMAN_REVIEW_MODE=deny` makes it a hard deny. |
+| Tool output > `MAX_CONTENT_BYTES` | Balanced head/mid/tail windows (11KiB each by default) scanned; decision flagged `truncated=true`. Complete coverage with up to four windows when the payload fits; otherwise four samples with regions between them unscanned (bounded by `SCAN_MAX_PAYLOAD_BYTES`). |
+| PromptGuard token-window ceiling | Chunks beyond ~`PG_MAX_WINDOWS*448 + 512` tokens (≈7.7K at the default) have unscanned middle regions — an injection padded past the scored windows can be missed. Defence-in-depth: balanced byte-level windows + the `payload_size` cap. |
+| Payload > `SCAN_MAX_PAYLOAD_BYTES` (1MiB) | Still scanned via the bounded windows, plus a `payload_size` `HUMAN_REVIEW` with scanned/total bytes — `HUMAN_REVIEW_MODE=deny` makes it a hard deny. |
 | stdio upstream | agentgateway forwards an empty header set for stdio upstreams. Do **not** rely on headers for authn/authz when `upstream_transport == "stdio"`. |
 
 **failOpen × redaction.** Under `failOpen` a scanner exception becomes

@@ -1036,44 +1036,90 @@ def truncate(text: str, max_bytes: int) -> tuple[str, bool]:
 
 
 def scan_windows(text: str, max_bytes: int, tail_bytes: int) -> tuple[list[str], bool]:
-    """Split ``text`` into the chunks that content scanners must inspect.
+    """Split ``text`` into bounded, evenly distributed scanner windows.
 
-    Returns ``(chunks, was_truncated)``. For in-budget payloads this is just
-    ``[text]``. For over-budget payloads three windows are scanned:
+    Returns ``(chunks, was_truncated)``. In-budget payloads remain a single
+    chunk. Over-budget payloads use up to four windows of at most
+    ``min(max_bytes, tail_bytes)`` bytes each:
 
-    * **head** — the first ``max_bytes`` (the attacker-relevant prefix);
-    * **mid** — a ``tail_bytes``-sized window centred on the *unscanned
-      remainder* (the region between head and tail), closing the mid-payload
-      blind spot (S-H2) where an injection padded past the head but short of
-      the tail previously went unseen;
-    * **tail** — the last ``tail_bytes``, catching the classic
-      padding-prefix truncation bypass.
+    * Payloads that fit in up to four windows are split into contiguous,
+      balanced chunks, preserving complete coverage without duplicate scanning.
+    * Larger payloads use the prefix, a midpoint window, one window centred
+      on the largest remaining gap, and the suffix.
 
-    All windows are UTF-8-safe. ``tail_bytes <= 0`` disables the mid/tail
-    windows (legacy head-only behaviour). Windows that would fully overlap
-    the head are skipped, so short over-budget payloads may return fewer
-    than three chunks.
+    Balancing avoids one oversized head chunk monopolising the scanner
+    deadline while retaining head/mid/tail coverage. All windows are UTF-8
+    safe. ``tail_bytes <= 0`` disables multi-window scanning (legacy head-only
+    behaviour).
     """
     head, truncated = truncate(text, max_bytes)
     if not truncated or tail_bytes <= 0:
         return [head], truncated
+
     encoded = text.encode("utf-8", errors="ignore")
-    head_bytes = len(head.encode("utf-8", errors="ignore"))
-    chunks = [head]
+    window_bytes = min(max_bytes, tail_bytes)
+    if len(encoded) <= 4 * window_bytes:
+        # Split on codepoint boundaries, never inside one. Try the balanced
+        # target first, then the per-window cap. If no bounded split can
+        # honour the cap (e.g. a pathological mix of multibyte codepoints),
+        # retain the whole small payload rather than dropping bytes.
+        from bisect import bisect_left
 
-    # Mid window: centred on the unscanned region [head_bytes, len-tail).
-    region_start = head_bytes
-    region_end = max(region_start, len(encoded) - tail_bytes)
-    if region_end - region_start > 1:
-        mid_centre = (region_start + region_end) // 2
-        mid_start = max(region_start, mid_centre - tail_bytes // 2)
-        mid = encoded[mid_start : mid_start + tail_bytes].decode("utf-8", errors="ignore")
-        if mid and mid != head:
-            chunks.append(mid)
+        parts = (len(encoded) + window_bytes - 1) // window_bytes
+        boundaries = [0]
+        for char in text:
+            boundaries.append(boundaries[-1] + len(char.encode("utf-8", errors="ignore")))
 
-    tail = encoded[-tail_bytes:].decode("utf-8", errors="ignore")
-    if tail and tail != head and tail not in chunks:
-        chunks.append(tail)
+        def partition(target: int) -> list[str] | None:
+            cuts = []
+            for multiple in range(1, parts):
+                wanted = target * multiple
+                index = min(bisect_left(boundaries, wanted), len(boundaries) - 1)
+                candidates = [index]
+                if index:
+                    candidates.append(index - 1)
+                cut = min(candidates, key=lambda i: abs(boundaries[i] - wanted))
+                cuts.append(cut)
+            if len(set(cuts)) < parts - 1 or cuts != sorted(cuts) or cuts[-1] >= len(text):
+                return None
+            points = [0, *cuts, len(text)]
+            sizes = [
+                boundaries[points[i + 1]] - boundaries[points[i]] for i in range(parts)
+            ]
+            if max(sizes) > window_bytes:
+                return None
+            return [text[points[i] : points[i + 1]] for i in range(parts)]
+
+        for target in ((len(encoded) + parts - 1) // parts, window_bytes):
+            chunks = partition(target)
+            if chunks is not None:
+                return chunks, True
+        return [text], True
+
+    last = len(encoded) - window_bytes
+    # Preserve the original midpoint defence: centre one window on the region
+    # between the original max_bytes head and the suffix.
+    region_start = max_bytes
+    region_end = last
+    mid_centre = (region_start + region_end) // 2
+    mid_start = max(region_start, mid_centre - window_bytes // 2)
+    mid_end = mid_start + window_bytes
+
+    # Use the fourth window on the larger of the prefix/mid and mid/suffix gaps.
+    left_gap = mid_start - window_bytes
+    right_gap = region_end - mid_end
+    if left_gap >= right_gap:
+        centre = (window_bytes + mid_start) // 2
+        extra_start = max(0, centre - window_bytes // 2)
+    else:
+        centre = (mid_end + region_end) // 2
+        extra_start = max(region_start, centre - window_bytes // 2)
+
+    starts = sorted((0, extra_start, mid_start, region_end))
+    chunks = [
+        encoded[start : start + window_bytes].decode("utf-8", errors="ignore")
+        for start in starts
+    ]
     return chunks, True
 
 

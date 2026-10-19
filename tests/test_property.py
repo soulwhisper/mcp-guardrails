@@ -83,16 +83,24 @@ def test_scan_windows_properties(text: str, max_bytes: int, tail_bytes: int) -> 
         # Head window covers the (UTF-8-safe) payload prefix.
         head_bytes = chunks[0].encode("utf-8", errors="ignore")
         assert encoded[: len(head_bytes)] == head_bytes
-        assert len(head_bytes) <= max_bytes
+        assert len(head_bytes) <= max_bytes or (len(chunks) == 1 and chunks[0] == text)
         if tail_bytes > 0:
-            # Tail coverage: the UTF-8-safe suffix window is either scanned
-            # as its own chunk or coincides with an already-returned chunk.
-            exp_tail = encoded[-tail_bytes:].decode("utf-8", errors="ignore")
-            if exp_tail and exp_tail != chunks[0]:
-                assert exp_tail in chunks
+            window_bytes = min(max_bytes, tail_bytes)
+            assert 1 <= len(chunks) <= 4
             if len(chunks) > 1:
-                last = chunks[-1].encode("utf-8", errors="ignore")
-                assert encoded.endswith(last) or last in encoded
+                assert all(len(chunk.encode("utf-8", errors="ignore")) <= window_bytes for chunk in chunks)
+            # The last window always reaches the payload suffix.
+            last = chunks[-1].encode("utf-8", errors="ignore")
+            assert encoded.endswith(last)
+            if total <= 4 * window_bytes:
+                # Full coverage is mandatory, including the indivisible-codepoint fallback.
+                if len(chunks) == 1:
+                    assert chunks[0] == text
+                else:
+                    assert "".join(chunks).encode("utf-8", errors="ignore") == encoded
+            else:
+                # Larger payloads retain four bounded head/mid/tail samples.
+                assert len(chunks) == 4
 
 
 # ---------------------------------------------------------------------------

@@ -162,10 +162,10 @@ data:
     #   ENABLE_AGENT_ALIGNMENT - toggle the LLM-based AgentAlignment second stage
     #                            (only runs when PromptGuard returns HUMAN_REVIEW;
     #                            default off for homelab latency budget)
-    #   MAX_CONTENT_BYTES      - per-call head text budget fed to each scanner
-    #                            (excess is truncated + flagged in the audit span)
-    #   SCAN_TAIL_BYTES        - extra tail window scanned on over-budget payloads
-    #                            (default 8192; 0 disables; closes truncation bypass)
+    #   MAX_CONTENT_BYTES      - single-chunk text budget; larger payloads use
+    #                            balanced windows and are flagged in the audit span
+    #   SCAN_TAIL_BYTES        - maximum size of each balanced window
+    #                            (default 11264; 0 disables multi-window scanning)
     #   ENABLE_REDACTION       - structural secret/PII redaction on allowed payloads,
     #                            forwarded via the proto `mutated` oneof (default on)
     #   REDACT_REQUEST_PARAMS  - also redact params.arguments on the request side

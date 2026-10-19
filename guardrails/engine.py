@@ -232,10 +232,11 @@ class GuardrailEngine:
     # ------------------------------------------------------------------
 
     async def awarm(self) -> None:
-        """Preload model weights / warm caches so the first request is fast.
+        """Preload model weights and warm full-size response batch shapes.
 
         For the ONNX PromptGuard-backed engine this triggers the ONNX model
-        load (PromptGuard-2-86M, ~350MB full-precision ONNX).
+        load and completes representative response windows, preventing a cold
+        large batch from consuming the first request's scanner deadline.
         With dry-run / regex-only configs this is a no-op.
         """
         # Touch each scanner once to force lazy init in a thread.
@@ -266,6 +267,34 @@ class GuardrailEngine:
                 logger.warning(
                     "warmup of scanner %s failed: %s", getattr(scanner, "name", scanner), exc
                 )
+        # Complete a representative full-size response before advertising
+        # readiness. The empty scans above initialise models, but large batch
+        # shapes have their own cold cost and can otherwise deny the first
+        # real response at the scanner deadline. Use the same 30s warmup
+        # budget as model loading and do not emit a user-facing decision.
+        if self._c.response_scanners:
+            try:
+                warmup_text = (
+                    "Public search result with verifiable facts and sources.\n" * 1000
+                )[:42_649]
+                ctx = McpCallContext(
+                    method="tools/call",
+                    service_names=("warmup",),
+                    result={"content": [{"type": "text", "text": warmup_text}]},
+                )
+                chunks, _ = scan_windows(
+                    warmup_text, self._cfg.max_content_bytes, self._cfg.scan_tail_bytes
+                )
+                for chunk in chunks:
+                    await asyncio.wait_for(
+                        self._run_scanners(
+                            chunk, "assistant", self._c.response_scanners, context=ctx
+                        ),
+                        timeout=30.0,
+                    )
+            except Exception as exc:  # pragma: no cover - warmup best-effort
+                logger.warning("full-response warmup failed: %s", exc)
+
         self._ready = True
         logger.info("guardrail engine warmed up (ready=%s)", self._ready)
 

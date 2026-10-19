@@ -7,10 +7,12 @@ readiness probe) with two watch names: `""` and `ExtMcp`.
 
 The health service starts `NOT_SERVING`. The engine warms up before accepting
 traffic (`GuardrailEngine.awarm()` — the PromptGuard-2 model load dominates,
-taking several seconds on cold start). Only when warmup completes does a
-background watchdog (2s poll) flip health to `SERVING`. This keeps the Pod
-out of Service endpoints during cold start, so no traffic reaches a
-half-initialised sidecar.
+taking several seconds on cold start). Warmup also completes a representative
+full-size response across the balanced windows with a 30s per-window budget,
+so large batch shapes cannot consume the first real request's scanner
+deadline. Only when warmup completes does a background watchdog (2s poll)
+flip health to `SERVING`. This keeps the Pod out of Service endpoints during
+cold start, so no traffic reaches a half-initialised sidecar.
 
 ## Runtime degradation (A-P0-4)
 

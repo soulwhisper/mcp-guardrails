@@ -94,7 +94,7 @@ per-chunk latency bound — it caps the batch row count of the single inference
 per chunk, not the number of ONNX invocations. At the
 default, a chunk gets up to ~`16*448 + 512 ≈ 7.7K` tokens scored; chunks
 longer than that still have unscanned middle regions — defence-in-depth for
-those is the byte-level head/mid/tail split and the `payload_size` cap (see
+those is the balanced byte-level window split and the `payload_size` cap (see
 [Scan coverage](scan-coverage.md)).
 
 ### Local / offline loading

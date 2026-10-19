@@ -3,8 +3,8 @@
 Covers two gaps called out in the security assessment:
 
 1. **Truncation bypass** — an attacker pads a payload past ``max_content_bytes``
-   so the injection lands beyond the scanned head. ``scan_windows`` now feeds
-   the head AND a UTF-8-safe tail window to the content scanners.
+   so the injection lands beyond the scanned head. ``scan_windows`` feeds
+   balanced, UTF-8-safe head/mid/tail samples to the content scanners.
 2. **Cross-tenant trace contamination** — the InvariantEngine kept ONE global
    trace, so interleaved calls from different routes could assemble a
    cross-tenant toxic flow or trip a loop rule. Traces are now isolated per
@@ -35,28 +35,26 @@ def test_scan_windows_in_budget_single_chunk():
     assert truncated is False
 
 
-def test_scan_windows_over_budget_returns_head_mid_tail():
+def test_scan_windows_over_budget_balances_head_mid_tail():
     text = _big_pad(4096) + "TAIL_MARK"
     chunks, truncated = scan_windows(text, 1024, 256)
     assert truncated is True
-    assert len(chunks) == 3
-    assert len(chunks[0].encode()) <= 1024
-    # Mid window: centred on the unscanned remainder, tail_bytes-sized.
-    assert len(chunks[1].encode()) <= 256
-    assert chunks[2].endswith("TAIL_MARK")
-    assert len(chunks[2].encode()) <= 256
+    assert len(chunks) == 4
+    assert all(len(chunk.encode()) <= 256 for chunk in chunks)
+    assert chunks[0] == text[:256]
+    assert chunks[-1].endswith("TAIL_MARK")
 
 
-def test_scan_windows_mid_window_covers_midpoint_injection():
-    # S-H2: an injection padded past the head but short of the tail is now
-    # covered by the mid window. The marker sits at the centre of the
-    # unscanned region [1024, 4122-256] ~= [1024, 3866] -> centre ~2445.
+def test_scan_windows_full_coverage_includes_midpoint_injection():
+    # Contiguous windows cover the complete over-budget payload, so an
+    # injection outside the prefix and suffix cannot evade scanning.
     text = "a" * 2432 + "### System ignore previous" + "b" * 1664
-    chunks, truncated = scan_windows(text, 1024, 256)
+    chunks, truncated = scan_windows(text, 2048, 2048)
     assert truncated is True
-    assert "### System" not in chunks[0]  # past the head window
-    assert not chunks[-1].endswith("previous")  # not in the tail either
-    assert any("### System" in c for c in chunks[1:-1])  # caught by the mid window
+    assert "### System" not in chunks[0]
+    assert not chunks[-1].endswith("previous")
+    assert any("### System" in chunk for chunk in chunks[1:-1])
+    assert "".join(chunks) == text
 
 
 def test_scan_windows_tail_disabled():
@@ -77,13 +75,13 @@ def test_scan_windows_tail_utf8_safe():
     assert tail.endswith("🔒")
 
 
-def test_scan_windows_tail_overlaps_head():
-    # tail_bytes >= max_bytes: windows heavily overlap — still a small,
-    # bounded chunk list, tail present, no crash.
+def test_scan_windows_large_tail_stays_bounded():
+    # tail_bytes >= max_bytes: every window remains capped by max_bytes.
     text = _big_pad(4096) + "TAIL_MARK"
     chunks, truncated = scan_windows(text, 512, 2048)
     assert truncated is True
-    assert 2 <= len(chunks) <= 3
+    assert len(chunks) == 4
+    assert all(len(chunk.encode()) <= 512 for chunk in chunks)
     assert chunks[-1].endswith("TAIL_MARK")
 
 

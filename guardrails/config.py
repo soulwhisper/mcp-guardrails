@@ -97,11 +97,10 @@ class GuardrailConfig:
 
     # --- Content budget ---
     max_content_bytes: int = 32 * 1024
-    # Extra bytes scanned from the MID and TAIL of an over-budget payload,
-    # closing the truncation bypass (an attacker padding a payload so the
-    # injection lands beyond the scanned head — or between the head and
-    # tail windows). 0 disables mid/tail scanning.
-    scan_tail_bytes: int = 8 * 1024
+    # Maximum size of each balanced window used for over-budget payloads.
+    # Up to four windows cover small over-budget payloads completely; four
+    # evenly distributed windows sample larger payloads. 0 disables multi-window scanning.
+    scan_tail_bytes: int = 11 * 1024
     # Hard payload cap (S-H2). Payloads whose extracted text exceeds this are
     # still scanned (head/mid/tail windows) but the engine additionally flags
     # a HUMAN_REVIEW "payload_size" result — HUMAN_REVIEW_MODE then decides
@@ -340,7 +339,7 @@ class GuardrailConfig:
             failure_mode=failure_mode,
             human_review_mode=human_review_mode,
             max_content_bytes=_env_int("MAX_CONTENT_BYTES", 32 * 1024),
-            scan_tail_bytes=_env_int("SCAN_TAIL_BYTES", 8 * 1024),
+            scan_tail_bytes=_env_int("SCAN_TAIL_BYTES", 11 * 1024),
             scan_max_payload_bytes=_env_int("SCAN_MAX_PAYLOAD_BYTES", 1024 * 1024),
             enable_regex_scanner=_env_bool("ENABLE_REGEX_SCANNER", True),
             enable_promptguard=_env_bool("ENABLE_PROMPTGUARD", True),
