@@ -1032,6 +1032,11 @@ def truncate(text: str, max_bytes: int) -> tuple[str, bool]:
     if len(encoded) <= max_bytes:
         return text, False
     truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
+    if not truncated and encoded:
+        # A single codepoint can exceed max_bytes. Never turn a non-empty
+        # payload into an empty scan window just because its first codepoint
+        # straddles the cut.
+        return text, True
     return truncated, True
 
 
@@ -1058,6 +1063,21 @@ def scan_windows(text: str, max_bytes: int, tail_bytes: int) -> tuple[list[str],
 
     encoded = text.encode("utf-8", errors="ignore")
     window_bytes = min(max_bytes, tail_bytes)
+
+    def decode_window(start: int) -> str:
+        chunk = encoded[start : start + window_bytes].decode("utf-8", errors="ignore")
+        if chunk:
+            return chunk
+        # A window that cuts through one codepoint must not become empty.
+        # Return that complete codepoint as a soft-budget fallback.
+        cursor = start
+        for char in text:
+            size = len(char.encode("utf-8", errors="ignore"))
+            if cursor < size:
+                return char
+            cursor -= size
+        return chunk
+
     if len(encoded) <= 4 * window_bytes:
         # Split on codepoint boundaries, never inside one. Try the balanced
         # target first, then the per-window cap. If no bounded split can
@@ -1097,6 +1117,13 @@ def scan_windows(text: str, max_bytes: int, tail_bytes: int) -> tuple[list[str],
         return [text], True
 
     last = len(encoded) - window_bytes
+    if last < max_bytes:
+        # Extreme max_bytes/tail_bytes ratios cannot place a distinct
+        # midpoint window. Fall back to four evenly spaced valid samples.
+        starts = (0, last // 3, 2 * last // 3, last)
+        chunks = [decode_window(start) for start in starts]
+        return chunks, True
+
     # Preserve the original midpoint defence: centre one window on the region
     # between the original max_bytes head and the suffix.
     region_start = max_bytes
@@ -1116,10 +1143,7 @@ def scan_windows(text: str, max_bytes: int, tail_bytes: int) -> tuple[list[str],
         extra_start = max(region_start, centre - window_bytes // 2)
 
     starts = sorted((0, extra_start, mid_start, region_end))
-    chunks = [
-        encoded[start : start + window_bytes].decode("utf-8", errors="ignore")
-        for start in starts
-    ]
+    chunks = [decode_window(start) for start in starts]
     return chunks, True
 
 

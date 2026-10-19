@@ -71,6 +71,7 @@ def test_scan_windows_properties(text: str, max_bytes: int, tail_bytes: int) -> 
     encoded = text.encode("utf-8", errors="ignore")
     for chunk in chunks:
         assert isinstance(chunk, str)
+        assert chunk or not encoded
         chunk.encode("utf-8")  # must not raise
 
     total = len(encoded)
@@ -83,12 +84,16 @@ def test_scan_windows_properties(text: str, max_bytes: int, tail_bytes: int) -> 
         # Head window covers the (UTF-8-safe) payload prefix.
         head_bytes = chunks[0].encode("utf-8", errors="ignore")
         assert encoded[: len(head_bytes)] == head_bytes
-        assert len(head_bytes) <= max_bytes or (len(chunks) == 1 and chunks[0] == text)
+        assert len(head_bytes) <= max_bytes or len(chunks[0]) == 1 or (len(chunks) == 1 and chunks[0] == text)
         if tail_bytes > 0:
             window_bytes = min(max_bytes, tail_bytes)
             assert 1 <= len(chunks) <= 4
             if len(chunks) > 1:
-                assert all(len(chunk.encode("utf-8", errors="ignore")) <= window_bytes for chunk in chunks)
+                assert all(
+                    len(chunk.encode("utf-8", errors="ignore")) <= window_bytes
+                    or len(chunk) == 1
+                    for chunk in chunks
+                )
             # The last window always reaches the payload suffix.
             last = chunks[-1].encode("utf-8", errors="ignore")
             assert encoded.endswith(last)

@@ -89,6 +89,12 @@ def test_truncate_contract_unchanged():
     assert truncate("abc", 10) == ("abc", False)
 
 
+def test_truncate_does_not_drop_indivisible_codepoint():
+    text, truncated = truncate("🔒", 1)
+    assert text == "🔒"
+    assert truncated is True
+
+
 # ---------------------------------------------------------------------------
 # Engine: injection hidden in the tail is blocked (truncation bypass)
 # ---------------------------------------------------------------------------

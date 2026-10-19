@@ -272,7 +272,10 @@ class GuardrailEngine:
         # shapes have their own cold cost and can otherwise deny the first
         # real response at the scanner deadline. Use the same 30s warmup
         # budget as model loading and do not emit a user-facing decision.
-        if self._c.response_scanners:
+        if any(
+            isinstance(scanner, OnnxPromptGuardScanner)
+            for scanner in self._c.response_scanners
+        ):
             try:
                 warmup_text = (
                     "Public search result with verifiable facts and sources.\n" * 1000
