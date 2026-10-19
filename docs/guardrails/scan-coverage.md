@@ -22,27 +22,27 @@ scan string:
   zero-width characters are **not** `\u`-escaped away before the regex
   scanner sees them.
 
-## Byte windows (head / mid / tail)
+## Byte windows (balanced head / mid / tail samples)
 
 `scan_windows(text, MAX_CONTENT_BYTES, SCAN_TAIL_BYTES)` decides which parts
-of an over-budget payload are scanned:
+of an over-budget payload are scanned. `SCAN_TAIL_BYTES` defaults to 11KiB;
+each window is capped by `min(MAX_CONTENT_BYTES, SCAN_TAIL_BYTES)`.
 
-| Window | Size (default) | What it covers |
+| Payload after the 32KiB threshold | Windows | Coverage |
 | --- | --- | --- |
-| head | `MAX_CONTENT_BYTES` = 32KiB | The attacker-relevant prefix. |
-| mid | `SCAN_TAIL_BYTES` = 8KiB | Centred on the *unscanned remainder* between head and tail — closes the mid-payload blind spot where an injection padded past the head but short of the tail previously went unseen. |
-| tail | `SCAN_TAIL_BYTES` = 8KiB | The last bytes — catches the classic padding-prefix truncation bypass. |
+| Fits within four windows | Up to four contiguous, balanced chunks | Complete payload, with no duplicate scanning. |
+| Larger than four windows | Prefix, a midpoint window, one window on the largest remaining gap, suffix | Four bounded head/mid/tail samples; regions between them remain unscanned. |
 
-All windows are UTF-8-safe (truncated on character boundaries).
-`SCAN_TAIL_BYTES=0` restores legacy head-only behaviour. Windows that would
-fully overlap the head are skipped, so short over-budget payloads may scan
-fewer than three chunks. Decisions on truncated payloads are flagged
-`truncated=true` in the audit record, with `scanned_bytes` / `total_bytes`.
+Balanced windows keep every scanner call within its deadline instead of
+letting one 32KiB head monopolise it. All windows are UTF-8-safe (truncated on
+character boundaries). `SCAN_TAIL_BYTES=0` restores legacy head-only
+behaviour. Decisions on truncated payloads are flagged `truncated=true` in
+the audit record, with `scanned_bytes` / `total_bytes`.
 
 ## Payload hard cap
 
 Payloads whose extracted text exceeds `SCAN_MAX_PAYLOAD_BYTES` (default
-1MiB) are still scanned via the three windows **and** gain a `payload_size`
+1MiB) are still scanned via the bounded windows **and** gain a `payload_size`
 `HUMAN_REVIEW` result carrying the scanned/total byte counts —
 `HUMAN_REVIEW_MODE=deny` turns it into a hard deny. This bounds the
 unscanned fraction of giant payloads.
@@ -59,8 +59,8 @@ window, MAX score wins (see [PromptGuard](promptguard.md)).
 | Payload size | Regex scanner | PromptGuard | Notes |
 | --- | --- | --- | --- |
 | ≤ 32KiB | Full text | Up to 4 windows (adaptive budget floor); short payloads usually scored whole | Full coverage. |
-| 32KiB – 1MiB | head + mid + tail windows | Each scanned chunk gets up to `PG_MAX_WINDOWS` (16) token windows (~7.7K tokens per chunk) | Regions **between** the byte windows are unscanned. Within each chunk, tokens past the window budget are unscanned. |
-| > 1MiB | Same three windows | Same per-chunk budget | Plus a `payload_size` `HUMAN_REVIEW` flag so the under-scan is a decision-level event, not a silent gap. |
+| 32KiB – 1MiB | Balanced windows | Each scanned chunk gets up to `PG_MAX_WINDOWS` (16) token windows (~7.7K tokens per chunk) | Complete coverage with up to four windows when the payload fits; otherwise four samples with regions **between** them unscanned. Within each chunk, tokens past the window budget are unscanned. |
+| > 1MiB | Same bounded windows | Same per-chunk budget | Plus a `payload_size` `HUMAN_REVIEW` flag so the under-scan is a decision-level event, not a silent gap. |
 
 ## Known residual gaps (honest list)
 

@@ -76,8 +76,11 @@ adopts the model's `max_position_embeddings` (512) as the window size.
 The model sees at most 512 tokens at a time; naive truncation would score
 only the first ~512 tokens of a 32KiB chunk and leave an injection past the
 cut invisible. Instead the scanner tokenises once, splits the token ids into
-**overlapping windows** (512 tokens, stride 64), scores each, and takes the
-**MAX** malicious-class probability across windows.
+**overlapping windows** (512 tokens, stride 64), stacks them into a single
+batched `(windows, 512)` tensor, and scores the whole batch with **one**
+`InferenceSession.run` per content chunk, taking the **MAX** malicious-class
+probability across batch rows. Softmax is row-independent, so batched scores
+are identical to scoring each window separately.
 
 The window budget is **adaptive** — it grows with the chunk's token length:
 
@@ -87,10 +90,11 @@ budget = clamp(ceil(tokens/step) + 1, 4, PG_MAX_WINDOWS)
 
 Strategy: the first `budget-1` strided windows plus a final **tail-aligned**
 window. `PG_MAX_WINDOWS` (default **16**) is the hard cap and therefore the
-per-chunk latency bound (each window is one more 512-token inference). At the
+per-chunk latency bound — it caps the batch row count of the single inference
+per chunk, not the number of ONNX invocations. At the
 default, a chunk gets up to ~`16*448 + 512 ≈ 7.7K` tokens scored; chunks
 longer than that still have unscanned middle regions — defence-in-depth for
-those is the byte-level head/mid/tail split and the `payload_size` cap (see
+those is the balanced byte-level window split and the `payload_size` cap (see
 [Scan coverage](scan-coverage.md)).
 
 ### Local / offline loading
@@ -128,10 +132,11 @@ responses route to the [AgentAlignment](agent-alignment.md) LLM check when
 
 22M parameters, CPU-only inference — no GPU required. Qualitative profile:
 
-- Each 512-token window is one CPU inference. Meta rates the 22M at ~75% less
+- Each chunk is scored with ONE batched CPU inference of at most
+  `PG_MAX_WINDOWS` 512-token rows. Meta rates the 22M at ~75% less
   compute than the 86M; measure on YOUR hardware before tightening timeouts.
   Keep `SCANNER_TIMEOUT_MS` (default 500ms) comfortably above your expected
-  per-window latency × window count.
+  per-chunk batched latency.
 - Accuracy (gravitee benchmark, ONNX): 22M fp32 95.64% (recall 92.49%),
   22M quant 95.79% (recall 92.04%) — vs 86M fp32 98.01% (recall 96.25%).
 - First-inference cold start is dominated by model load; the

@@ -125,8 +125,8 @@ spec:
             # of a toxic flow out of the window before the tail arrives).
             # - name: INVARIANT_MAX_TRACES   # max per-route trace windows (default 1024)
             #   value: "1024"
-            # - name: SCAN_TAIL_BYTES        # tail window scanned on over-budget payloads (default 8192)
-            #   value: "8192"
+            # - name: SCAN_TAIL_BYTES        # maximum size of each balanced window (default 11264)
+            #   value: "11264"
             # - name: ENABLE_REDACTION       # secret/PII redaction on allowed payloads (default true)
             #   value: "true"
             # - name: REDACT_REQUEST_PARAMS  # also redact params.arguments on requests (default false)

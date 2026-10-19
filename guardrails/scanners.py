@@ -768,7 +768,10 @@ class OnnxPromptGuardScanner:
     # payload (``clamp(ceil(tokens/step)+1, 4, max_windows)``), so long
     # payloads get their middle scored too instead of only the first 3
     # strided windows + tail. ``max_windows`` is the hard cap (default 16,
-    # env ``PG_MAX_WINDOWS``) — the latency bound.
+    # env ``PG_MAX_WINDOWS``) — the latency bound. Windows are scored in a
+    # single batched ``InferenceSession.run`` per content chunk (see
+    # ``_score``), so the cap bounds the batch row count, not the number of
+    # ONNX invocations.
     window_tokens: int = 512
     window_stride: int = 64
     max_windows: int = 16
@@ -913,6 +916,19 @@ class OnnxPromptGuardScanner:
         ``max_windows * step + window_tokens`` tokens still have unscanned
         middle regions; defence-in-depth for those is the byte-level
         head/mid/tail ``scan_windows`` split upstream.
+
+        Batching (perf, denial ref bad631b3): all windows are stacked into a
+        single ``(num_windows, width)`` batch and scored with ONE
+        ``InferenceSession.run`` per content chunk instead of one run per
+        window. Per-window runs paid the session/allocator/graph-dispatch
+        overhead ``budget`` times per chunk (a 42,649-byte response split
+        into 3 chunks cost 3 x up-to-16 sequential runs, ~9.4s total —
+        inside the agentgateway 10s outer budget but only just). Softmax is
+        row-independent, so per-row results are bit-identical to the old
+        per-window loop: each row still carries its own all-ones attention
+        mask and batch rows never attend across one another.
+        ``max_windows`` remains the latency bound — now on the batch row
+        count rather than the invocation count.
         """
         import numpy as np
 
@@ -943,24 +959,35 @@ class OnnxPromptGuardScanner:
         # Feed only the inputs the ONNX graph declares — some exports omit
         # token_type_ids, and onnxruntime errors on unexpected feed keys.
         expected = {i.name for i in self._sess.get_inputs()}
-        best = 0.0
-        for w in windows:
-            feed: dict[str, Any] = {}
-            if "input_ids" in expected:
-                feed["input_ids"] = w[np.newaxis, :]
-            if "attention_mask" in expected:
-                feed["attention_mask"] = np.ones((1, w.shape[0]), dtype=np.int64)
-            if "token_type_ids" in expected:
-                feed["token_type_ids"] = np.zeros((1, w.shape[0]), dtype=np.int64)
-            logits = np.asarray(self._sess.run(None, feed)[0], dtype=np.float64)
-            # softmax over the class dimension (numerically stable).
-            shifted = logits - logits.max(axis=-1, keepdims=True)
-            exp = np.exp(shifted)
-            probs = exp / exp.sum(axis=-1, keepdims=True)
-            # We always take the LAST class as the "block" score (validated
-            # against config.json id2label at load time).
-            best = max(best, float(probs[0, -1]))
-        return best
+        # Stack the windows into ONE batched inference call. With the window
+        # construction above every window is exactly ``win`` tokens (the
+        # short-text branch yields a single length-n window), so the batch is
+        # rectangular and the all-ones attention mask matches the old
+        # per-window feeds exactly. The zero-pad path below only triggers if
+        # a future change introduces ragged windows; padded positions are
+        # masked out so per-row scores stay per-window equivalent.
+        width = max(w.shape[0] for w in windows)
+        batch_ids = np.zeros((len(windows), width), dtype=np.int64)
+        batch_mask = np.zeros((len(windows), width), dtype=np.int64)
+        for row, w in enumerate(windows):
+            batch_ids[row, : w.shape[0]] = w
+            batch_mask[row, : w.shape[0]] = 1
+        feed: dict[str, Any] = {}
+        if "input_ids" in expected:
+            feed["input_ids"] = batch_ids
+        if "attention_mask" in expected:
+            feed["attention_mask"] = batch_mask
+        if "token_type_ids" in expected:
+            feed["token_type_ids"] = np.zeros((len(windows), width), dtype=np.int64)
+        logits = np.asarray(self._sess.run(None, feed)[0], dtype=np.float64)
+        # softmax over the class dimension (numerically stable).
+        shifted = logits - logits.max(axis=-1, keepdims=True)
+        exp = np.exp(shifted)
+        probs = exp / exp.sum(axis=-1, keepdims=True)
+        # We always take the LAST class as the "block" score (validated
+        # against config.json id2label at load time); the max over batch rows
+        # is the max over windows, same as the old loop.
+        return float(probs[:, -1].max())
 
 
 # ---------------------------------------------------------------------------
@@ -1005,48 +1032,118 @@ def truncate(text: str, max_bytes: int) -> tuple[str, bool]:
     if len(encoded) <= max_bytes:
         return text, False
     truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
+    if not truncated and encoded:
+        # A single codepoint can exceed max_bytes. Never turn a non-empty
+        # payload into an empty scan window just because its first codepoint
+        # straddles the cut.
+        return text, True
     return truncated, True
 
 
 def scan_windows(text: str, max_bytes: int, tail_bytes: int) -> tuple[list[str], bool]:
-    """Split ``text`` into the chunks that content scanners must inspect.
+    """Split ``text`` into bounded, evenly distributed scanner windows.
 
-    Returns ``(chunks, was_truncated)``. For in-budget payloads this is just
-    ``[text]``. For over-budget payloads three windows are scanned:
+    Returns ``(chunks, was_truncated)``. In-budget payloads remain a single
+    chunk. Over-budget payloads use up to four windows of at most
+    ``min(max_bytes, tail_bytes)`` bytes each:
 
-    * **head** — the first ``max_bytes`` (the attacker-relevant prefix);
-    * **mid** — a ``tail_bytes``-sized window centred on the *unscanned
-      remainder* (the region between head and tail), closing the mid-payload
-      blind spot (S-H2) where an injection padded past the head but short of
-      the tail previously went unseen;
-    * **tail** — the last ``tail_bytes``, catching the classic
-      padding-prefix truncation bypass.
+    * Payloads that fit in up to four windows are split into contiguous,
+      balanced chunks, preserving complete coverage without duplicate scanning.
+    * Larger payloads use the prefix, a midpoint window, one window centred
+      on the largest remaining gap, and the suffix.
 
-    All windows are UTF-8-safe. ``tail_bytes <= 0`` disables the mid/tail
-    windows (legacy head-only behaviour). Windows that would fully overlap
-    the head are skipped, so short over-budget payloads may return fewer
-    than three chunks.
+    Balancing avoids one oversized head chunk monopolising the scanner
+    deadline while retaining head/mid/tail coverage. All windows are UTF-8
+    safe. ``tail_bytes <= 0`` disables multi-window scanning (legacy head-only
+    behaviour).
     """
     head, truncated = truncate(text, max_bytes)
     if not truncated or tail_bytes <= 0:
         return [head], truncated
+
     encoded = text.encode("utf-8", errors="ignore")
-    head_bytes = len(head.encode("utf-8", errors="ignore"))
-    chunks = [head]
+    window_bytes = min(max_bytes, tail_bytes)
 
-    # Mid window: centred on the unscanned region [head_bytes, len-tail).
-    region_start = head_bytes
-    region_end = max(region_start, len(encoded) - tail_bytes)
-    if region_end - region_start > 1:
-        mid_centre = (region_start + region_end) // 2
-        mid_start = max(region_start, mid_centre - tail_bytes // 2)
-        mid = encoded[mid_start : mid_start + tail_bytes].decode("utf-8", errors="ignore")
-        if mid and mid != head:
-            chunks.append(mid)
+    def decode_window(start: int) -> str:
+        chunk = encoded[start : start + window_bytes].decode("utf-8", errors="ignore")
+        if chunk:
+            return chunk
+        # A window that cuts through one codepoint must not become empty.
+        # Return that complete codepoint as a soft-budget fallback.
+        cursor = start
+        for char in text:
+            size = len(char.encode("utf-8", errors="ignore"))
+            if cursor < size:
+                return char
+            cursor -= size
+        return chunk
 
-    tail = encoded[-tail_bytes:].decode("utf-8", errors="ignore")
-    if tail and tail != head and tail not in chunks:
-        chunks.append(tail)
+    if len(encoded) <= 4 * window_bytes:
+        # Split on codepoint boundaries, never inside one. Try the balanced
+        # target first, then the per-window cap. If no bounded split can
+        # honour the cap (e.g. a pathological mix of multibyte codepoints),
+        # retain the whole small payload rather than dropping bytes.
+        from bisect import bisect_left
+
+        parts = (len(encoded) + window_bytes - 1) // window_bytes
+        boundaries = [0]
+        for char in text:
+            boundaries.append(boundaries[-1] + len(char.encode("utf-8", errors="ignore")))
+
+        def partition(target: int) -> list[str] | None:
+            cuts = []
+            for multiple in range(1, parts):
+                wanted = target * multiple
+                index = min(bisect_left(boundaries, wanted), len(boundaries) - 1)
+                candidates = [index]
+                if index:
+                    candidates.append(index - 1)
+                cut = min(candidates, key=lambda i: abs(boundaries[i] - wanted))
+                cuts.append(cut)
+            if len(set(cuts)) < parts - 1 or cuts != sorted(cuts) or cuts[-1] >= len(text):
+                return None
+            points = [0, *cuts, len(text)]
+            sizes = [
+                boundaries[points[i + 1]] - boundaries[points[i]] for i in range(parts)
+            ]
+            if max(sizes) > window_bytes:
+                return None
+            return [text[points[i] : points[i + 1]] for i in range(parts)]
+
+        for target in ((len(encoded) + parts - 1) // parts, window_bytes):
+            chunks = partition(target)
+            if chunks is not None:
+                return chunks, True
+        return [text], True
+
+    last = len(encoded) - window_bytes
+    if last < max_bytes:
+        # Extreme max_bytes/tail_bytes ratios cannot place a distinct
+        # midpoint window. Fall back to four evenly spaced valid samples.
+        starts = (0, last // 3, 2 * last // 3, last)
+        chunks = [decode_window(start) for start in starts]
+        return chunks, True
+
+    # Preserve the original midpoint defence: centre one window on the region
+    # between the original max_bytes head and the suffix.
+    region_start = max_bytes
+    region_end = last
+    mid_centre = (region_start + region_end) // 2
+    mid_start = max(region_start, mid_centre - window_bytes // 2)
+    mid_end = mid_start + window_bytes
+
+    # Use the fourth window on the larger of the prefix/mid and mid/suffix gaps.
+    left_gap = mid_start - window_bytes
+    right_gap = region_end - mid_end
+    if left_gap >= right_gap:
+        centre = (window_bytes + mid_start) // 2
+        extra_start = max(0, centre - window_bytes // 2)
+    else:
+        centre = (mid_end + region_end) // 2
+        extra_start = max(region_start, centre - window_bytes // 2)
+
+    starts = sorted((0, extra_start, mid_start, region_end))
+    chunks = [decode_window(start) for start in starts]
     return chunks, True
 
 

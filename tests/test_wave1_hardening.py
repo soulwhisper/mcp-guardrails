@@ -349,13 +349,18 @@ class _CharTokenizer:
 
 class _MarkerSession:
     """Returns malicious logits when the window contains the marker token id
-    (250); benign otherwise. Counts invocations."""
+    (250); benign otherwise. Counts invocations and records batch shapes.
+
+    Handles batched feeds: ``run`` receives ``(batch, seq)`` inputs and
+    returns per-row logits, so a row is malicious iff THAT row carries the
+    marker (the old per-window semantics under the batched ``_score``)."""
 
     def __init__(self):
         import numpy as np
 
         self._np = np
         self.calls = 0
+        self.shapes: list[tuple[int, ...]] = []
 
     def get_inputs(self):
         class _I:
@@ -367,10 +372,12 @@ class _MarkerSession:
     def run(self, _targets, feed):
         self.calls += 1
         np = self._np
-        ids = feed["input_ids"]
-        if (ids == 250).any():
-            return [np.array([[0.0, 5.0]])]
-        return [np.array([[5.0, 0.0]])]
+        ids = np.asarray(feed["input_ids"])
+        self.shapes.append(tuple(ids.shape))
+        rows = ids.reshape(1, -1) if ids.ndim == 1 else ids
+        hits = (rows == 250).any(axis=1)
+        logits = np.where(hits[:, None], np.array([[0.0, 5.0]]), np.array([[5.0, 0.0]]))
+        return [logits]
 
 
 def _pg_scanner() -> OnnxPromptGuardScanner:
@@ -394,7 +401,10 @@ def test_pg_window_count_bounded():
     pytest.importorskip("numpy")
     scanner = _pg_scanner()
     scanner._score("a" * 100000)
-    assert scanner._sess.calls <= scanner.max_windows
+    # Batched _score: ONE run per content chunk; the window budget caps the
+    # batch row count instead of the invocation count.
+    assert scanner._sess.calls == 1
+    assert scanner._sess.shapes[0][0] <= scanner.max_windows
 
 
 def test_pg_short_text_single_window():
@@ -402,6 +412,7 @@ def test_pg_short_text_single_window():
     scanner = _pg_scanner()
     scanner._score("hello")
     assert scanner._sess.calls == 1
+    assert scanner._sess.shapes[0] == (1, 5)
 
 
 def test_pg_id2label_validation_accepts_malicious_last(tmp_path):

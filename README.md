@@ -117,7 +117,7 @@ Step-by-step guide with verification:
 - **AgentAlignment second stage (opt-in)** — cost-bounded LLM review gate,
   invoked only on first-stage `HUMAN_REVIEW`, with pre-egress redaction.
   [Docs](https://soulwhisper.github.io/mcp-guardrails/guardrails/agent-alignment/)
-- **Honest scan coverage** — head/mid/tail byte windows + 1MiB payload cap;
+- **Honest scan coverage** — balanced head/mid/tail byte windows + 1MiB payload cap;
   every coverage gap is bounded by a knob and flagged in the audit record.
   [Docs](https://soulwhisper.github.io/mcp-guardrails/guardrails/scan-coverage/)
 - **Fail-closed by default** — scanner errors/timeouts deny; unreachable
@@ -140,7 +140,7 @@ Every knob is an environment variable. The most commonly tuned ones:
 | `ENABLE_REDACTION` | `true` | Structural secret/PII redaction on allowed payloads. |
 | `ENABLE_AGENT_ALIGNMENT` | `false` | Opt-in second-stage LLM review gate. |
 | `ALLOW_TOOLS` / `DENY_TOOLS` | _(unset)_ | Tool allow/deny lists (`prefix/*` wildcards); DENY wins. |
-| `MAX_CONTENT_BYTES` | `32768` | Head-window scan budget; larger payloads get mid/tail windows + `truncated=true`. |
+| `MAX_CONTENT_BYTES` | `32768` | Single-chunk scan budget; larger payloads use bounded balanced windows + `truncated=true`. |
 | `SCANNER_TIMEOUT_MS` | `500` | Per-scanner deadline; overruns handled per `FAILURE_MODE`. |
 | `AUDIT_LOG_PATH` | stdout | Append-only JSONL audit log (`-`/unset → stdout, always on). |
 

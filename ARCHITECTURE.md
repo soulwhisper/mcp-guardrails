@@ -527,7 +527,8 @@ through.
 
 The server's gRPC health service (`grpc.health.v1`) only goes `SERVING`
 after `engine.awarm()` completes (which touches each scanner once to force
-lazy model init). If the PromptGuard-2 model load fails, the health check
+lazy model init, then completes a representative full-size response to warm
+large batch shapes). If the PromptGuard-2 model load fails, the health check
 stays `NOT_SERVING`, the readiness probe never passes, and the Pod is
 removed from the Service endpoints. No traffic reaches a half-initialised
 sidecar.
@@ -555,18 +556,18 @@ engine.
 
 Tool output can be multi-MB; scanning it whole blows the inference latency
 budget and risks OOM. `scan_windows(text, MAX_CONTENT_BYTES, SCAN_TAIL_BYTES)`
-cuts a UTF-8-safe head window (default 32 KiB) and — for over-budget payloads —
-a mid window (centred on the unscanned remainder) plus a tail window (default
-8 KiB each). All chunks are scanned; the `truncated` flag is folded into the
-audit record (`truncated: true` in the JSONL line) and the OTel span attribute,
-alongside `scanned_bytes` / `total_bytes` coverage counters. The tail window
-closes the **truncation bypass** (padding that pushes the injection beyond the
-32 KiB head) and the mid window closes the **mid-payload blind spot** (padding
-that pushes it past the head but short of the tail). Set `SCAN_TAIL_BYTES=0`
-to revert to head-only scanning.
+uses balanced UTF-8-safe windows (default maximum 11 KiB each): up to four
+contiguous chunks for complete coverage, or four head/mid/tail samples for
+larger payloads.
+All chunks are scanned; the `truncated` flag is folded into the audit record
+(`truncated: true` in the JSONL line) and the OTel span attribute, alongside
+`scanned_bytes` / `total_bytes` coverage counters. Balanced windows prevent a
+single 32 KiB head from exhausting the scanner deadline while preserving the
+truncation-bypass and mid-payload defences. Set `SCAN_TAIL_BYTES=0` to revert
+to head-only scanning.
 
 Payloads beyond the `SCAN_MAX_PAYLOAD_BYTES` hard cap (default 1 MiB) are
-still scanned via the three windows, but the engine additionally attaches a
+still scanned via the bounded windows, but the engine additionally attaches a
 `payload_size` `HUMAN_REVIEW` result whose reason carries the scanned/total
 byte counts — `HUMAN_REVIEW_MODE` then resolves pass+warn vs deny, so under
 fail-closed review handling a giant, mostly-unscanned payload cannot pass
