@@ -147,13 +147,20 @@ class _CharTokenizer:
 
 
 class _MarkerSession:
-    """Malicious logits when the window contains marker token id 250."""
+    """Malicious logits when the window contains marker token id 250.
+
+    Batch-aware: ``run`` receives ``(batch, seq)`` inputs and returns per-row
+    logits (a row is malicious iff THAT row carries the marker — the old
+    per-window semantics under the batched ``_score``). Records batch shapes
+    so tests can assert on the window count now that one run scores all
+    windows."""
 
     def __init__(self):
         import numpy as np
 
         self._np = np
         self.calls = 0
+        self.shapes: list[tuple[int, ...]] = []
 
     def get_inputs(self):
         class _I:
@@ -165,10 +172,12 @@ class _MarkerSession:
     def run(self, _targets, feed):
         self.calls += 1
         np = self._np
-        ids = feed["input_ids"]
-        if (ids == 250).any():
-            return [np.array([[0.0, 5.0]])]
-        return [np.array([[5.0, 0.0]])]
+        ids = np.asarray(feed["input_ids"])
+        self.shapes.append(tuple(ids.shape))
+        rows = ids.reshape(1, -1) if ids.ndim == 1 else ids
+        hits = (rows == 250).any(axis=1)
+        logits = np.where(hits[:, None], np.array([[0.0, 5.0]]), np.array([[5.0, 0.0]]))
+        return [logits]
 
 
 def _pg_scanner(**kwargs) -> OnnxPromptGuardScanner:
@@ -191,17 +200,21 @@ def test_pg_mid_payload_marker_scored_by_adaptive_windows():
     text = "a" * 2000 + chr(250) + "b" * 6000
     score = scanner._score(text)
     assert score > 0.9
+    # One batched run scores every window; the batch ROW count is what the
+    # adaptive budget grows now.
+    assert scanner._sess.calls == 1
     # Adaptive budget grew beyond the old fixed 4 windows...
-    assert scanner._sess.calls > 4
+    assert scanner._sess.shapes[0][0] > 4
     # ...but stayed within the cap.
-    assert scanner._sess.calls <= scanner.max_windows
+    assert scanner._sess.shapes[0][0] <= scanner.max_windows
 
 
 def test_pg_window_budget_respects_cap_on_huge_payload():
     pytest.importorskip("numpy")
     scanner = _pg_scanner()
     scanner._score("a" * 100000)
-    assert scanner._sess.calls == scanner.max_windows
+    assert scanner._sess.calls == 1
+    assert scanner._sess.shapes[0][0] == scanner.max_windows
 
 
 def test_pg_window_budget_small_for_short_payload():
@@ -209,7 +222,8 @@ def test_pg_window_budget_small_for_short_payload():
     scanner = _pg_scanner()
     # ~1000 tokens: adaptive budget = clamp(ceil(1000/448)+1, 4, 16) = 4.
     scanner._score("a" * 1000)
-    assert scanner._sess.calls <= 4
+    assert scanner._sess.calls == 1
+    assert scanner._sess.shapes[0][0] <= 4
 
 
 def test_pg_max_windows_env_wiring(monkeypatch):

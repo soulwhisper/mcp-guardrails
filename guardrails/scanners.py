@@ -768,7 +768,10 @@ class OnnxPromptGuardScanner:
     # payload (``clamp(ceil(tokens/step)+1, 4, max_windows)``), so long
     # payloads get their middle scored too instead of only the first 3
     # strided windows + tail. ``max_windows`` is the hard cap (default 16,
-    # env ``PG_MAX_WINDOWS``) — the latency bound.
+    # env ``PG_MAX_WINDOWS``) — the latency bound. Windows are scored in a
+    # single batched ``InferenceSession.run`` per content chunk (see
+    # ``_score``), so the cap bounds the batch row count, not the number of
+    # ONNX invocations.
     window_tokens: int = 512
     window_stride: int = 64
     max_windows: int = 16
@@ -913,6 +916,19 @@ class OnnxPromptGuardScanner:
         ``max_windows * step + window_tokens`` tokens still have unscanned
         middle regions; defence-in-depth for those is the byte-level
         head/mid/tail ``scan_windows`` split upstream.
+
+        Batching (perf, denial ref bad631b3): all windows are stacked into a
+        single ``(num_windows, width)`` batch and scored with ONE
+        ``InferenceSession.run`` per content chunk instead of one run per
+        window. Per-window runs paid the session/allocator/graph-dispatch
+        overhead ``budget`` times per chunk (a 42,649-byte response split
+        into 3 chunks cost 3 x up-to-16 sequential runs, ~9.4s total —
+        inside the agentgateway 10s outer budget but only just). Softmax is
+        row-independent, so per-row results are bit-identical to the old
+        per-window loop: each row still carries its own all-ones attention
+        mask and batch rows never attend across one another.
+        ``max_windows`` remains the latency bound — now on the batch row
+        count rather than the invocation count.
         """
         import numpy as np
 
@@ -943,24 +959,35 @@ class OnnxPromptGuardScanner:
         # Feed only the inputs the ONNX graph declares — some exports omit
         # token_type_ids, and onnxruntime errors on unexpected feed keys.
         expected = {i.name for i in self._sess.get_inputs()}
-        best = 0.0
-        for w in windows:
-            feed: dict[str, Any] = {}
-            if "input_ids" in expected:
-                feed["input_ids"] = w[np.newaxis, :]
-            if "attention_mask" in expected:
-                feed["attention_mask"] = np.ones((1, w.shape[0]), dtype=np.int64)
-            if "token_type_ids" in expected:
-                feed["token_type_ids"] = np.zeros((1, w.shape[0]), dtype=np.int64)
-            logits = np.asarray(self._sess.run(None, feed)[0], dtype=np.float64)
-            # softmax over the class dimension (numerically stable).
-            shifted = logits - logits.max(axis=-1, keepdims=True)
-            exp = np.exp(shifted)
-            probs = exp / exp.sum(axis=-1, keepdims=True)
-            # We always take the LAST class as the "block" score (validated
-            # against config.json id2label at load time).
-            best = max(best, float(probs[0, -1]))
-        return best
+        # Stack the windows into ONE batched inference call. With the window
+        # construction above every window is exactly ``win`` tokens (the
+        # short-text branch yields a single length-n window), so the batch is
+        # rectangular and the all-ones attention mask matches the old
+        # per-window feeds exactly. The zero-pad path below only triggers if
+        # a future change introduces ragged windows; padded positions are
+        # masked out so per-row scores stay per-window equivalent.
+        width = max(w.shape[0] for w in windows)
+        batch_ids = np.zeros((len(windows), width), dtype=np.int64)
+        batch_mask = np.zeros((len(windows), width), dtype=np.int64)
+        for row, w in enumerate(windows):
+            batch_ids[row, : w.shape[0]] = w
+            batch_mask[row, : w.shape[0]] = 1
+        feed: dict[str, Any] = {}
+        if "input_ids" in expected:
+            feed["input_ids"] = batch_ids
+        if "attention_mask" in expected:
+            feed["attention_mask"] = batch_mask
+        if "token_type_ids" in expected:
+            feed["token_type_ids"] = np.zeros((len(windows), width), dtype=np.int64)
+        logits = np.asarray(self._sess.run(None, feed)[0], dtype=np.float64)
+        # softmax over the class dimension (numerically stable).
+        shifted = logits - logits.max(axis=-1, keepdims=True)
+        exp = np.exp(shifted)
+        probs = exp / exp.sum(axis=-1, keepdims=True)
+        # We always take the LAST class as the "block" score (validated
+        # against config.json id2label at load time); the max over batch rows
+        # is the max over windows, same as the old loop.
+        return float(probs[:, -1].max())
 
 
 # ---------------------------------------------------------------------------
