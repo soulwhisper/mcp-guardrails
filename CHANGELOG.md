@@ -5,6 +5,13 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1](https://github.com/soulwhisper/mcp-guardrails/compare/v1.3.0...v1.3.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* bound promptguard response scan latency ([#146](https://github.com/soulwhisper/mcp-guardrails/issues/146)) ([48c3a37](https://github.com/soulwhisper/mcp-guardrails/commit/48c3a37eab859b2e55545c414efd4d9b9de590fe))
+
 ## [1.3.0](https://github.com/soulwhisper/mcp-guardrails/compare/v1.2.1...v1.3.0) (2026-10-18)
 
 
