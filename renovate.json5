@@ -32,7 +32,7 @@
       // matching distribution" and the 3.15-slim base image could not
       // install requirements either (#129 closed). Revisit when onnxruntime
       // publishes cp315 wheels.
-      "matchPackageNames": ["python"],
+      "matchPackageNames": ["python", "actions/python-versions"],
       "allowedVersions": "<3.15.0-0"
     }
   ]
