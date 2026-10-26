@@ -5,6 +5,13 @@ All notable changes to ExtMcp Guardrail are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0](https://github.com/soulwhisper/mcp-guardrails/compare/v1.3.1...v1.4.0) (2026-10-26)
+
+
+### Features
+
+* **deps:** update grpc stack ( 1.84.1 → 1.85.0 ) ([#151](https://github.com/soulwhisper/mcp-guardrails/issues/151)) ([c21d89c](https://github.com/soulwhisper/mcp-guardrails/commit/c21d89cd76b327abe11615620f83957e89c992d9))
+
 ## [1.3.1](https://github.com/soulwhisper/mcp-guardrails/compare/v1.3.0...v1.3.1) (2026-10-22)
 
 
