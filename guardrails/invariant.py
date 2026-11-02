@@ -320,6 +320,9 @@ class LoopRule:
 
     Models the prompt-injection "retry loop" signature: a compromised agent
     hammering the same denied tool over and over hoping a guardrail hiccups.
+    Only the newest entry's fingerprint can fire. A historical match for a
+    different fingerprint must not block a new call; otherwise one old triad
+    permanently locks the trace while denied attempts keep it full.
     """
 
     name: str
@@ -331,12 +334,15 @@ class LoopRule:
             raise ValueError("LoopRule threshold must be >= 2")
 
     def match(self, trace: Sequence[TraceEntry]) -> str | None:
-        counts: dict[str, int] = {}
+        if not trace:
+            return None
+        current = trace[-1].fingerprint()
+        count = 0
         for entry in trace:
-            fp = entry.fingerprint()
-            counts[fp] = counts.get(fp, 0) + 1
-            if counts[fp] >= self.threshold:
-                return self.name
+            if entry.fingerprint() == current:
+                count += 1
+                if count >= self.threshold:
+                    return self.name
         return None
 
     def __repr__(self) -> str:  # pragma: no cover

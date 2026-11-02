@@ -86,8 +86,11 @@ the parked progress too. The sticky map is LRU-bounded like the trace map.
 ### LoopRule — fingerprint repetition
 
 Fires when the same `(tool, sorted_args_json)` fingerprint repeats
-`threshold` times (≥2) in the window. A parameterised search (args differ
-each call) does **not** fire — only an identical retry loop does. Models the
+`threshold` times (≥2) in the window. Only the newest call's fingerprint can
+fire, so an older triad cannot reject a different tool or new arguments. This
+lets successful calls age a previous loop out of the bounded window instead of
+permanently locking the trace. A parameterised search (args differ each call)
+does **not** fire — only an identical retry loop does. Models the
 prompt-injection "retry storm": a compromised agent hammering the same denied
 tool hoping a guardrail hiccups.
 

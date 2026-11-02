@@ -144,6 +144,17 @@ def test_loop_rule_distinct_args_do_not_fire():
     assert rule.match(trace) is None
 
 
+def test_loop_rule_historical_match_does_not_block_a_new_fingerprint():
+    rule = LoopRule(name="loop", threshold=3)
+    trace = [TraceEntry("old", {"a": 1})] * 3
+    trace.append(TraceEntry("new", {"a": 2}))
+    assert rule.match(trace) is None
+    trace.append(TraceEntry("new", {"a": 3}))
+    assert rule.match(trace) is None
+    trace.append(TraceEntry("old", {"a": 1}))
+    assert rule.match(trace) == "loop"
+
+
 def test_loop_rule_threshold_validation():
     with pytest.raises(ValueError):
         LoopRule(name="x", threshold=1)
@@ -172,6 +183,16 @@ def test_engine_records_and_evaluates():
     assert result is not None
     assert result.outcome.value == "block"
     assert "exfil" in result.scanner
+
+
+def test_engine_new_fingerprints_recover_from_an_old_loop():
+    engine = InvariantEngine([LoopRule(name="loop", threshold=3)], window=4)
+    for _ in range(3):
+        engine.record("old", {"a": 1})
+    assert engine.evaluate() is not None
+    for index in range(4):
+        engine.record("new", {"index": index})
+        assert engine.evaluate() is None
 
 
 def test_engine_window_evicts_old_entries():
