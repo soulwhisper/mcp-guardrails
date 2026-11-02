@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * prevent historical LoopRule matches from permanently blocking new tool calls with different fingerprints
 
+## [1.4.0](https://github.com/soulwhisper/mcp-guardrails/compare/v1.3.1...v1.4.0) (2026-11-02)
+
+
+### Features
+
+* **deps:** update grpc stack ( 1.84.1 → 1.85.0 ) ([#151](https://github.com/soulwhisper/mcp-guardrails/issues/151)) ([c21d89c](https://github.com/soulwhisper/mcp-guardrails/commit/c21d89cd76b327abe11615620f83957e89c992d9))
+
+
+### Bug Fixes
+
+* stop historical loop matches blocking new calls ([#154](https://github.com/soulwhisper/mcp-guardrails/issues/154)) ([4285b67](https://github.com/soulwhisper/mcp-guardrails/commit/4285b67e27422775ef7b1ff83675bb4dadb81340))
+
 ## [1.3.1](https://github.com/soulwhisper/mcp-guardrails/compare/v1.3.0...v1.3.1) (2026-10-22)
 
 
