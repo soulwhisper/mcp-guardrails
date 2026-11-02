@@ -466,9 +466,12 @@ A `LoopRule` fires when the same `(tool, args)` fingerprint repeats
 `threshold` times within the window. The fingerprint is
 `f"{tool}:{json.dumps(args, sort_keys=True, default=str)}"` — so two calls
 with the same tool but different args (a parameterised search) do **not**
-share a fingerprint. This is what distinguishes a genuine retry loop
-(prompt-injection signature: a compromised agent hammering a denied tool
-over and over) from normal agent exploration.
+share a fingerprint. Only the newest entry's fingerprint is evaluated for a
+hit; a historical triad for another fingerprint cannot block the new call.
+Consequently, successful new calls can age an old loop out of the bounded
+window even if earlier attempts were denied. This is what distinguishes a
+genuine retry loop (prompt-injection signature: a compromised agent
+hammering a denied tool over and over) from normal agent exploration.
 
 ### Dotted-path arg matchers
 
