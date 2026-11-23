@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * prevent historical LoopRule matches from permanently blocking new tool calls with different fingerprints
 * redact MCP multi-round-trip `inputResponses` when request redaction is enabled, without rewriting opaque `requestState` values
 
+## [1.4.1](https://github.com/soulwhisper/mcp-guardrails/compare/v1.4.0...v1.4.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* redact MRTR input responses without rewriting state ([#159](https://github.com/soulwhisper/mcp-guardrails/issues/159)) ([9419cdd](https://github.com/soulwhisper/mcp-guardrails/commit/9419cdd6e57af49dec8cbe51bc708f1aa4fbaace)), closes [#121](https://github.com/soulwhisper/mcp-guardrails/issues/121)
+
 ## [1.4.0](https://github.com/soulwhisper/mcp-guardrails/compare/v1.3.1...v1.4.0) (2026-11-02)
 
 
