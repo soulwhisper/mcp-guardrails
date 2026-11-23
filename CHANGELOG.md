@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * redact MCP multi-round-trip `inputResponses` when request redaction is enabled, without rewriting opaque `requestState` values
 * update the Debian container base to fix CVE-2026-109518 (apt) and CVE-2026-85091 (zlib)
 
+## [1.4.2](https://github.com/soulwhisper/mcp-guardrails/compare/v1.4.1...v1.4.2) (2026-11-23)
+
+
+### Bug Fixes
+
+* **docker:** patch Debian apt and zlib vulnerabilities ([#161](https://github.com/soulwhisper/mcp-guardrails/issues/161)) ([8fc0dcb](https://github.com/soulwhisper/mcp-guardrails/commit/8fc0dcb684906438df5ff9d7b93c7bc7a2e10bd1))
+
 ## [1.4.1](https://github.com/soulwhisper/mcp-guardrails/compare/v1.4.0...v1.4.1) (2026-11-23)
 
 
