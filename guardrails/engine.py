@@ -487,20 +487,27 @@ class GuardrailEngine:
 
             decision = self._c.aggregator.aggregate(results)
 
-            # Mutation stage (opt-in on the request side): redact secrets/PII
-            # inside params.arguments. Runs when nothing blocked; review
-            # payloads are redacted too when REDACT_ON_REVIEW=1 (default).
+            # Only redact application input, never the opaque MRTR requestState.
             if self._cfg.redact_request_params:
                 args = params.get("arguments")
-                if args is not None:
+                responses = params.get("inputResponses")
+                if responses is not None:
+                    fields = {"inputResponses": responses}
+                    if args is not None:
+                        fields["arguments"] = args
+                    mutated_fields, n = await self._redact(fields, decision, attrs)
+                elif args is not None:
                     mutated_args, n = await self._redact(args, decision, attrs)
-                    if n:
-                        decision = replace(
-                            decision,
-                            mutated={**dict(params), "arguments": mutated_args},
-                            reason=_redaction_reason(decision.reason, n),
-                            redactions=n,
-                        )
+                    mutated_fields = {"arguments": mutated_args} if n else None
+                else:
+                    mutated_fields, n = None, 0
+                if mutated_fields is not None:
+                    decision = replace(
+                        decision,
+                        mutated={**params, **mutated_fields},
+                        reason=_redaction_reason(decision.reason, n),
+                        redactions=n,
+                    )
 
             # Mint/attach the per-exchange correlation ref BEFORE the audit
             # record is emitted, so the servicer's generalised deny reason and
@@ -602,8 +609,18 @@ class GuardrailEngine:
             # redacted too when REDACT_ON_REVIEW=1 (default): the review
             # verdict is preserved and the mutated payload rides alongside,
             # so review-grade PII is masked on the wire.
-            mutated_result, n = await self._redact(result, decision, attrs)
+            candidate = result
+            request_state = None
+            if isinstance(result, Mapping) and result.get("resultType") == "input_required":
+                request_state = result.get("requestState")
+                if request_state is not None:
+                    # A client must echo this upstream-issued value verbatim.
+                    candidate = dict(result)
+                    del candidate["requestState"]
+            mutated_result, n = await self._redact(candidate, decision, attrs)
             if mutated_result is not None:
+                if request_state is not None:
+                    mutated_result["requestState"] = request_state
                 decision = replace(
                     decision,
                     mutated=mutated_result,

@@ -129,7 +129,7 @@ spec:
             #   value: "11264"
             # - name: ENABLE_REDACTION       # secret/PII redaction on allowed payloads (default true)
             #   value: "true"
-            # - name: REDACT_REQUEST_PARAMS  # also redact params.arguments on requests (default false)
+            # - name: REDACT_REQUEST_PARAMS  # redact request arguments and MRTR inputResponses (default false)
             #   value: "false"
             # - name: REDACTION_MAX_BYTES    # payload byte cap for redaction; over-cap -> skip + redaction_skipped=size (default 262144)
             #   value: "262144"

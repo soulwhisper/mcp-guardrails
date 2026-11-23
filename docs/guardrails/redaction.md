@@ -22,6 +22,8 @@ payload is guaranteed valid JSON with the same shape as the original:
   pass through untouched.
 - Substitutions are counted and reported; the count lands in metrics
   (`mcp.guardrails.redactions`) and the decision metadata.
+- MRTR `requestState` is opaque and is never rewritten, in either the
+  `input_required` response or the follow-up request.
 
 **Known limitations (deliberate):**
 
@@ -73,7 +75,7 @@ exactly the shapes whose review verdict feeds the second-stage gate.
 | --- | --- | --- |
 | `ENABLE_REDACTION` | `true` | Master switch. |
 | `REDACT_ON_REVIEW` | `true` | `HUMAN_REVIEW` payloads are *also* redacted: the review verdict is kept (pass+warn or deny per `HUMAN_REVIEW_MODE`) and the mutated payload rides along, so review-grade PII is masked instead of passing verbatim. Under `failOpen` this means a scanner exception no longer forwards secrets in cleartext. `false` restores the legacy pass-unmutated behaviour. |
-| `REDACT_REQUEST_PARAMS` | `false` | Request-side opt-in. Off by default: a secret in tool-call params is a signal to BLOCK (the RegexScanner already does), not to silently rewrite the caller's request. Enable only where rewritten arguments are deliberately tolerated. |
+| `REDACT_REQUEST_PARAMS` | `false` | Redact `params.arguments` and MRTR `params.inputResponses`. Enable only where the upstream tolerates rewritten arguments and input responses. BLOCK still takes precedence. |
 | `REDACTION_MAX_BYTES` | `262144` (256KiB) | Payload byte cap for the redaction sweep (~11 regexes over the *untruncated* payload). Over-cap payloads skip redaction, pass unchanged, and are flagged `redaction_skipped=size` in the audit span. Safe trade-off: block-grade secrets in over-cap payloads are still denied by the RegexScanner's head/mid/tail windows; only best-effort masking of ALLOW-grade PII is skipped. |
 
 The redaction sweep is offloaded to a worker thread (`asyncio.to_thread`) so
