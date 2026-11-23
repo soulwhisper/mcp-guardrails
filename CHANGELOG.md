@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * prevent historical LoopRule matches from permanently blocking new tool calls with different fingerprints
 * redact MCP multi-round-trip `inputResponses` when request redaction is enabled, without rewriting opaque `requestState` values
+* update the Debian container base to fix CVE-2026-109518 (apt) and CVE-2026-85091 (zlib)
 
 ## [1.4.1](https://github.com/soulwhisper/mcp-guardrails/compare/v1.4.0...v1.4.1) (2026-11-23)
 
