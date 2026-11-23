@@ -23,7 +23,7 @@ env-var table by project contract.
 | Scanners | `ENABLE_AGENT_ALIGNMENT` | `false` | LLM-based second stage; only triggered when PromptGuard flags `HUMAN_REVIEW` on a response. |
 | Redaction | `ENABLE_REDACTION` | `true` | Structural secret/PII redaction on allowed payloads (`[REDACTED:<TYPE>]`, forwarded via the `mutated` oneof). |
 | Redaction | `REDACT_ON_REVIEW` | `true` | Also redact `HUMAN_REVIEW` payloads (verdict kept, mutated payload rides along). `false` restores legacy pass-unmutated. |
-| Redaction | `REDACT_REQUEST_PARAMS` | `false` | Also redact `params.arguments` on the request side. Off by default — request-side secrets should BLOCK, not be rewritten. |
+| Redaction | `REDACT_REQUEST_PARAMS` | `false` | Also redact `params.arguments` and MRTR `params.inputResponses` on the request side. Off by default — request-side secrets should BLOCK, not be rewritten. |
 | Redaction | `REDACTION_MAX_BYTES` | `262144` | Payload byte cap for redaction (256KiB). Over-cap → skip + `redaction_skipped=size` in the audit span. |
 | PromptGuard | `LF_ONNX_MODEL` | `gravitee-io/Llama-Prompt-Guard-2-22M-onnx` | ONNX model repo ID. Public, non-gated; weights under the Llama 4 Community License (see NOTICE). |
 | PromptGuard | `LF_ONNX_FILE` | `model.quant.onnx` | Which `.onnx` file to load (`model.quant.onnx` quantized 69MB, default / `model.onnx` full-precision 271MB). |

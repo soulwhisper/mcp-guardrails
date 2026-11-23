@@ -130,7 +130,7 @@ class GuardrailConfig:
     # Request-side redaction is OFF by default: a secret in tool-call params
     # is a signal to BLOCK (the RegexScanner already does), not to silently
     # rewrite the caller's request. Enable only for deployments that
-    # deliberately tolerate rewritten arguments.
+    # deliberately tolerate rewritten arguments and MRTR input responses.
     redact_request_params: bool = False
     # Byte-size cap on the payload handed to the redaction transformer.
     # Redaction runs ~11 regexes over the full (untruncated) payload, so

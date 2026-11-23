@@ -41,12 +41,10 @@ script, the example config, and one redaction coverage gap.
 
 ### Coverage follow-ups
 
-- [ ] **M3 — MRTR redaction gap**: client `inputResponses` ride on retried request
-  params. They are *scanned* today (fallback JSON dump) but not structurally
-  redacted — extend the request mutation path beyond `params.arguments` once
-  agentgateway forwards MRTR shapes. Verify `InputRequiredResult`
-  (`resultType: "input_required"`, `inputRequests[].message`) response-side text
-  extraction in `guardrails/scanners.py:extract_text`.
+- [x] **M3 — MRTR redaction**: retried `params.inputResponses` are scanned and
+  now structurally redacted with `REDACT_REQUEST_PARAMS=true`.
+  `input_required` responses already scan and redact nested prompt text.
+  Both directions preserve the opaque `requestState` through redaction.
 - [ ] **M4 — Docs**: `docs/e2e.md` and session-affinity references assume sessions;
   update alongside M1/M2.
 

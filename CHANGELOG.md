@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Bug Fixes
 
 * prevent historical LoopRule matches from permanently blocking new tool calls with different fingerprints
+* redact MCP multi-round-trip `inputResponses` when request redaction is enabled, without rewriting opaque `requestState` values
 
 ## [1.4.0](https://github.com/soulwhisper/mcp-guardrails/compare/v1.3.1...v1.4.0) (2026-11-02)
 

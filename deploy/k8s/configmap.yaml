@@ -168,7 +168,7 @@ data:
     #                            (default 11264; 0 disables multi-window scanning)
     #   ENABLE_REDACTION       - structural secret/PII redaction on allowed payloads,
     #                            forwarded via the proto `mutated` oneof (default on)
-    #   REDACT_REQUEST_PARAMS  - also redact params.arguments on the request side
+    #   REDACT_REQUEST_PARAMS  - redact request arguments and MRTR inputResponses
     #                            (default off; secrets in requests should BLOCK)
     #   REDACTION_MAX_BYTES    - payload byte cap for the redaction sweep
     #                            (default 262144; over-cap payloads skip redaction,

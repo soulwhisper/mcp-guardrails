@@ -309,6 +309,72 @@ async def test_request_side_redaction_off_by_default():
     assert not decision.is_mutated
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enabled", "with_arguments"), [(True, True), (True, False), (False, True)]
+)
+async def test_mrtr_request_redacts_input_responses(enabled, with_arguments):
+    engine = _engine(
+        EngineComponents(request_scanners=[StubScanner("stub")], aggregator=DecisionAggregator()),
+        GuardrailConfig(redact_request_params=enabled),
+    )
+    servicer = ExtMcpServicer(engine)
+    params = {
+        "name": "collect",
+        "requestState": f"opaque:{EMAIL}",
+        "inputResponses": {EMAIL: {"action": "accept", "content": {"contact": EMAIL}}},
+    }
+    if with_arguments:
+        params["arguments"] = {"contact": EMAIL}
+    result = await servicer.CheckRequest(
+        pb.McpRequest(method="tools/call", mcp_request=json.dumps(params).encode()), None
+    )
+    if not enabled:
+        assert result.WhichOneof("result") == "pass"
+        return
+    expected = {
+        **params,
+        "inputResponses": {EMAIL: {"action": "accept", "content": {"contact": "[REDACTED:EMAIL]"}}},
+    }
+    if with_arguments:
+        expected["arguments"] = {"contact": "[REDACTED:EMAIL]"}
+    assert result.WhichOneof("result") == "mutated"
+    assert json.loads(result.mutated) == expected
+    assert result.metadata["guardrail.redactions"] == (2 if with_arguments else 1)
+
+
+@pytest.mark.asyncio
+async def test_mrtr_response_keeps_opaque_request_state():
+    engine = _response_engine([StubScanner("stub")])
+    state = f"opaque:{EMAIL}"
+    decision = await engine.check_response(
+        method="tools/call",
+        service_names=["svc"],
+        result={
+            "resultType": "input_required",
+            "requestState": state,
+            "inputRequests": {
+                "contact": {
+                    "method": "elicitation/create",
+                    "params": {"mode": "form", "message": f"Confirm {EMAIL}"},
+                }
+            },
+        },
+    )
+    assert decision.is_mutated
+    assert decision.redactions == 1
+    assert decision.mutated == {
+        "resultType": "input_required",
+        "requestState": state,
+        "inputRequests": {
+            "contact": {
+                "method": "elicitation/create",
+                "params": {"mode": "form", "message": "Confirm [REDACTED:EMAIL]"},
+            }
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Config env wiring
 # ---------------------------------------------------------------------------
