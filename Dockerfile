@@ -17,7 +17,7 @@
 #
 # Final image ~600-800MB (onnxruntime + transformers + model weights).
 
-ARG PY_VERSION=3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
+ARG PY_VERSION=3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 
 # ---------- base ----------
 FROM python:${PY_VERSION} AS base
@@ -26,8 +26,10 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/models/hf \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
+# Explicitly install zlib1g so APT upgrades the copy inherited from the base.
+# The pinned base already carries the apt/libapt-pkg7.0 security fix.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl \
+        ca-certificates curl zlib1g \
     && rm -rf /var/lib/apt/lists/*
 # The base image's bundled setuptools lags behind CVE fixes (70.3.0 was
 # flagged CVE-2025-47273 by the release-gate trivy scan even on a current
